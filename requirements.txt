@@ -1,0 +1,20 @@
+# Temel Görüntü İşleme ve Matematik
+numpy==1.26.4
+opencv-python==4.9.0.80
+scipy==1.13.0
+
+# Yüz Tespiti ve Landmark
+mediapipe==0.10.11
+
+# Metrikler ve Kalite Kontrol
+scikit-image==0.22.0
+
+# Kullanıcı Arayüzü (UI) ve Raporlama
+streamlit==1.32.0
+pandas==2.2.1
+fpdf2==2.7.8
+Pillow==10.3.0
+
+# Yapay Zeka (AI) Eklentileri
+torch==2.2.1
+torchvision==0.17.1

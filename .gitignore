@@ -1,0 +1,25 @@
+# Sanal Ortam (Kesinlikle GitHub'a gitmemeli)
+venv/
+env/
+.env
+
+# Python Önbellek Dosyaları
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyTorch ve Yapay Zeka Model Ağırlıkları (Çok büyük boyutludur, repoyu şişirir)
+*.pt
+*.pth
+models/pretrained/
+
+# VS Code ve İşletim Sistemi Ayarları
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Kullanıcıların Yüklediği veya Üretilen Görüntüler (Gizlilik ve alan için)
+uploads/
+outputs/
+*.jpg
+*.png
