@@ -1,4 +1,4 @@
-# Sanal Ortam (Kesinlikle GitHub'a gitmemeli)
+# Sanal Ortam
 venv/
 env/
 .env
@@ -8,7 +8,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# PyTorch ve Yapay Zeka Model Ağırlıkları (Çok büyük boyutludur, repoyu şişirir)
+# PyTorch ve Yapay Zeka Model Ağırlıkları (Çok büyük boyutlu, repoyu şişirir)
 *.pt
 *.pth
 models/pretrained/
@@ -18,7 +18,7 @@ models/pretrained/
 .DS_Store
 Thumbs.db
 
-# Kullanıcıların Yüklediği veya Üretilen Görüntüler (Gizlilik ve alan için)
+# Kullanıcıların Yüklediği veya Üretilen Görüntüler
 uploads/
 outputs/
 *.jpg
