@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Facial Warping - Group 14</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body style="background-color: #121212; color: white; font-family: Arial;">
+
+    <h1>Yüz Dönüşüm Sistemi</h1>
+
+    <div id="controls">
+        <input type="file" id="imageInput" accept="image/jpeg, image/png">
+        <br><br>
+        <label>Intensity (Yoğunluk): <span id="intensityVal">50</span>%</label>
+        <input type="range" id="intensitySlider" min="0" max="100" value="50">
+        <br><br>
+        <button id="applyBtn">Apply Transformation (API'ye Gönder)</button>
+    </div>
+
+    <hr>
+
+    <div style="display: flex; gap: 20px;">
+        <div>
+            <h3>Before</h3>
+            <img id="beforeImg" style="max-width: 300px; display: none;">
+        </div>
+        <div>
+            <h3>After <span id="loading" style="display:none; color: #ff00ff;">(Processing...)</span></h3>
+            <img id="afterImg" style="max-width: 300px; display: none;">
+        </div>
+    </div>
+
+    <div id="metrics" style="margin-top: 20px; border: 1px solid #ff00ff; padding: 10px; display: inline-block;">
+        <h3>Quality Metrics</h3>
+        <p>MSE: <span id="mse_value">0.00</span></p>
+        <p>PSNR: <span id="psnr_value">0.00</span> dB</p>
+        <p>SSIM: <span id="ssim_value">0.000</span></p>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
