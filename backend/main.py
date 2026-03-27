@@ -1,51 +1,94 @@
+"""
+main.py — FastAPI backend for Facial Image Warping
+====================================================
+DSP Project — Group 14
+
+Endpoints
+---------
+GET  /                   → health check
+POST /apply_transformation
+     file      : image file
+     operation : smile | eyebrow_raise | lip_widen | face_slim | aging | deaging
+     intensity : 0–100 (default 50)
+     show_grid : bool (default false) — return deformation grid image too
+"""
+
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-import base64
-import time
+from warping import warp_image
+from fastapi.staticfiles import StaticFiles
 
-app = FastAPI(title="Facial Warping API - Group 14")
+app = FastAPI(
+    title="Facial Warping API — Group 14",
+    
+    description=(
+        "Geometric image warping using Thin-Plate Spline RBF + "
+        "inverse mapping + vectorized bilinear interpolation (pure NumPy)."
+    ),
+    version="2.0.0",
+)
+app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")
+from fastapi.middleware.cors import CORSMiddleware
 
-# CORS Ayarları: Frontend (Tarayıcı) ile Backend'in konuşabilmesi için zorunludur!
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# Allow all origins so the browser frontend can reach the server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def read_root():
-    return {"message": "Backend API Sistemimiz Aktif!"}
+    return {
+        "message": "Facial Warping API is active.",
+        "supported_operations": [
+            "smile", "eyebrow_raise", "lip_widen",
+            "face_slim", "aging", "deaging",
+        ],
+    }
 
-# Rol 5'in istek atacağı ana uç nokta (Endpoint)
+
 @app.post("/apply_transformation")
 async def apply_transformation(
-    file: UploadFile = File(...),
-    operation: str = Form("Smile"),
-    intensity: int = Form(50)
+    file:      UploadFile = File(...),
+    operation: str        = Form("smile"),
+    intensity: int        = Form(50),
+    show_grid: bool       = Form(False),
 ):
-    # 1. Gelen resmi oku (Rol 1 burada devreye girecek)
-    image_data = await file.read()
+    """
+    Apply a geometric warp to the uploaded image.
 
-    # 2. İşlem yapıyormuş gibi bekle (Rol 2 ve 3 kodlarını buraya yazacak)
-    time.sleep(1) # 1 saniye gecikme simülasyonu
+    - **file**      : any image format Pillow can read (JPEG, PNG, BMP, …)
+    - **operation** : warp type (see supported_operations)
+    - **intensity** : strength of the effect, 0–100
+    - **show_grid** : if true, also return a deformation-grid PNG
+    """
+    image_bytes = await file.read()
 
-    # 3. Metrikleri hesapla (Senin Görevin: Rol 6)
-    # Şimdilik Rol 5 arayüzü çizebilsin diye sahte veriler dönüyoruz.
-    dummy_metrics = {
-        "mse": 14.57,
-        "psnr": 27.74,
-        "ssim": 0.885
-    }
+    result = warp_image(
+        image_bytes=image_bytes,
+        operation=operation,
+        intensity=intensity,
+        show_grid=show_grid,
+    )
 
-    # 4. Resmi Frontend'de gösterilebilecek Base64 formatına çevir
-    base64_encoded = base64.b64encode(image_data).decode('utf-8')
-    image_url = f"data:image/jpeg;base64,{base64_encoded}"
-
-    # 5. Sonucu arayüze (Frontend) geri yolla
     return {
-        "status": "success",
-        "processed_image": image_url,
-        "metrics": dummy_metrics
+        "status":          "success",
+        "processed_image": result["processed_image"],
+        "grid_image":      result["grid_image"],
+        "metrics":         result["metrics"],
+        "algorithm_info":  result["algorithm_info"],
     }
+from fastapi.staticfiles import StaticFiles
+# En alta ekle:
+app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")

@@ -481,48 +481,90 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- 8. APPLY TRANSFORMATION & MOCK API ---
 
+    // --- Backend API URL (adjust if running on a different port) ---
+    const API_BASE = 'http://127.0.0.1:8000';
+
     applyBtn.addEventListener('click', async () => {
         if (!currentOriginalImage) return;
 
         loadingOverlay.style.display = 'flex';
 
         try {
-            // MOCK DELAY (1.5s)
-            await new Promise(res => setTimeout(res, 1500));
+            // Convert base64 data URL → Blob so we can send it as multipart
+            const res = await fetch(currentOriginalImage);
+            const blob = await res.blob();
 
-            // Simulating processed image (for demo, just keeping the same base64 but slightly tinting or applying CSS later? No, we just set the same image and update metric to fake it)
-            currentProcessedImage = currentOriginalImage;
+            const formData = new FormData();
+            formData.append('file', blob, 'image.png');
+            formData.append('operation', selectedOperation);
+            formData.append('intensity', intensitySlider.value);
+            formData.append('show_grid', 'true');   // always request grid
+
+            const response = await fetch(`${API_BASE}/apply_transformation`, {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Server error ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+
+            if (data.status !== 'success') throw new Error('Backend returned failure status');
+
+            // --- Update processed image ---
+            currentProcessedImage = data.processed_image;
             afterImg.src = currentProcessedImage;
 
-            // Update Metrics Mock
-            const baseMSE = (Math.random() * 10 + 5).toFixed(2);
-            const basePSNR = (Math.random() * 10 + 25).toFixed(2);
-            const baseSSIM = (0.85 + Math.random() * 0.1).toFixed(3);
+            // --- Update deformation grid (if available) ---
+            if (data.grid_image) {
+                // Display in the Landmarks view panel as a bonus visual
+                landmarksOnlyImg.src = data.grid_image;
+            }
 
-            mseValue.textContent = baseMSE;
-            updateBadge(mseChange, Math.round((Math.random() - 0.5) * 20), true);
+            // --- Update real quality metrics ---
+            const m = data.metrics;
+            mseValue.textContent  = m.mse.toFixed(2);
+            psnrValue.textContent = m.psnr.toFixed(2);
+            ssimValue.textContent = m.ssim.toFixed(3);
 
-            psnrValue.textContent = basePSNR;
-            updateBadge(psnrChange, Math.round((Math.random() - 0.3) * 15), false);
+            // Compute sensible change badges vs. "perfect" baseline
+            const msePct  = Math.round(((m.mse  - 0) / 255) * 100);
+            const psnrPct = m.psnr > 40 ? 10 : (m.psnr > 30 ? 5 : -5);
+            const ssimPct = Math.round((m.ssim - 1.0) * 100);
 
-            ssimValue.textContent = baseSSIM;
-            updateBadge(ssimChange, Math.round((Math.random() - 0.3) * 10), false);
+            updateBadge(mseChange,  msePct,  true);
+            updateBadge(psnrChange, psnrPct, false);
+            updateBadge(ssimChange, ssimPct, false);
 
-            const opTitle = i18n[currentLang][document.querySelector(`.op-btn[data-op="${selectedOperation}"]`).dataset.i18n] || selectedOperation;
+            // --- Analysis summary with algorithm info ---
+            const ai = data.algorithm_info || {};
+            const opTitle = i18n[currentLang][document.querySelector(`.op-btn[data-op="${selectedOperation}"]`)?.dataset?.i18n] || selectedOperation;
 
-            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied ${opTitle} with ${intensitySlider.value}% intensity.`;
+            analysisSummary.innerHTML = `
+                <strong>✅ Processing Complete</strong><br/>
+                <em>${ai.method || 'TPS Warp'}</em> applied with <strong>${ai.intensity_pct}% intensity</strong>.<br/>
+                Interpolation: ${ai.interpolation || 'Bilinear'} &nbsp;|&nbsp;
+                Mapping: ${ai.mapping_strategy || 'Inverse'}<br/>
+                Control points: ${ai.control_points || '—'} &nbsp;|&nbsp;
+                Image size: ${ai.image_size || '—'}
+            `;
 
             // Push History
             addHistory(opTitle);
 
-            // Trigger Split Animation subtly
+            // Animate split slider for dramatic reveal
             if (isSplitMode) {
                 sliderPos = 25;
                 updateSplitSlider();
             }
 
         } catch (e) {
-            console.error('Error applying transofrmation', e);
+            console.error('Error applying transformation:', e);
+            analysisSummary.innerHTML = `<strong>❌ Error:</strong> ${e.message}<br/>
+                Make sure the backend is running at <code>${API_BASE}</code>.`;
         } finally {
             loadingOverlay.style.display = 'none';
         }
