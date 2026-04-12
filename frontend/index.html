@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FaceDSP - Image Processing UI</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-mode">
+
+<div class="app-container">
+    
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar">
+        <!-- Logo & Header -->
+        <header class="sidebar-header">
+            <h1 class="logo">FaceDSP</h1>
+            <div class="header-controls">
+                <div class="lang-toggle" id="langToggle">
+                    <span data-lang="TR">TR</span>
+                    <span class="active" data-lang="EN">EN</span>
+                </div>
+                <button class="theme-toggle" id="themeToggle" aria-label="Toggle Theme">
+                    <!-- Sun Icon (for Dark Mode to switch to Light) / Moon Icon (for Light Mode) will be set by JS -->
+                    <svg id="themeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Upload Zone -->
+        <div class="upload-section">
+            <input type="file" id="imageUpload" accept="image/*" hidden>
+            
+            <!-- Default Upload View -->
+            <label for="imageUpload" class="upload-zone" id="uploadZone">
+                <div class="upload-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                </div>
+                <p><strong data-i18n="dropImage">Drop image here</strong></p>
+                <p class="upload-hint" data-i18n="clickBrowse">or click to browse</p>
+            </label>
+
+            <!-- Thumbnail View (Hidden initially) -->
+            <div class="thumbnail-view" id="thumbnailView" style="display: none;">
+                <img id="thumbnailImg" src="" alt="Uploaded">
+                <button class="remove-btn" id="removeImgBtn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+                <div class="thumbnail-overlay">
+                    <span data-i18n="imageUploaded">Image uploaded</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar-scrollable">
+            <!-- Operation Types -->
+            <section class="control-section">
+                <h3 data-i18n="opType">Operation Type</h3>
+                <div class="operation-grid" id="operationGrid">
+                    <button class="op-btn active" data-op="smile" data-i18n="addSmile">Add Smile</button>
+                    <button class="op-btn" data-op="eyebrow" data-i18n="eyebrowRaise">Eyebrow Raise</button>
+                    <button class="op-btn" data-op="lip" data-i18n="lipWiden">Lip Widen</button>
+                    <button class="op-btn" data-op="slim" data-i18n="faceSlim">Face Slim</button>
+                    <button class="op-btn" data-op="aging" data-i18n="aging">Aging</button>
+                    <button class="op-btn" data-op="deaging" data-i18n="deaging">De-Aging</button>
+                    <button class="op-btn" data-op="fft" data-i18n="fftFilter">FFT Filter</button>
+                </div>
+            </section>
+
+            <!-- Sliders -->
+            <section class="control-section">
+                <div class="slider-header">
+                    <div>
+                        <h3 data-i18n="intensity">Intensity</h3>
+                        <span class="slider-hint" data-i18n="transformStrength">Transform strength</span>
+                    </div>
+                    <span class="slider-value" id="intensityValue">50%</span>
+                </div>
+                <input type="range" id="intensitySlider" min="0" max="100" value="50" class="custom-range">
+            </section>
+
+            <section class="control-section">
+                <div class="slider-header">
+                    <div>
+                        <h3 data-i18n="smoothing">Smoothing</h3>
+                        <span class="slider-hint" data-i18n="edgeBlending">Edge blending</span>
+                    </div>
+                    <span class="slider-value" id="smoothingValue">30%</span>
+                </div>
+                <input type="range" id="smoothingSlider" min="0" max="100" value="30" class="custom-range">
+            </section>
+
+            <!-- Toggles -->
+            <section class="control-section custom-toggles">
+                <div class="toggle-row">
+                    <span data-i18n="showLandmarks">Show Landmarks</span>
+                    <label class="switch">
+                        <input type="checkbox" id="showLandmarks">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div class="toggle-row">
+                    <span data-i18n="frequencyView">Frequency View</span>
+                    <label class="switch">
+                        <input type="checkbox" id="frequencyView">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </section>
+
+            <!-- History -->
+            <section class="control-section" id="historySection" style="display: none;">
+                <h3 data-i18n="opHistory">Operation History</h3>
+                <div class="history-chips" id="historyContainer">
+                    <!-- History chips will be inserted here -->
+                </div>
+            </section>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="sidebar-footer">
+            <button class="apply-btn" id="applyBtn" disabled><span data-i18n="applyTrans">Apply Transformation</span></button>
+            <button class="download-btn" id="downloadBtn" data-i18n="downloadPDF" disabled>Download Results as PDF</button>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        
+        <!-- Top Tabs -->
+        <nav class="top-tabs">
+            <button class="tab-btn active" data-target="visual" data-i18n="tabVisual">Visual</button>
+            <button class="tab-btn" data-target="frequency" data-i18n="tabFrequency">Frequency Spectrum</button>
+            <button class="tab-btn" data-target="landmarks" data-i18n="tabLandmarks">Landmarks</button>
+        </nav>
+
+        <!-- Multi-View Container -->
+        <div class="views-container">
+            
+            <!-- 1. VISUAL VIEW (Split View / Side by Side) -->
+            <div class="view-panel active-view" id="view-visual">
+                
+                <div class="preview-area" id="visualPreviewArea">
+                    <div class="preview-placeholder" id="previewPlaceholder" data-i18n="uploadWait">
+                        Upload an image to begin
+                    </div>
+                    
+                    <div class="image-wrapper" id="imageWrapper" style="display: none;">
+                        <!-- The Split/Drag System -->
+                        <div class="before-container" id="beforeContainer">
+                            <span class="label-badge label-left" data-i18n="beforeBadge">Before</span>
+                            <img id="beforeImg" src="" alt="Before">
+                        </div>
+                        
+                        <div class="after-container" id="afterContainer">
+                            <span class="label-badge label-right" data-i18n="afterBadge">After</span>
+                            <img id="afterImg" src="" alt="After">
+                            
+                            <!-- SVG Landmarks will attach here -->
+                            <svg class="landmarks-svg" id="landmarksSvg" viewBox="0 0 100 100" preserveAspectRatio="none" style="display: none;"></svg>
+                        </div>
+                        
+                        <div class="split-slider" id="splitSlider">
+                            <div class="slider-handle">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 7L4 12L8 17M16 7L20 12L16 17" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+                        <div class="spinner"></div>
+                        <p data-i18n="processing">Processing...</p>
+                    </div>
+                </div>
+
+                <!-- View Modes Toggle (Split/Side by Side) -->
+                <div class="view-mode-controls" id="viewModeControls" style="display: none;">
+                    <button class="view-mode-btn active" data-mode="split" id="btnSplitView">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                        <span data-i18n="splitView">Split View</span>
+                    </button>
+                    <button class="view-mode-btn" data-mode="side" id="btnSideBySide">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="18" rx="2"/><rect x="13" y="3" width="8" height="18" rx="2"/></svg>
+                        <span data-i18n="sideBySide">Side by Side</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. FREQUENCY SPECTRUM VIEW -->
+            <div class="view-panel" id="view-frequency">
+                <div class="freq-grid">
+                    <!-- Original FFT -->
+                    <div class="freq-card">
+                        <p class="freq-title" data-i18n="origFFT">Original - FFT Magnitude</p>
+                        <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
+                        <div class="freq-visual freq-visual-orig">
+                            <!-- CSS Grid / Background generated from CSS -->
+                            <div class="freq-center-dot"></div>
+                        </div>
+                        <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
+                    </div>
+                    <!-- Processed FFT -->
+                    <div class="freq-card">
+                        <p class="freq-title" data-i18n="procFFT">Processed - FFT Magnitude</p>
+                        <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
+                        <div class="freq-visual freq-visual-proc">
+                            <div class="freq-center-dot"></div>
+                        </div>
+                        <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. LANDMARKS ONLY VIEW -->
+            <div class="view-panel" id="view-landmarks">
+                <div class="landmarks-only-container">
+                    <img id="landmarksOnlyImg" src="" alt="Landmarks">
+                    <svg class="landmarks-svg" id="landmarksOnlySvg" viewBox="0 0 100 100" preserveAspectRatio="none" style="display: none;"></svg>
+                    <div class="preview-placeholder" id="landmarksPlaceholder" data-i18n="uploadWait">
+                        Upload an image to begin
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Metrics Dashboard -->
+        <div class="metrics-dashboard">
+            <div class="metrics-header" id="metricsHeader" style="cursor: pointer;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <svg id="metricsChevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition: transform 0.3s;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    <h2 data-i18n="qualityMetrics">Quality Metrics</h2>
+                </div>
+                <div class="comparison-toggle" onclick="event.stopPropagation()">
+                    <span class="comparison-label" data-i18n="compMode">Comparison Mode</span>
+                    <label class="switch">
+                        <input type="checkbox" id="comparisonMode" checked>
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="metrics-grid" id="metricsGrid">
+                <!-- MSE Card -->
+                <div class="metric-card">
+                    <div class="metric-title-row">
+                        <div class="metric-title">
+                            <h3>MSE</h3>
+                            <span data-i18n="mseDesc">Mean Squared Error</span>
+                        </div>
+                        <span class="metric-badge neutral" id="mseChange">~0%</span>
+                    </div>
+                    <div class="metric-value"><span id="mseValue">0.00</span></div>
+                </div>
+
+                <!-- PSNR Card -->
+                <div class="metric-card">
+                    <div class="metric-title-row">
+                        <div class="metric-title">
+                            <h3>PSNR</h3>
+                            <span data-i18n="psnrDesc">Peak Signal-to-Noise Ratio</span>
+                        </div>
+                        <span class="metric-badge neutral" id="psnrChange">~0%</span>
+                    </div>
+                    <div class="metric-value"><span id="psnrValue">0.00</span> <span class="metric-unit">dB</span></div>
+                </div>
+
+                <!-- SSIM Card -->
+                <div class="metric-card">
+                    <div class="metric-title-row">
+                        <div class="metric-title">
+                            <h3>SSIM</h3>
+                            <span data-i18n="ssimDesc">Structural Similarity Index</span>
+                        </div>
+                        <span class="metric-badge neutral" id="ssimChange">~0%</span>
+                    </div>
+                    <div class="metric-value"><span id="ssimValue">1.000</span></div>
+                </div>
+
+                <!-- Analysis Summary -->
+                <div class="summary-card">
+                    <h3 data-i18n="analysisSummary">Analysis Summary</h3>
+                    <p id="analysisSummary" data-i18n="waitingSummary">Waiting for image processing to generate summary analysis.</p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

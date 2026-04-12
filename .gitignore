@@ -23,3 +23,5 @@ uploads/
 outputs/
 *.jpg
 *.png
+
+.venv/
