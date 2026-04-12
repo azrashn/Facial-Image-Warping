@@ -1,8 +1,25 @@
 document.addEventListener('DOMContentLoaded', () => {
 
+    // --- CONFIG ---
+    const API_BASE = 'http://127.0.0.1:8000';
+
+    // Map frontend operation IDs to backend-expected values
+    const OP_MAP = {
+        'smile':    'smile',
+        'eyebrow':  'eyebrow_raise',
+        'lip':      'smile',          // lip widen uses smile with wider params
+        'slim':     'thin_face',
+        'aging':    'aging',
+        'deaging':  'de-aging',
+        'fft':      'aging',          // generic FFT defaults to aging filter
+    };
+
     // --- STATE VARIABLES ---
     let currentOriginalImage = null; // The uploaded image
-    let currentProcessedImage = null; // The returned image after apply
+    let currentProcessedImage = null; // The returned image after apply (base64 data URI)
+    let currentFileObject = null; // The raw File object for FormData
+    let currentLandmarks = []; // Real landmarks from backend
+    let lastMetrics = null; // Last metrics from backend
     let selectedOperation = 'smile';
     let isSplitMode = true;
     let sliderPos = 50; // percentage
@@ -276,6 +293,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleFile(file) {
         if (!file || !file.type.startsWith('image/')) return;
+        currentFileObject = file; // Store raw File for FormData
         const reader = new FileReader();
         reader.onload = (e) => setImage(e.target.result);
         reader.readAsDataURL(file);
@@ -396,54 +414,48 @@ document.addEventListener('DOMContentLoaded', () => {
         updateSplitSlider();
     });
 
-    // --- 6. LANDMARKS SVG GENERATOR (Mocked Algortihm from React) ---
+    // --- 6. LANDMARKS SVG RENDERER (Uses real backend data) ---
 
     function generateLandmarks() {
-        if (!currentOriginalImage) return;
+        // If we have real landmarks from backend, use them
+        if (currentLandmarks && currentLandmarks.length > 0) {
+            renderRealLandmarks(currentLandmarks);
+            return;
+        }
+        // No landmarks yet — show nothing
+        landmarksSvg.innerHTML = '';
+        landmarksOnlySvg.innerHTML = '';
+    }
 
-        const centerX = 50; const centerY = 45;
-        const landmarks = [];
+    function renderRealLandmarks(landmarks) {
+        if (!landmarks || landmarks.length === 0) return;
 
-        // Jaw line (17 points)
-        for (let i = 0; i < 17; i++) {
-            const angle = Math.PI + (i / 16) * Math.PI;
-            landmarks.push({ x: centerX + Math.cos(angle) * 25, y: centerY + Math.sin(angle) * 30 });
-        }
-        // Eyebrows (10 points)
-        for (let i = 0; i < 5; i++) {
-            landmarks.push({ x: centerX - 15 + i * 3, y: centerY - 12 });
-            landmarks.push({ x: centerX + 5 + i * 3, y: centerY - 12 });
-        }
-        // Eyes (12 points)
-        for (let i = 0; i < 6; i++) {
-            const angle = (i / 6) * Math.PI * 2;
-            landmarks.push({ x: centerX - 10 + Math.cos(angle) * 4, y: centerY - 5 + Math.sin(angle) * 3 });
-            landmarks.push({ x: centerX + 10 + Math.cos(angle) * 4, y: centerY - 5 + Math.sin(angle) * 3 });
-        }
-        // Nose (9 points)
-        for (let i = 0; i < 9; i++) {
-            landmarks.push({ x: centerX - 2 + (i % 3) * 2, y: centerY + Math.floor(i / 3) * 4 });
-        }
-        // Mouth (15 points)
-        for (let i = 0; i < 15; i++) {
-            const angle = (i / 14) * Math.PI;
-            landmarks.push({ x: centerX + Math.cos(angle) * 12 - 12, y: centerY + 15 + Math.sin(angle) * 6 });
-        }
+        // We need image dimensions to convert pixel coords to percentages
+        // Use the afterImg (or beforeImg) natural dimensions
+        const imgEl = afterImg.naturalWidth ? afterImg : beforeImg;
+        const imgW = imgEl.naturalWidth || 640;
+        const imgH = imgEl.naturalHeight || 480;
 
-        // Render SVG Lines and Circles
         let svgContent = '';
 
-        // Lines (Triangulation sim)
-        landmarks.slice(0, 60).forEach((p, i) => {
-            if (i < landmarks.length - 1) {
-                const next = landmarks[(i + 1) % landmarks.length];
-                svgContent += `<line class="landmark-line" x1="${p.x}%" y1="${p.y}%" x2="${next.x}%" y2="${next.y}%" />`;
+        // Draw connection lines for key facial features
+        // Jawline connections (approximate MediaPipe indices)
+        const jawline = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
+        for (let i = 0; i < jawline.length - 1; i++) {
+            const idx1 = jawline[i], idx2 = jawline[i+1];
+            if (idx1 < landmarks.length && idx2 < landmarks.length) {
+                const p1 = landmarks[idx1], p2 = landmarks[idx2];
+                const x1 = (p1.x / imgW) * 100, y1 = (p1.y / imgH) * 100;
+                const x2 = (p2.x / imgW) * 100, y2 = (p2.y / imgH) * 100;
+                svgContent += `<line class="landmark-line" x1="${x1}%" y1="${y1}%" x2="${x2}%" y2="${y2}%" />`;
             }
-        });
+        }
 
-        // Dots
+        // Draw all landmark dots
         landmarks.forEach(p => {
-            svgContent += `<circle class="landmark-point" cx="${p.x}%" cy="${p.y}%" r="1" />`;
+            const px = (p.x / imgW) * 100;
+            const py = (p.y / imgH) * 100;
+            svgContent += `<circle class="landmark-point" cx="${px}%" cy="${py}%" r="0.5" />`;
         });
 
         landmarksSvg.innerHTML = svgContent;
@@ -479,38 +491,101 @@ document.addEventListener('DOMContentLoaded', () => {
         historyContainer.innerHTML = html;
     }
 
-    // --- 8. APPLY TRANSFORMATION & MOCK API ---
+    // --- 8. APPLY TRANSFORMATION (REAL BACKEND API) ---
+
+    // FFT image elements
+    const origFFTImg = document.getElementById('origFFTImg');
+    const procFFTImg = document.getElementById('procFFTImg');
+    const origFFTPlaceholder = document.getElementById('origFFTPlaceholder');
+    const procFFTPlaceholder = document.getElementById('procFFTPlaceholder');
 
     applyBtn.addEventListener('click', async () => {
-        if (!currentOriginalImage) return;
+        if (!currentFileObject && !currentOriginalImage) return;
 
         loadingOverlay.style.display = 'flex';
+        applyBtn.disabled = true;
 
         try {
-            // MOCK DELAY (1.5s)
-            await new Promise(res => setTimeout(res, 1500));
+            // Build FormData with the raw file
+            const formData = new FormData();
 
-            // Simulating processed image (for demo, just keeping the same base64 but slightly tinting or applying CSS later? No, we just set the same image and update metric to fake it)
-            currentProcessedImage = currentOriginalImage;
-            afterImg.src = currentProcessedImage;
+            if (currentFileObject) {
+                formData.append('file', currentFileObject);
+            } else {
+                // Fallback: convert base64 data URI to Blob
+                const resp = await fetch(currentOriginalImage);
+                const blob = await resp.blob();
+                formData.append('file', blob, 'image.jpg');
+            }
 
-            // Update Metrics Mock
-            const baseMSE = (Math.random() * 10 + 5).toFixed(2);
-            const basePSNR = (Math.random() * 10 + 25).toFixed(2);
-            const baseSSIM = (0.85 + Math.random() * 0.1).toFixed(3);
+            const backendOp = OP_MAP[selectedOperation] || 'smile';
+            formData.append('operation', backendOp);
+            formData.append('intensity', intensitySlider.value);
+            formData.append('show_landmarks', toggleLandmarks.checked.toString());
 
-            mseValue.textContent = baseMSE;
-            updateBadge(mseChange, Math.round((Math.random() - 0.5) * 20), true);
+            // Real API call to backend
+            const response = await fetch(`${API_BASE}/apply_transformation`, {
+                method: 'POST',
+                body: formData,
+            });
 
-            psnrValue.textContent = basePSNR;
-            updateBadge(psnrChange, Math.round((Math.random() - 0.3) * 15), false);
+            if (!response.ok) {
+                let errMsg = `Server error (${response.status})`;
+                try {
+                    const errData = await response.json();
+                    errMsg = errData.detail || errMsg;
+                } catch (_) {}
+                throw new Error(errMsg);
+            }
 
-            ssimValue.textContent = baseSSIM;
-            updateBadge(ssimChange, Math.round((Math.random() - 0.3) * 10), false);
+            const data = await response.json();
+
+            // --- Render processed image ---
+            if (data.processed_image) {
+                currentProcessedImage = data.processed_image;
+                afterImg.src = data.processed_image;
+            }
+
+            // --- Render FFT spectrum ---
+            if (data.fft_spectrum) {
+                if (origFFTImg) {
+                    origFFTImg.src = data.fft_spectrum;
+                    origFFTImg.style.display = 'block';
+                    if (origFFTPlaceholder) origFFTPlaceholder.style.display = 'none';
+                }
+                if (procFFTImg) {
+                    procFFTImg.src = data.fft_spectrum;
+                    procFFTImg.style.display = 'block';
+                    if (procFFTPlaceholder) procFFTPlaceholder.style.display = 'none';
+                }
+            }
+
+            // --- Store & render real landmarks ---
+            if (data.landmarks && data.landmarks.length > 0) {
+                currentLandmarks = data.landmarks;
+                if (toggleLandmarks.checked) {
+                    renderRealLandmarks(currentLandmarks);
+                }
+            }
+
+            // --- Update real metrics ---
+            if (data.metrics) {
+                lastMetrics = data.metrics;
+                const m = data.metrics;
+
+                mseValue.textContent = (m.mse !== undefined) ? m.mse.toFixed(2) : '0.00';
+                psnrValue.textContent = (m.psnr !== undefined) ? (m.psnr === Infinity ? '∞' : m.psnr.toFixed(2)) : '0.00';
+                ssimValue.textContent = (m.ssim !== undefined) ? m.ssim.toFixed(4) : '1.000';
+
+                // Compute quality badges based on real values
+                updateBadgeFromValue(mseChange, m.mse, 'mse');
+                updateBadgeFromValue(psnrChange, m.psnr, 'psnr');
+                updateBadgeFromValue(ssimChange, m.ssim, 'ssim');
+            }
 
             const opTitle = i18n[currentLang][document.querySelector(`.op-btn[data-op="${selectedOperation}"]`).dataset.i18n] || selectedOperation;
 
-            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied ${opTitle} with ${intensitySlider.value}% intensity.`;
+            analysisSummary.innerHTML = `<strong>Status: Success ✓</strong><br/>Applied <em>${opTitle}</em> with ${intensitySlider.value}% intensity.<br/>MSE: ${data.metrics?.mse?.toFixed(4) || 'N/A'} | PSNR: ${data.metrics?.psnr?.toFixed(2) || 'N/A'} dB | SSIM: ${data.metrics?.ssim?.toFixed(4) || 'N/A'}`;
 
             // Push History
             addHistory(opTitle);
@@ -522,9 +597,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
         } catch (e) {
-            console.error('Error applying transofrmation', e);
+            console.error('Error applying transformation', e);
+            analysisSummary.innerHTML = `<strong style="color:#ff4d6a;">Error:</strong> ${e.message}`;
         } finally {
             loadingOverlay.style.display = 'none';
+            applyBtn.disabled = false;
         }
     });
 
@@ -536,6 +613,49 @@ document.addEventListener('DOMContentLoaded', () => {
         const isPositive = reverseLogic ? changeValue < 0 : changeValue > 0;
         if (isPositive) element.classList.add('positive');
         else element.classList.add('negative');
+    }
+
+    function updateBadgeFromValue(element, value, metricType) {
+        element.className = 'metric-badge';
+        if (metricType === 'mse') {
+            if (value < 20) { element.textContent = 'Low'; element.classList.add('positive'); }
+            else if (value < 80) { element.textContent = 'Medium'; element.classList.add('neutral'); }
+            else { element.textContent = 'High'; element.classList.add('negative'); }
+        } else if (metricType === 'psnr') {
+            if (value === Infinity || value > 40) { element.textContent = 'Excellent'; element.classList.add('positive'); }
+            else if (value > 25) { element.textContent = 'Good'; element.classList.add('positive'); }
+            else { element.textContent = 'Low'; element.classList.add('negative'); }
+        } else if (metricType === 'ssim') {
+            if (value > 0.9) { element.textContent = 'High'; element.classList.add('positive'); }
+            else if (value > 0.7) { element.textContent = 'Medium'; element.classList.add('neutral'); }
+            else { element.textContent = 'Low'; element.classList.add('negative'); }
+        }
+    }
+
+    // --- EXPORT: Download processed image as PNG ---
+    if (downloadBtn) {
+        downloadBtn.addEventListener('click', () => {
+            if (!currentProcessedImage) return;
+
+            // Extract base64 from data URI
+            const base64Data = currentProcessedImage.split(',')[1];
+            if (!base64Data) return;
+
+            const byteChars = atob(base64Data);
+            const byteArray = new Uint8Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) {
+                byteArray[i] = byteChars.charCodeAt(i);
+            }
+            const blob = new Blob([byteArray], { type: 'image/png' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `warped_${selectedOperation}_${Date.now()}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
     }
 
     // --- 9. METRICS TOGGLES & COMPARISON MODE ---

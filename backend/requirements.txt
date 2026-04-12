@@ -1,7 +1,22 @@
+# ============================================
+# Facial Image Warping & FFT Analysis System
+# ============================================
+
+# --- Web Framework & Server ---
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
+
+# --- Image Processing & Computer Vision ---
 opencv-python
 numpy
+Pillow
+
+# --- Face Detection & Landmark ---
 mediapipe
+
+# --- Scientific Computing (Delaunay, FFT) ---
+scipy
+
+# --- Image Quality Metrics ---
 scikit-image

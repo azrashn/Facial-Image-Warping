@@ -206,7 +206,8 @@
                         <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
                         <div class="freq-visual freq-visual-orig">
                             <!-- CSS Grid / Background generated from CSS -->
-                            <div class="freq-center-dot"></div>
+                            <div class="freq-center-dot" id="origFFTPlaceholder"></div>
+                            <img id="origFFTImg" src="" alt="Original FFT" style="display:none; width:100%; height:100%; object-fit:contain; position:absolute; top:0; left:0; border-radius:inherit;">
                         </div>
                         <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
                     </div>
@@ -215,7 +216,8 @@
                         <p class="freq-title" data-i18n="procFFT">Processed - FFT Magnitude</p>
                         <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
                         <div class="freq-visual freq-visual-proc">
-                            <div class="freq-center-dot"></div>
+                            <div class="freq-center-dot" id="procFFTPlaceholder"></div>
+                            <img id="procFFTImg" src="" alt="Processed FFT" style="display:none; width:100%; height:100%; object-fit:contain; position:absolute; top:0; left:0; border-radius:inherit;">
                         </div>
                         <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
                     </div>
