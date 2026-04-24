@@ -1,51 +1,84 @@
+from pathlib import Path
+import sys
+
+# Kök dizindeki warping_module için import yolu
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import base64
-import time
+
+import cv2
+import numpy as np
+
+import warping_module as wm
 
 app = FastAPI(title="Facial Warping API - Group 14")
 
-# CORS Ayarları: Frontend (Tarayıcı) ile Backend'in konuşabilmesi için zorunludur!
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def read_root():
     return {"message": "Backend API Sistemimiz Aktif!"}
 
-# Rol 5'in istek atacağı ana uç nokta (Endpoint)
+
 @app.post("/apply_transformation")
 async def apply_transformation(
     file: UploadFile = File(...),
     operation: str = Form("Smile"),
-    intensity: int = Form(50)
+    intensity: int = Form(50),
 ):
-    # 1. Gelen resmi oku (Rol 1 burada devreye girecek)
     image_data = await file.read()
 
-    # 2. İşlem yapıyormuş gibi bekle (Rol 2 ve 3 kodlarını buraya yazacak)
-    time.sleep(1) # 1 saniye gecikme simülasyonu
+    arr = np.frombuffer(image_data, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        img = None
 
-    # 3. Metrikleri hesapla (Senin Görevin: Rol 6)
-    # Şimdilik Rol 5 arayüzü çizebilsin diye sahte veriler dönüyoruz.
+    processed_bgr = img
+    if img is not None:
+        op = (operation or "").strip().lower()
+        if op == "smile":
+            processed_bgr = wm.apply_smile(img, intensity)
+        elif op == "eyebrow":
+            processed_bgr = wm.apply_eyebrow_raise(img, intensity)
+        elif op == "lip":
+            processed_bgr = wm.apply_lip_widen(img, intensity)
+        elif op == "slim":
+            processed_bgr = wm.apply_face_slim(img, intensity)
+        elif op in ("aging", "deaging", "fft"):
+            pass  # Rol 3 burayı dolduracak
+        else:
+            processed_bgr = img
+
     dummy_metrics = {
         "mse": 14.57,
         "psnr": 27.74,
-        "ssim": 0.885
+        "ssim": 0.885,
     }
 
-    # 4. Resmi Frontend'de gösterilebilecek Base64 formatına çevir
-    base64_encoded = base64.b64encode(image_data).decode('utf-8')
+    if processed_bgr is None:
+        base64_encoded = base64.b64encode(image_data).decode("utf-8")
+    else:
+        ok, buf = cv2.imencode(".jpg", processed_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok:
+            base64_encoded = base64.b64encode(image_data).decode("utf-8")
+        else:
+            base64_encoded = base64.b64encode(buf.tobytes()).decode("utf-8")
+
     image_url = f"data:image/jpeg;base64,{base64_encoded}"
 
-    # 5. Sonucu arayüze (Frontend) geri yolla
     return {
         "status": "success",
         "processed_image": image_url,
-        "metrics": dummy_metrics
+        "metrics": dummy_metrics,
     }
