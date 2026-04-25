@@ -563,6 +563,16 @@ body {
   width: 100%;
   height: 100%;
   position: relative;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* Prevent native image drag inside split view */
+.image-wrapper img {
+  pointer-events: none;
+  -webkit-user-drag: none;
 }
 
 /* Split View Styles */
@@ -597,6 +607,7 @@ body {
   z-index: 30;
   transform: translateX(-50%);
   display: none; /* Only show in split mode */
+  pointer-events: auto;
 }
 .image-wrapper.split-mode .split-slider {
   display: block;
@@ -612,6 +623,7 @@ body {
   color: white;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 0 15px rgba(168, 85, 247, 0.5);
+  pointer-events: auto;
 }
 
 /* Side-by-Side Variables */

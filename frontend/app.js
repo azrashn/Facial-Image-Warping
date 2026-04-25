@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let sliderPos = 50; // percentage
     let isDraggingSlider = false;
     let operationHistory = [];
+    let previousMetrics = null; // stores last metrics for delta computation
 
     // Default User Settings
     let currentLang = 'EN';
@@ -223,6 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentOriginalImage = null;
         currentProcessedImage = null;
         uploadedFile = null;
+        previousMetrics = null;
         thumbnailView.style.display = 'none';
         uploadZone.style.display = 'flex';
 
@@ -387,12 +389,16 @@ document.addEventListener('DOMContentLoaded', () => {
         afterContainer.style.clipPath = 'none'; // reset clip
     });
 
-    // Drag Event Listeners
-    splitSlider.addEventListener('mousedown', () => isDraggingSlider = true);
+    // Drag Event Listeners (mouse)
+    splitSlider.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        isDraggingSlider = true;
+    });
     window.addEventListener('mouseup', () => isDraggingSlider = false);
 
     visualPreviewArea.addEventListener('mousemove', (e) => {
         if (!isDraggingSlider || !isSplitMode) return;
+        e.preventDefault();
         const rect = imageWrapper.getBoundingClientRect();
         let x = e.clientX - rect.left;
 
@@ -403,6 +409,28 @@ document.addEventListener('DOMContentLoaded', () => {
         sliderPos = (x / rect.width) * 100;
         updateSplitSlider();
     });
+
+    // Drag Event Listeners (touch)
+    splitSlider.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        isDraggingSlider = true;
+    }, { passive: false });
+
+    window.addEventListener('touchend', () => isDraggingSlider = false);
+
+    visualPreviewArea.addEventListener('touchmove', (e) => {
+        if (!isDraggingSlider || !isSplitMode) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        const rect = imageWrapper.getBoundingClientRect();
+        let x = touch.clientX - rect.left;
+
+        if (x < 0) x = 0;
+        if (x > rect.width) x = rect.width;
+
+        sliderPos = (x / rect.width) * 100;
+        updateSplitSlider();
+    }, { passive: false });
 
     // --- 6. LANDMARKS SVG GENERATOR (Mocked Algortihm from React) ---
 
@@ -512,9 +540,28 @@ document.addEventListener('DOMContentLoaded', () => {
         mseValue.textContent = parsed.mse.toFixed(2);
         psnrValue.textContent = parsed.psnr.toFixed(2);
         ssimValue.textContent = parsed.ssim.toFixed(3);
-        updateBadge(mseChange, 0, true);
-        updateBadge(psnrChange, 0, false);
-        updateBadge(ssimChange, 0, false);
+
+        if (previousMetrics) {
+            // Compute percentage delta: ((new - old) / old) * 100
+            const mseDelta = previousMetrics.mse !== 0
+                ? ((parsed.mse - previousMetrics.mse) / Math.abs(previousMetrics.mse)) * 100 : null;
+            const psnrDelta = previousMetrics.psnr !== 0
+                ? ((parsed.psnr - previousMetrics.psnr) / Math.abs(previousMetrics.psnr)) * 100 : null;
+            const ssimDelta = previousMetrics.ssim !== 0
+                ? ((parsed.ssim - previousMetrics.ssim) / Math.abs(previousMetrics.ssim)) * 100 : null;
+
+            updateBadge(mseChange, mseDelta, true);
+            updateBadge(psnrChange, psnrDelta, false);
+            updateBadge(ssimChange, ssimDelta, false);
+        } else {
+            // No baseline yet – hide badges instead of showing fake ~0%
+            updateBadge(mseChange, null, true);
+            updateBadge(psnrChange, null, false);
+            updateBadge(ssimChange, null, false);
+        }
+
+        // Store current as baseline for next operation
+        previousMetrics = { ...parsed };
     }
 
     applyBtn.addEventListener('click', async () => {
@@ -575,11 +622,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function updateBadge(element, changeValue, reverseLogic) {
-        element.textContent = (changeValue > 0 ? '+' : '') + changeValue + '%';
         element.className = 'metric-badge';
-        if (changeValue === 0) { element.classList.add('neutral'); element.textContent = '~0%'; return; }
 
-        const isPositive = reverseLogic ? changeValue < 0 : changeValue > 0;
+        // No baseline available – hide badge entirely
+        if (changeValue === null || changeValue === undefined) {
+            element.textContent = '';
+            element.style.display = 'none';
+            return;
+        }
+
+        element.style.display = '';
+        const rounded = Math.round(changeValue * 10) / 10;
+
+        if (rounded === 0) {
+            element.textContent = '0%';
+            element.classList.add('neutral');
+            return;
+        }
+
+        element.textContent = (rounded > 0 ? '+' : '') + rounded.toFixed(1) + '%';
+        const isPositive = reverseLogic ? rounded < 0 : rounded > 0;
         if (isPositive) element.classList.add('positive');
         else element.classList.add('negative');
     }

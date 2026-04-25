@@ -134,23 +134,78 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
 
 def apply_deaging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     """
-    Simulate de-aging using smoothing while preserving natural color.
+    Simulate de-aging with aggressive skin smoothing while preserving
+    edges and structure.  At 100 % intensity the effect should be
+    unmistakably visible (youthful, porcelain-like skin).
     """
     if image is None:
         raise ValueError("Input image is None.")
 
     intensity = float(np.clip(intensity, 0.0, 1.0))
 
-    d = 7
-    sigma_color = 25 + int(35 * intensity)
-    sigma_space = 25 + int(35 * intensity)
+    # ------------------------------------------------------------------
+    # 1) Multi-pass bilateral smoothing (main skin smoother)
+    # ------------------------------------------------------------------
+    #   d: filter diameter – larger = smoother
+    #   sigma_color / sigma_space: higher = more aggressive averaging
+    d = int(9 + 8 * intensity)                         # 9 → 17
+    if d % 2 == 0:
+        d += 1                                         # must be odd
+    sigma_color = int(50 + 100 * intensity)            # 50 → 150
+    sigma_space = int(50 + 100 * intensity)            # 50 → 150
 
-    smoothed = cv2.bilateralFilter(image, d, sigma_color, sigma_space)
+    smooth = image.copy()
+    passes = 1 + int(2 * intensity)                    # 1 → 3 passes
+    for _ in range(passes):
+        smooth = cv2.bilateralFilter(smooth, d, sigma_color, sigma_space)
 
-    blend_ratio = 0.20 + 0.30 * intensity
-    result = cv2.addWeighted(image, 1.0 - blend_ratio, smoothed, blend_ratio, 0)
+    # ------------------------------------------------------------------
+    # 2) Frequency-domain low-pass to soften fine wrinkle texture
+    # ------------------------------------------------------------------
+    gray = ensure_grayscale(image)
+    rows, cols = gray.shape
+    min_dim = min(rows, cols)
+    lp_radius = int(min_dim * (0.08 + 0.12 * intensity))  # 8–20 % of image
+    lp_mask = create_circular_mask(gray.shape, lp_radius, high_pass=False)
 
-    return result
+    # Apply LP per channel to keep colour
+    freq_smooth = np.zeros_like(image, dtype=np.float64)
+    for ch in range(image.shape[2]):
+        fft_ch = np.fft.fftshift(np.fft.fft2(image[:, :, ch].astype(np.float64)))
+        fft_ch *= lp_mask
+        freq_smooth[:, :, ch] = np.abs(np.fft.ifft2(np.fft.ifftshift(fft_ch)))
+    freq_smooth = np.clip(freq_smooth, 0, 255).astype(np.uint8)
+
+    # Blend bilateral + frequency smooth
+    freq_weight = 0.15 + 0.25 * intensity              # 15–40 %
+    smooth = cv2.addWeighted(smooth, 1.0 - freq_weight,
+                             freq_smooth, freq_weight, 0)
+
+    # ------------------------------------------------------------------
+    # 3) Edge preservation – keep structure from the original using a
+    #    high-frequency residual (unsharp-mask style)
+    # ------------------------------------------------------------------
+    blur_for_edges = cv2.GaussianBlur(image, (0, 0), 3.0)
+    edge_detail = cv2.subtract(image, blur_for_edges)
+    edge_strength = 0.4 + 0.4 * intensity              # 0.4 → 0.8
+    smooth = cv2.addWeighted(smooth, 1.0, edge_detail, edge_strength, 0)
+
+    # ------------------------------------------------------------------
+    # 4) Optional brightness / skin-tone lift in LAB space
+    # ------------------------------------------------------------------
+    lab = cv2.cvtColor(smooth, cv2.COLOR_BGR2LAB).astype(np.float64)
+    l_boost = 3.0 + 7.0 * intensity                    # +3 → +10
+    lab[:, :, 0] = np.clip(lab[:, :, 0] + l_boost, 0, 255)
+    smooth = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+    # ------------------------------------------------------------------
+    # 5) Final blend with original (never fully replace at low intensity)
+    # ------------------------------------------------------------------
+    blend_ratio = 0.40 + 0.55 * intensity              # 40–95 %
+    result = cv2.addWeighted(image, 1.0 - blend_ratio,
+                             smooth, blend_ratio, 0)
+
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 
 def apply_aging(image: np.ndarray, intensity: float) -> np.ndarray:
