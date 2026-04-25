@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- STATE VARIABLES ---
     let currentOriginalImage = null; // The uploaded image
     let currentProcessedImage = null; // The returned image after apply
+    let uploadedFile = null;
     let selectedOperation = 'smile';
     let isSplitMode = true;
     let sliderPos = 50; // percentage
@@ -147,6 +148,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadingOverlay = document.getElementById('loadingOverlay');
 
     const landmarksSvg = document.getElementById('landmarksSvg');
+    const originalFreqVisual = document.querySelector('.freq-visual-orig');
+    const processedFreqVisual = document.querySelector('.freq-visual-proc');
+    const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
     const landmarksOnlyImg = document.getElementById('landmarksOnlyImg');
@@ -218,6 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function clearImage() {
         currentOriginalImage = null;
         currentProcessedImage = null;
+        uploadedFile = null;
         thumbnailView.style.display = 'none';
         uploadZone.style.display = 'flex';
 
@@ -236,11 +241,13 @@ document.addEventListener('DOMContentLoaded', () => {
         landmarksOnlyImg.style.display = 'none';
         landmarksOnlySvg.style.display = 'none';
         landmarksPlaceholder.style.display = 'block';
+        setSpectrumImages(null);
     }
 
-    function setImage(base64Str) {
+    function setImage(base64Str, fileObj) {
         currentOriginalImage = base64Str;
         currentProcessedImage = base64Str; // Initially Same
+        uploadedFile = fileObj;
 
         thumbnailImg.src = base64Str;
         uploadZone.style.display = 'none';
@@ -272,12 +279,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Auto draw landmarks if toggled
         if (toggleLandmarks.checked) generateLandmarks();
+        setSpectrumImages(null);
     }
 
     function handleFile(file) {
         if (!file || !file.type.startsWith('image/')) return;
         const reader = new FileReader();
-        reader.onload = (e) => setImage(e.target.result);
+        reader.onload = (e) => setImage(e.target.result, file);
         reader.readAsDataURL(file);
     }
 
@@ -479,50 +487,88 @@ document.addEventListener('DOMContentLoaded', () => {
         historyContainer.innerHTML = html;
     }
 
-    // --- 8. APPLY TRANSFORMATION & MOCK API ---
+    // --- 8. APPLY TRANSFORMATION & REAL API ---
+
+    function setSpectrumImages(spectrumB64) {
+        const styleValue = spectrumB64 ? `url("${spectrumB64}")` : '';
+        if (originalFreqVisual) {
+            originalFreqVisual.style.backgroundImage = styleValue;
+            originalFreqVisual.style.backgroundSize = spectrumB64 ? 'cover' : '';
+            originalFreqVisual.style.backgroundPosition = spectrumB64 ? 'center' : '';
+        }
+        if (processedFreqVisual) {
+            processedFreqVisual.style.backgroundImage = styleValue;
+            processedFreqVisual.style.backgroundSize = spectrumB64 ? 'cover' : '';
+            processedFreqVisual.style.backgroundPosition = spectrumB64 ? 'center' : '';
+        }
+    }
+
+    function updateMetricsFromApi(metrics) {
+        const parsed = {
+            mse: Number(metrics?.mse ?? 0),
+            psnr: Number(metrics?.psnr ?? 0),
+            ssim: Number(metrics?.ssim ?? 0),
+        };
+        mseValue.textContent = parsed.mse.toFixed(2);
+        psnrValue.textContent = parsed.psnr.toFixed(2);
+        ssimValue.textContent = parsed.ssim.toFixed(3);
+        updateBadge(mseChange, 0, true);
+        updateBadge(psnrChange, 0, false);
+        updateBadge(ssimChange, 0, false);
+    }
 
     applyBtn.addEventListener('click', async () => {
-        if (!currentOriginalImage) return;
+        if (!uploadedFile || !currentOriginalImage) return;
+
+        const isWarpOperation = ['smile', 'eyebrow', 'lip', 'slim'].includes(selectedOperation);
+        const endpoint = isWarpOperation ? `${API_BASE}/process/warp` : `${API_BASE}/process/age`;
+        const formData = new FormData();
+        formData.append('image', uploadedFile);
+        formData.append('operation', selectedOperation);
+        formData.append('intensity', intensitySlider.value);
+        formData.append('smoothing', smoothingSlider.value);
+
+        console.log('[Apply] selected operation:', selectedOperation);
+        console.log('[Apply] endpoint:', endpoint);
 
         loadingOverlay.style.display = 'flex';
 
         try {
-            // MOCK DELAY (1.5s)
-            await new Promise(res => setTimeout(res, 1500));
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                body: formData,
+            });
+            const payload = await response.json();
+            console.log('[Apply] response:', payload);
 
-            // Simulating processed image (for demo, just keeping the same base64 but slightly tinting or applying CSS later? No, we just set the same image and update metric to fake it)
-            currentProcessedImage = currentOriginalImage;
+            if (!response.ok) {
+                throw new Error(payload?.detail || 'Processing failed.');
+            }
+            if (!payload?.image_b64) {
+                throw new Error('Missing image_b64 in response.');
+            }
+
+            currentProcessedImage = payload.image_b64;
             afterImg.src = currentProcessedImage;
+            landmarksOnlyImg.src = currentProcessedImage;
 
-            // Update Metrics Mock
-            const baseMSE = (Math.random() * 10 + 5).toFixed(2);
-            const basePSNR = (Math.random() * 10 + 25).toFixed(2);
-            const baseSSIM = (0.85 + Math.random() * 0.1).toFixed(3);
+            updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+            setSpectrumImages(payload.spectrum_b64 || null);
 
-            mseValue.textContent = baseMSE;
-            updateBadge(mseChange, Math.round((Math.random() - 0.5) * 20), true);
-
-            psnrValue.textContent = basePSNR;
-            updateBadge(psnrChange, Math.round((Math.random() - 0.3) * 15), false);
-
-            ssimValue.textContent = baseSSIM;
-            updateBadge(ssimChange, Math.round((Math.random() - 0.3) * 10), false);
-
-            const opTitle = i18n[currentLang][document.querySelector(`.op-btn[data-op="${selectedOperation}"]`).dataset.i18n] || selectedOperation;
-
+            const opButton = document.querySelector(`.op-btn[data-op="${selectedOperation}"]`);
+            const opTitle = opButton
+                ? (i18n[currentLang][opButton.dataset.i18n] || selectedOperation)
+                : selectedOperation;
             analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied ${opTitle} with ${intensitySlider.value}% intensity.`;
-
-            // Push History
             addHistory(opTitle);
 
-            // Trigger Split Animation subtly
             if (isSplitMode) {
                 sliderPos = 25;
                 updateSplitSlider();
             }
-
         } catch (e) {
-            console.error('Error applying transofrmation', e);
+            console.error('[Apply] error:', e);
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Transformation failed.'}`;
         } finally {
             loadingOverlay.style.display = 'none';
         }

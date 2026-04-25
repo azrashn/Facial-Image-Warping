@@ -3,6 +3,14 @@ import cv2
 import numpy as np
 
 
+def clamp(value: float, min_value: float = 0.0, max_value: float = 1.0) -> float:
+    return float(max(min_value, min(max_value, value)))
+
+
+def normalize_strength(intensity: float) -> float:
+    return clamp(float(intensity) / 100.0)
+
+
 def ensure_grayscale(image: np.ndarray) -> np.ndarray:
     """
     Convert input image to grayscale if needed.
@@ -143,6 +151,25 @@ def apply_deaging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarra
     result = cv2.addWeighted(image, 1.0 - blend_ratio, smoothed, blend_ratio, 0)
 
     return result
+
+
+def apply_aging(image: np.ndarray, intensity: float) -> np.ndarray:
+    strength = normalize_strength(intensity)
+    return apply_aging_filter(image, intensity=strength)
+
+
+def apply_deaging(image: np.ndarray, intensity: float) -> np.ndarray:
+    strength = normalize_strength(intensity)
+    return apply_deaging_filter(image, intensity=strength)
+
+
+def apply_fft_filter(image: np.ndarray, intensity: float) -> tuple[np.ndarray, np.ndarray]:
+    strength = normalize_strength(intensity)
+    radius = int(8 + strength * 52)
+    filtered = apply_frequency_filter(image, radius=radius, mode="high")
+    spectrum = compute_magnitude_spectrum(compute_fft(image)[2])
+    filtered_bgr = cv2.cvtColor(filtered, cv2.COLOR_GRAY2BGR)
+    return filtered_bgr, spectrum
 
 
 def compute_energy_analysis(image: np.ndarray, radius: int = 30) -> dict:
