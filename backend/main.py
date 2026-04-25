@@ -15,6 +15,10 @@ import numpy as np
 
 import warping_module as wm
 
+from routers.process import router as process_router
+from routers.metrics import router as metrics_router
+from routers.export import router as export_router
+
 app = FastAPI(title="Facial Warping API - Group 14")
 
 app.add_middleware(
