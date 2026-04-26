@@ -3,6 +3,11 @@ numpy==1.26.4
 opencv-python==4.9.0.80
 scipy==1.13.0
 
+# Web Framework & Server
+fastapi
+uvicorn
+python-multipart
+
 # Yüz Tespiti ve Landmark
 mediapipe==0.10.11
 

@@ -17,6 +17,7 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from warping import warp_image
 from fastapi.staticfiles import StaticFiles
+from routers.upload import router as upload_router
 
 app = FastAPI(
     title="Facial Warping API — Group 14",
@@ -27,6 +28,10 @@ app = FastAPI(
     ),
     version="2.0.0",
 )
+
+# Include CV & Input pipeline router (must come before the catch-all static mount)
+app.include_router(upload_router)
+
 app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")
 from fastapi.middleware.cors import CORSMiddleware
 
