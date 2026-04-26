@@ -149,8 +149,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadingOverlay = document.getElementById('loadingOverlay');
 
     const landmarksSvg = document.getElementById('landmarksSvg');
-    const originalFreqVisual = document.querySelector('.freq-visual-orig');
-    const processedFreqVisual = document.querySelector('.freq-visual-proc');
+    const origSpectrumImg = document.getElementById('origSpectrumImg');
+    const procSpectrumImg = document.getElementById('procSpectrumImg');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -243,7 +243,7 @@ document.addEventListener('DOMContentLoaded', () => {
         landmarksOnlyImg.style.display = 'none';
         landmarksOnlySvg.style.display = 'none';
         landmarksPlaceholder.style.display = 'block';
-        setSpectrumImages(null);
+        setSpectrumImages(null, null);
     }
 
     function setImage(base64Str, fileObj) {
@@ -281,7 +281,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Auto draw landmarks if toggled
         if (toggleLandmarks.checked) generateLandmarks();
-        setSpectrumImages(null);
+        setSpectrumImages(null, null);
     }
 
     function handleFile(file) {
@@ -517,17 +517,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- 8. APPLY TRANSFORMATION & REAL API ---
 
-    function setSpectrumImages(spectrumB64) {
-        const styleValue = spectrumB64 ? `url("${spectrumB64}")` : '';
-        if (originalFreqVisual) {
-            originalFreqVisual.style.backgroundImage = styleValue;
-            originalFreqVisual.style.backgroundSize = spectrumB64 ? 'cover' : '';
-            originalFreqVisual.style.backgroundPosition = spectrumB64 ? 'center' : '';
+    function setSpectrumImages(origSpectrumB64, procSpectrumB64) {
+        if (origSpectrumB64 && origSpectrumImg) {
+            origSpectrumImg.src = origSpectrumB64;
+            origSpectrumImg.style.display = 'block';
+        } else if (origSpectrumImg) {
+            origSpectrumImg.src = '';
+            origSpectrumImg.style.display = 'none';
         }
-        if (processedFreqVisual) {
-            processedFreqVisual.style.backgroundImage = styleValue;
-            processedFreqVisual.style.backgroundSize = spectrumB64 ? 'cover' : '';
-            processedFreqVisual.style.backgroundPosition = spectrumB64 ? 'center' : '';
+
+        if (procSpectrumB64 && procSpectrumImg) {
+            procSpectrumImg.src = procSpectrumB64;
+            procSpectrumImg.style.display = 'block';
+        } else if (procSpectrumImg) {
+            procSpectrumImg.src = '';
+            procSpectrumImg.style.display = 'none';
         }
     }
 
@@ -600,7 +604,7 @@ document.addEventListener('DOMContentLoaded', () => {
             landmarksOnlyImg.src = currentProcessedImage;
 
             updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
-            setSpectrumImages(payload.spectrum_b64 || null);
+            setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
 
             const opButton = document.querySelector(`.op-btn[data-op="${selectedOperation}"]`);
             const opTitle = opButton
@@ -614,8 +618,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateSplitSlider();
             }
         } catch (e) {
-            console.error('[Apply] error:', e);
-            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Transformation failed.'}`;
+            console.error('[Apply] CORS or Network error:', e);
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Transformation failed due to Network/CORS or API error.'}`;
         } finally {
             loadingOverlay.style.display = 'none';
         }

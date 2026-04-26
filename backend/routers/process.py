@@ -69,13 +69,15 @@ def _metrics_dict(original: np.ndarray, processed: np.ndarray) -> dict:
 def _response_payload(
     image_b64: str,
     metrics: dict,
-    spectrum_b64: str | None = None,
+    orig_spectrum_b64: str | None = None,
+    proc_spectrum_b64: str | None = None,
     energy: dict | None = None,
 ) -> dict:
     return {
         "image_b64": image_b64,
         "metrics": metrics,
-        "spectrum_b64": spectrum_b64,
+        "orig_spectrum_b64": orig_spectrum_b64,
+        "proc_spectrum_b64": proc_spectrum_b64,
         "energy": energy,
     }
 
@@ -114,6 +116,13 @@ async def process_warp(
             processed = cv2.addWeighted(processed, 1.0 - smooth_strength * 0.4, smoothed, smooth_strength * 0.4, 0)
 
         metrics = _metrics_dict(original, processed)
+        
+        # Compute FFT Spectrums
+        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
+        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+        orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
+        proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
         logger.info(
             "process_warp.success",
             extra={"operation": op, "mse": metrics["mse"], "psnr": metrics["psnr"], "ssim": metrics["ssim"]},
@@ -121,7 +130,8 @@ async def process_warp(
         return _response_payload(
             image_b64=_data_url_from_image(processed),
             metrics=metrics,
-            spectrum_b64=None,
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
             energy=None,
         )
     except HTTPException:
@@ -160,6 +170,17 @@ async def process_age(
 
         energy = compute_energy_analysis(original, radius=int(10 + max(0.0, min(1.0, intensity / 100.0)) * 40))
         metrics = _metrics_dict(original, processed)
+        
+        # Compute FFT Spectrums
+        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
+        if op == "fft":
+            proc_spectrum = spectrum  # already calculated in apply_fft_filter
+        else:
+            proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+            
+        orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
+        proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
         logger.info(
             "process_age.success",
             extra={"operation": op, "mse": metrics["mse"], "psnr": metrics["psnr"], "ssim": metrics["ssim"]},
@@ -167,7 +188,8 @@ async def process_age(
         return _response_payload(
             image_b64=_data_url_from_image(processed),
             metrics=metrics,
-            spectrum_b64=_data_url_from_image(cv2.cvtColor(spectrum, cv2.COLOR_GRAY2BGR)),
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
             energy=energy,
         )
     except HTTPException:
