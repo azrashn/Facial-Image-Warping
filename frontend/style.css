@@ -666,12 +666,20 @@ body {
 /* SVG Landmarks overlay */
 .landmarks-svg {
   position: absolute;
-  top:0; left:0; width:100%; height:100%;
+  top: 0; left: 0; width: 100%; height: 100%;
   pointer-events: none;
   z-index: 10;
 }
-.landmark-point { fill: #06B6D4; transition: all 0.3s; }
-.landmark-line { stroke: #06B6D4; stroke-width: 0.5; opacity: 0.3; }
+.landmark-point {
+  fill: #00FFFF;
+  fill-opacity: 0.85;
+  transition: fill-opacity 0.3s;
+}
+.landmark-line {
+  stroke: #00FFFF;
+  stroke-width: 1;
+  opacity: 0.25;
+}
 
 /* Landmarks Only View */
 .landmarks-only-container {

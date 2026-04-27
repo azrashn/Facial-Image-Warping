@@ -351,7 +351,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Sync toggles visually
         if (targetId === 'frequency') toggleFrequency.checked = true;
-        if (targetId === 'landmarks') toggleLandmarks.checked = true;
+        if (targetId === 'landmarks') {
+            toggleLandmarks.checked = true;
+            if (uploadedFile) generateLandmarks();
+        }
     }
 
     tabButtons.forEach(btn => {
@@ -432,61 +435,83 @@ document.addEventListener('DOMContentLoaded', () => {
         updateSplitSlider();
     }, { passive: false });
 
-    // --- 6. LANDMARKS SVG GENERATOR (Mocked Algortihm from React) ---
+    // --- 6. LANDMARKS – Fetch from backend & render as SVG ---
 
-    function generateLandmarks() {
-        if (!currentOriginalImage) return;
+    /**
+     * Fetch 468 MediaPipe FaceMesh landmarks from the backend and render
+     * them as turquoise SVG dots over the face image.
+     *
+     * The backend returns normalised coordinates (0.0 – 1.0). We multiply
+     * by 512 (the preprocessed image size) to get pixel positions inside
+     * the SVG whose viewBox is "0 0 512 512".
+     */
+    async function generateLandmarks() {
+        if (!uploadedFile) return;
 
-        const centerX = 50; const centerY = 45;
-        const landmarks = [];
+        const CANVAS = 512; // matches SVG viewBox and backend preprocess size
 
-        // Jaw line (17 points)
-        for (let i = 0; i < 17; i++) {
-            const angle = Math.PI + (i / 16) * Math.PI;
-            landmarks.push({ x: centerX + Math.cos(angle) * 25, y: centerY + Math.sin(angle) * 30 });
-        }
-        // Eyebrows (10 points)
-        for (let i = 0; i < 5; i++) {
-            landmarks.push({ x: centerX - 15 + i * 3, y: centerY - 12 });
-            landmarks.push({ x: centerX + 5 + i * 3, y: centerY - 12 });
-        }
-        // Eyes (12 points)
-        for (let i = 0; i < 6; i++) {
-            const angle = (i / 6) * Math.PI * 2;
-            landmarks.push({ x: centerX - 10 + Math.cos(angle) * 4, y: centerY - 5 + Math.sin(angle) * 3 });
-            landmarks.push({ x: centerX + 10 + Math.cos(angle) * 4, y: centerY - 5 + Math.sin(angle) * 3 });
-        }
-        // Nose (9 points)
-        for (let i = 0; i < 9; i++) {
-            landmarks.push({ x: centerX - 2 + (i % 3) * 2, y: centerY + Math.floor(i / 3) * 4 });
-        }
-        // Mouth (15 points)
-        for (let i = 0; i < 15; i++) {
-            const angle = (i / 14) * Math.PI;
-            landmarks.push({ x: centerX + Math.cos(angle) * 12 - 12, y: centerY + 15 + Math.sin(angle) * 6 });
-        }
+        try {
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
 
-        // Render SVG Lines and Circles
-        let svgContent = '';
+            const response = await fetch(`${API_BASE}/process/landmarks`, {
+                method: 'POST',
+                body: formData,
+            });
 
-        // Lines (Triangulation sim)
-        landmarks.slice(0, 60).forEach((p, i) => {
-            if (i < landmarks.length - 1) {
-                const next = landmarks[(i + 1) % landmarks.length];
-                svgContent += `<line class="landmark-line" x1="${p.x}%" y1="${p.y}%" x2="${next.x}%" y2="${next.y}%" />`;
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || `Server responded with ${response.status}`);
             }
-        });
 
-        // Dots
-        landmarks.forEach(p => {
-            svgContent += `<circle class="landmark-point" cx="${p.x}%" cy="${p.y}%" r="1" />`;
-        });
+            const data = await response.json();
+            const landmarks = data.landmarks;
 
-        landmarksSvg.innerHTML = svgContent;
-        landmarksOnlySvg.innerHTML = svgContent;
+            if (!Array.isArray(landmarks) || landmarks.length === 0) {
+                throw new Error('No landmarks returned from backend.');
+            }
 
-        landmarksSvg.style.display = 'block';
-        landmarksOnlySvg.style.display = 'block';
+            // --- Build SVG content ---
+            let svgContent = '';
+
+            // Optional triangulation-style lines between consecutive landmarks
+            // (keep only a light mesh for the first 60 to stay subtle)
+            const lineCount = Math.min(60, landmarks.length - 1);
+            for (let i = 0; i < lineCount; i++) {
+                const p = landmarks[i];
+                const next = landmarks[i + 1];
+                const x1 = p.x * CANVAS;
+                const y1 = p.y * CANVAS;
+                const x2 = next.x * CANVAS;
+                const y2 = next.y * CANVAS;
+                svgContent += `<line class="landmark-line" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" />`;
+            }
+
+            // Dots for every landmark
+            landmarks.forEach(lm => {
+                const cx = lm.x * CANVAS;
+                const cy = lm.y * CANVAS;
+                svgContent += `<circle class="landmark-point" cx="${cx}" cy="${cy}" r="1.5" />`;
+            });
+
+            landmarksSvg.innerHTML = svgContent;
+            landmarksOnlySvg.innerHTML = svgContent;
+
+            landmarksSvg.style.display = 'block';
+            landmarksOnlySvg.style.display = 'block';
+
+            console.log(`[Landmarks] Rendered ${landmarks.length} points.`);
+        } catch (err) {
+            console.error('[Landmarks] Error:', err);
+            analysisSummary.innerHTML =
+                `<strong>Landmarks:</strong> ${err.message || 'Failed to fetch landmarks.'}`;
+
+            // Clear SVGs on error
+            landmarksSvg.innerHTML = '';
+            landmarksOnlySvg.innerHTML = '';
+            landmarksSvg.style.display = 'none';
+            landmarksOnlySvg.style.display = 'none';
+        }
     }
 
     // --- 7. HISTORY MANAGEMENT ---
