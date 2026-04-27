@@ -198,3 +198,9 @@ async def process_age(
     except Exception as exc:
         logger.exception("process_age.failed", extra={"operation": op})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+@router.post("/process/estimate_age")
+async def estimate_age(image: UploadFile = File(...)):
+    # Stub calculation for testing
+    return {"estimated_age": 28, "status": "success"}
+

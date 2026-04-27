@@ -29,6 +29,8 @@ document.addEventListener('DOMContentLoaded', () => {
             aging: "Yaşlandırma",
             deaging: "Gençleştirme",
             fftFilter: "FFT Filtresi",
+            ageEstimation: "Yaş Tahmini",
+            ageResultText: "Tahmini Yaş:",
             intensity: "Yoğunluk",
             transformStrength: "Dönüşüm gücü",
             smoothing: "Yumuşatma",
@@ -71,6 +73,8 @@ document.addEventListener('DOMContentLoaded', () => {
             aging: "Aging",
             deaging: "De-Aging",
             fftFilter: "FFT Filter",
+            ageEstimation: "Age Estimation",
+            ageResultText: "Estimated Age:",
             intensity: "Intensity",
             transformStrength: "Transform strength",
             smoothing: "Smoothing",
@@ -571,8 +575,14 @@ document.addEventListener('DOMContentLoaded', () => {
     applyBtn.addEventListener('click', async () => {
         if (!uploadedFile || !currentOriginalImage) return;
 
-        const isWarpOperation = ['smile', 'eyebrow', 'lip', 'slim'].includes(selectedOperation);
-        const endpoint = isWarpOperation ? `${API_BASE}/process/warp` : `${API_BASE}/process/age`;
+        let endpoint;
+        if (['smile', 'eyebrow', 'lip', 'slim'].includes(selectedOperation)) {
+            endpoint = `${API_BASE}/process/warp`;
+        } else if (selectedOperation === 'age_estimation') {
+            endpoint = `${API_BASE}/process/estimate_age`;
+        } else {
+            endpoint = `${API_BASE}/process/age`;
+        }
         const formData = new FormData();
         formData.append('image', uploadedFile);
         formData.append('operation', selectedOperation);
@@ -595,6 +605,19 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) {
                 throw new Error(payload?.detail || 'Processing failed.');
             }
+
+            if (selectedOperation === 'age_estimation') {
+                const age = payload.estimated_age;
+                if (!age) throw new Error("Could not calculate age. Backend returned null.");
+                const resultLabel = i18n[currentLang]['ageResultText'];
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/><br/>
+                    <div style="font-size: 1.2em;">${resultLabel} <br/>
+                    <span style="font-size: 2.5em; font-weight: bold; color: #4CAF50;">${age}</span></div>`;
+                addHistory(i18n[currentLang]['ageEstimation']);
+                loadingOverlay.style.display = 'none';
+                return; // Stop here, no image to render
+            }
+
             if (!payload?.image_b64) {
                 throw new Error('Missing image_b64 in response.');
             }
