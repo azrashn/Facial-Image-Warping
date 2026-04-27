@@ -14,6 +14,7 @@ try:
         compute_fft,
         encode_image_to_base64,
     )
+    from modules.input_module import get_landmarks, preprocess_image
     from modules.metrics_module import compute_mse, compute_psnr, compute_ssim
     from modules.warping_module import (
         apply_eyebrow_raise,
@@ -31,6 +32,7 @@ except ModuleNotFoundError:
         compute_fft,
         encode_image_to_base64,
     )
+    from backend.modules.input_module import get_landmarks, preprocess_image
     from backend.modules.metrics_module import compute_mse, compute_psnr, compute_ssim
     from backend.modules.warping_module import (
         apply_eyebrow_raise,
@@ -198,3 +200,40 @@ async def process_age(
     except Exception as exc:
         logger.exception("process_age.failed", extra={"operation": op})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/process/landmarks")
+async def process_landmarks(
+    image: UploadFile = File(...),
+):
+    """
+    Extract 468 MediaPipe FaceMesh landmarks from the uploaded image.
+
+    The image is resized to 512×512 and converted to RGB before landmark
+    extraction.  Returned coordinates are **normalised** (0.0 – 1.0)
+    relative to the 512×512 canvas so the frontend can simply multiply by
+    512 to get pixel positions.
+    """
+    logger.info("process_landmarks.received")
+    try:
+        contents = await image.read()
+        original = _decode_upload(contents)
+
+        # Preprocess: resize to 512×512, convert BGR → RGB
+        preprocessed = preprocess_image(original)
+
+        # Extract 468 landmarks (expects RGB input)
+        landmarks = get_landmarks(preprocessed)
+
+        logger.info(
+            "process_landmarks.success",
+            extra={"num_landmarks": len(landmarks)},
+        )
+        return {"landmarks": landmarks, "count": len(landmarks)}
+    except HTTPException:
+        logger.exception("process_landmarks.http_error")
+        raise
+    except Exception as exc:
+        logger.exception("process_landmarks.failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
