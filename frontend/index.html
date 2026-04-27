@@ -168,7 +168,7 @@
                             <img id="afterImg" src="" alt="After" draggable="false">
                             
                             <!-- SVG Landmarks will attach here -->
-                            <svg class="landmarks-svg" id="landmarksSvg" viewBox="0 0 100 100" preserveAspectRatio="none" style="display: none;"></svg>
+                            <svg class="landmarks-svg" id="landmarksSvg" viewBox="0 0 512 512" preserveAspectRatio="xMidYMid meet" style="display: none;"></svg>
                         </div>
                         
                         <div class="split-slider" id="splitSlider">
@@ -205,8 +205,8 @@
                         <p class="freq-title" data-i18n="origFFT">Original - FFT Magnitude</p>
                         <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
                         <div class="freq-visual freq-visual-orig">
-                            <!-- CSS Grid / Background generated from CSS -->
-                            <div class="freq-center-dot"></div>
+                            <img id="origSpectrumImg" src="" alt="Original Spectrum" style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
+                            <div class="freq-center-dot" style="z-index: 2;"></div>
                         </div>
                         <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
                     </div>
@@ -215,7 +215,8 @@
                         <p class="freq-title" data-i18n="procFFT">Processed - FFT Magnitude</p>
                         <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
                         <div class="freq-visual freq-visual-proc">
-                            <div class="freq-center-dot"></div>
+                            <img id="procSpectrumImg" src="" alt="Processed Spectrum" style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
+                            <div class="freq-center-dot" style="z-index: 2;"></div>
                         </div>
                         <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
                     </div>
@@ -226,7 +227,7 @@
             <div class="view-panel" id="view-landmarks">
                 <div class="landmarks-only-container">
                     <img id="landmarksOnlyImg" src="" alt="Landmarks">
-                    <svg class="landmarks-svg" id="landmarksOnlySvg" viewBox="0 0 100 100" preserveAspectRatio="none" style="display: none;"></svg>
+                    <svg class="landmarks-svg" id="landmarksOnlySvg" viewBox="0 0 512 512" preserveAspectRatio="xMidYMid meet" style="display: none;"></svg>
                     <div class="preview-placeholder" id="landmarksPlaceholder" data-i18n="uploadWait">
                         Upload an image to begin
                     </div>

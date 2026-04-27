@@ -14,6 +14,7 @@ try:
         compute_fft,
         encode_image_to_base64,
     )
+    from modules.input_module import get_landmarks, preprocess_image
     from modules.metrics_module import compute_mse, compute_psnr, compute_ssim
     from modules.warping_module import (
         apply_eyebrow_raise,
@@ -31,6 +32,7 @@ except ModuleNotFoundError:
         compute_fft,
         encode_image_to_base64,
     )
+    from backend.modules.input_module import get_landmarks, preprocess_image
     from backend.modules.metrics_module import compute_mse, compute_psnr, compute_ssim
     from backend.modules.warping_module import (
         apply_eyebrow_raise,
@@ -69,13 +71,15 @@ def _metrics_dict(original: np.ndarray, processed: np.ndarray) -> dict:
 def _response_payload(
     image_b64: str,
     metrics: dict,
-    spectrum_b64: str | None = None,
+    orig_spectrum_b64: str | None = None,
+    proc_spectrum_b64: str | None = None,
     energy: dict | None = None,
 ) -> dict:
     return {
         "image_b64": image_b64,
         "metrics": metrics,
-        "spectrum_b64": spectrum_b64,
+        "orig_spectrum_b64": orig_spectrum_b64,
+        "proc_spectrum_b64": proc_spectrum_b64,
         "energy": energy,
     }
 
@@ -111,11 +115,7 @@ async def process_warp(
 
         smooth_strength = max(0.0, min(1.0, float(smoothing) / 100.0))
         if smooth_strength > 0:
-            smoothed = cv2.GaussianBlur(
-                processed,
-                (0, 0),
-                0.5 + smooth_strength * 2.0,
-            )
+            smoothed = cv2.GaussianBlur(processed, (0, 0), 0.5 + smooth_strength * 2.0)
             processed = cv2.addWeighted(
                 processed,
                 1.0 - smooth_strength * 0.4,
@@ -126,8 +126,11 @@ async def process_warp(
 
         metrics = _metrics_dict(original, processed)
 
-        _, _, processed_fft = compute_fft(processed)
-        spectrum = compute_magnitude_spectrum(processed_fft)
+        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
+        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+
+        orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
+        proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
 
         energy = compute_energy_analysis(
             processed,
@@ -147,7 +150,8 @@ async def process_warp(
         return _response_payload(
             image_b64=_data_url_from_image(processed),
             metrics=metrics,
-            spectrum_b64=_data_url_from_image(cv2.cvtColor(spectrum, cv2.COLOR_GRAY2BGR)),
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
             energy=energy,
         )
 
@@ -197,6 +201,17 @@ async def process_age(
 
         metrics = _metrics_dict(original, processed)
 
+        
+        # Compute FFT Spectrums
+        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
+        if op == "fft":
+            proc_spectrum = spectrum  # already calculated in apply_fft_filter
+        else:
+            proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+            
+        orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
+        proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
         logger.info(
             "process_age.success",
             extra={
@@ -210,7 +225,8 @@ async def process_age(
         return _response_payload(
             image_b64=_data_url_from_image(processed),
             metrics=metrics,
-            spectrum_b64=_data_url_from_image(cv2.cvtColor(spectrum, cv2.COLOR_GRAY2BGR)),
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
             energy=energy,
         )
 
@@ -221,3 +237,40 @@ async def process_age(
     except Exception as exc:
         logger.exception("process_age.failed", extra={"operation": op})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/process/landmarks")
+async def process_landmarks(
+    image: UploadFile = File(...),
+):
+    """
+    Extract 468 MediaPipe FaceMesh landmarks from the uploaded image.
+
+    The image is resized to 512×512 and converted to RGB before landmark
+    extraction.  Returned coordinates are **normalised** (0.0 – 1.0)
+    relative to the 512×512 canvas so the frontend can simply multiply by
+    512 to get pixel positions.
+    """
+    logger.info("process_landmarks.received")
+    try:
+        contents = await image.read()
+        original = _decode_upload(contents)
+
+        # Preprocess: resize to 512×512, convert BGR → RGB
+        preprocessed = preprocess_image(original)
+
+        # Extract 468 landmarks (expects RGB input)
+        landmarks = get_landmarks(preprocessed)
+
+        logger.info(
+            "process_landmarks.success",
+            extra={"num_landmarks": len(landmarks)},
+        )
+        return {"landmarks": landmarks, "count": len(landmarks)}
+    except HTTPException:
+        logger.exception("process_landmarks.http_error")
+        raise
+    except Exception as exc:
+        logger.exception("process_landmarks.failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
