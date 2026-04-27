@@ -202,6 +202,56 @@ async def process_age(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/process/estimate_age")
+async def process_estimate_age(
+    image: UploadFile = File(...),
+):
+    """
+    Estimate the age of the person in the uploaded face image.
+
+    Uses an OpenCV DNN Caffe model for face detection + age classification.
+    Returns a numerical age estimate plus the predicted age bucket.
+    """
+    logger.info("process_estimate_age.received")
+    try:
+        contents = await image.read()
+        img = _decode_upload(contents)
+
+        # Run real age estimation via OpenCV DNN
+        try:
+            from modules.ai_module import estimate_age
+        except ModuleNotFoundError:
+            from backend.modules.ai_module import estimate_age
+
+        result = estimate_age(img)
+
+        if result.get("status") != "success":
+            raise HTTPException(
+                status_code=422,
+                detail=result.get("error", "Age estimation failed."),
+            )
+
+        logger.info(
+            "process_estimate_age.success",
+            extra={
+                "estimated_age": result["estimated_age"],
+                "age_bucket": result.get("age_bucket"),
+            },
+        )
+        return {
+            "status": "success",
+            "estimated_age": result["estimated_age"],
+            "age_bucket": result.get("age_bucket", ""),
+            "confidence": result.get("confidence", 0),
+        }
+    except HTTPException:
+        logger.exception("process_estimate_age.http_error")
+        raise
+    except Exception as exc:
+        logger.exception("process_estimate_age.failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/process/landmarks")
 async def process_landmarks(
     image: UploadFile = File(...),
@@ -213,6 +263,11 @@ async def process_landmarks(
     extraction.  Returned coordinates are **normalised** (0.0 – 1.0)
     relative to the 512×512 canvas so the frontend can simply multiply by
     512 to get pixel positions.
+
+    Also returns the preprocessed 512×512 image as a data-URL so the
+    frontend can display the exact image the landmarks were computed on,
+    guaranteeing pixel-perfect alignment regardless of the original
+    image's aspect ratio.
     """
     logger.info("process_landmarks.received")
     try:
@@ -225,11 +280,19 @@ async def process_landmarks(
         # Extract 468 landmarks (expects RGB input)
         landmarks = get_landmarks(preprocessed)
 
+        # Convert preprocessed image (RGB) back to BGR for encoding
+        preprocessed_bgr = cv2.cvtColor(preprocessed, cv2.COLOR_RGB2BGR)
+        preprocessed_b64 = f"data:image/png;base64,{encode_image_to_base64(preprocessed_bgr)}"
+
         logger.info(
             "process_landmarks.success",
             extra={"num_landmarks": len(landmarks)},
         )
-        return {"landmarks": landmarks, "count": len(landmarks)}
+        return {
+            "landmarks": landmarks,
+            "count": len(landmarks),
+            "image_b64": preprocessed_b64,
+        }
     except HTTPException:
         logger.exception("process_landmarks.http_error")
         raise

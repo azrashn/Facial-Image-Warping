@@ -1,69 +1,137 @@
+"""
+Age estimation using OpenCV DNN (Caffe models).
+
+Models required in ``backend/models/``:
+  - age_deploy.prototxt   + age_net.caffemodel   (age classification)
+  - face_deploy.prototxt  + face_net.caffemodel   (SSD face detector)
+
+No external deep-learning framework (TensorFlow / PyTorch) needed –
+everything runs through OpenCV's built-in DNN module.
+"""
+
+import logging
+import os
+from pathlib import Path
+
 import cv2
 import numpy as np
-import base64
-from deepface import DeepFace
 
-class AIProcessor:
-    def __init__(self):
-        self.model_name = "age"
-        self.target_size = (512, 512)
+logger = logging.getLogger("facial_pipeline.ai_module")
 
-    def _validate_image(self, image: np.ndarray):
-        if image is None:
-            return {"error": "Input image is None."}
-        if not isinstance(image, np.ndarray):
-            return {"error": "Image must be a numpy array."}
-        if image.ndim != 3 or image.shape[2] != 3:
-            return {"error": "Image must be a 3-channel (BGR/RGB) image."}
-        return None
+# ---------------------------------------------------------------------------
+# Model paths  (relative to *this* file → ../models/)
+# ---------------------------------------------------------------------------
+_MODULE_DIR = Path(__file__).resolve().parent
+_MODELS_DIR = _MODULE_DIR.parent / "models"
 
-    def _to_standard_format(self, image: np.ndarray) -> np.ndarray:
-        resized = cv2.resize(image, self.target_size)
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        return rgb.astype(np.uint8)
+_FACE_PROTO = str(_MODELS_DIR / "face_deploy.prototxt")
+_FACE_MODEL = str(_MODELS_DIR / "face_net.caffemodel")
+_AGE_PROTO  = str(_MODELS_DIR / "age_deploy.prototxt")
+_AGE_MODEL  = str(_MODELS_DIR / "age_net.caffemodel")
 
-    def _encode_to_base64(self, image: np.ndarray) -> str:
-        bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        _, buffer = cv2.imencode(".png", bgr)
-        return base64.b64encode(buffer).decode("utf-8")
+# Age buckets the Caffe model was trained on
+AGE_BUCKETS = [
+    "(0-2)", "(4-6)", "(8-12)", "(15-20)",
+    "(25-32)", "(38-43)", "(48-53)", "(60-100)",
+]
 
-    def analyze_age(self, image: np.ndarray) -> dict:
-        error = self._validate_image(image)
-        if error:
-            return error
-        try:
-            standardized = self._to_standard_format(image)
-            results = DeepFace.analyze(
-                standardized,
-                actions=["age"],
-                enforce_detection=False
-            )
-            if isinstance(results, list):
-                estimated_age = results[0]["age"]
-            else:
-                estimated_age = results["age"]
-            image_b64 = self._encode_to_base64(standardized)
-            return {
-                "estimated_age": int(estimated_age),
-                "status": "success",
-                "image_b64": image_b64,
-                "image_size": standardized.shape[:2],
-            }
-        except Exception as e:
-            return {"error": f"AI Analysis failed: {str(e)}", "status": "failed"}
+# Midpoints for a more useful numerical estimate
+AGE_MIDPOINTS = [1, 5, 10, 17, 28, 40, 50, 80]
 
-    def apply_ai_transformation(self, image: np.ndarray) -> dict:
-        error = self._validate_image(image)
-        if error:
-            return error
-        try:
-            standardized = self._to_standard_format(image)
-            image_b64 = self._encode_to_base64(standardized)
-            return {
-                "status": "success",
-                "note": "GAN pipeline not implemented yet.",
-                "image_b64": image_b64,
-                "image_size": standardized.shape[:2],
-            }
-        except Exception as e:
-            return {"error": f"Transformation failed: {str(e)}", "status": "failed"}
+# Mean values expected by the age network
+_MODEL_MEAN = (78.4263377603, 87.7689143744, 114.895847746)
+
+
+def _load_nets():
+    """Load face-detector and age-classifier networks (lazy, cached)."""
+    if not hasattr(_load_nets, "_face_net"):
+        for p in (_FACE_PROTO, _FACE_MODEL, _AGE_PROTO, _AGE_MODEL):
+            if not os.path.isfile(p):
+                raise FileNotFoundError(f"Model file not found: {p}")
+        _load_nets._face_net = cv2.dnn.readNetFromCaffe(_FACE_PROTO, _FACE_MODEL)
+        _load_nets._age_net  = cv2.dnn.readNetFromCaffe(_AGE_PROTO, _AGE_MODEL)
+        logger.info("DNN models loaded from %s", _MODELS_DIR)
+    return _load_nets._face_net, _load_nets._age_net
+
+
+def estimate_age(image_bgr: np.ndarray, confidence_threshold: float = 0.5) -> dict:
+    """
+    Detect the largest face in *image_bgr* and return an estimated age.
+
+    Parameters
+    ----------
+    image_bgr : np.ndarray
+        Input image in BGR colour space (as read by ``cv2.imread``).
+    confidence_threshold : float
+        Minimum detection confidence for the SSD face detector.
+
+    Returns
+    -------
+    dict
+        ``{"status": "success", "estimated_age": int, "age_bucket": str,
+           "confidence": float}``
+        or ``{"status": "failed", "error": str}`` on failure.
+    """
+    try:
+        face_net, age_net = _load_nets()
+    except FileNotFoundError as exc:
+        return {"status": "failed", "error": str(exc)}
+
+    h, w = image_bgr.shape[:2]
+
+    # --- 1. Detect faces ------------------------------------------------
+    blob = cv2.dnn.blobFromImage(
+        image_bgr, 1.0, (300, 300),
+        (104.0, 177.0, 123.0), swapRB=False, crop=False,
+    )
+    face_net.setInput(blob)
+    detections = face_net.forward()
+
+    # Pick the detection with the highest confidence
+    best_idx, best_conf = -1, 0.0
+    for i in range(detections.shape[2]):
+        conf = float(detections[0, 0, i, 2])
+        if conf > best_conf:
+            best_conf = conf
+            best_idx = i
+
+    if best_idx == -1 or best_conf < confidence_threshold:
+        # Fallback: use the whole image as the "face" crop
+        logger.warning("No face detected (best conf=%.3f) – using full image.", best_conf)
+        face_crop = image_bgr.copy()
+    else:
+        box = detections[0, 0, best_idx, 3:7] * np.array([w, h, w, h])
+        x1, y1, x2, y2 = box.astype(int)
+        # Add some padding
+        pad = int(0.1 * max(x2 - x1, y2 - y1))
+        x1 = max(0, x1 - pad)
+        y1 = max(0, y1 - pad)
+        x2 = min(w, x2 + pad)
+        y2 = min(h, y2 + pad)
+        face_crop = image_bgr[y1:y2, x1:x2]
+
+    if face_crop.size == 0:
+        return {"status": "failed", "error": "Face crop is empty."}
+
+    # --- 2. Age estimation on the face crop ----------------------------
+    age_blob = cv2.dnn.blobFromImage(
+        face_crop, 1.0, (227, 227), _MODEL_MEAN, swapRB=False,
+    )
+    age_net.setInput(age_blob)
+    preds = age_net.forward()
+
+    bucket_idx = int(preds[0].argmax())
+    age_bucket = AGE_BUCKETS[bucket_idx]
+    estimated_age = AGE_MIDPOINTS[bucket_idx]
+
+    logger.info(
+        "Age estimation → bucket=%s  age≈%d  face_conf=%.3f",
+        age_bucket, estimated_age, best_conf,
+    )
+
+    return {
+        "status": "success",
+        "estimated_age": estimated_age,
+        "age_bucket": age_bucket,
+        "confidence": round(best_conf, 3),
+    }

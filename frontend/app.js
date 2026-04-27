@@ -29,6 +29,8 @@ document.addEventListener('DOMContentLoaded', () => {
             aging: "Yaşlandırma",
             deaging: "Gençleştirme",
             fftFilter: "FFT Filtresi",
+            ageEstimation: "Yaş Tahmini",
+            ageResult: "Tahmini Yaş:",
             intensity: "Yoğunluk",
             transformStrength: "Dönüşüm gücü",
             smoothing: "Yumuşatma",
@@ -71,6 +73,8 @@ document.addEventListener('DOMContentLoaded', () => {
             aging: "Aging",
             deaging: "De-Aging",
             fftFilter: "FFT Filter",
+            ageEstimation: "Age Estimation",
+            ageResult: "Estimated Age:",
             intensity: "Intensity",
             transformStrength: "Transform strength",
             smoothing: "Smoothing",
@@ -355,6 +359,9 @@ document.addEventListener('DOMContentLoaded', () => {
             toggleLandmarks.checked = true;
             if (uploadedFile) generateLandmarks();
         }
+
+        // Re-align landmarks after layout change
+        requestAnimationFrame(() => realignLandmarkSvgs());
     }
 
     tabButtons.forEach(btn => {
@@ -379,6 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
         imageWrapper.classList.add('split-mode');
         imageWrapper.style.display = 'block';
         afterContainer.style.clipPath = `inset(0 0 0 ${sliderPos}%)`;
+        requestAnimationFrame(() => realignLandmarkSvgs());
     });
 
     btnSideBySide.addEventListener('click', () => {
@@ -390,6 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
         imageWrapper.classList.add('side-mode');
         imageWrapper.style.display = 'flex';
         afterContainer.style.clipPath = 'none'; // reset clip
+        requestAnimationFrame(() => realignLandmarkSvgs());
     });
 
     // Drag Event Listeners (mouse)
@@ -438,6 +447,53 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- 6. LANDMARKS – Fetch from backend & render as SVG ---
 
     /**
+     * Compute the actual rendered position/size of an <img> using
+     * object-fit: contain inside its container.  Returns {x, y, w, h}
+     * in px relative to the container.
+     */
+    function getRenderedImageRect(imgEl) {
+        const containerW = imgEl.clientWidth;
+        const containerH = imgEl.clientHeight;
+        const naturalW = imgEl.naturalWidth || 512;
+        const naturalH = imgEl.naturalHeight || 512;
+
+        const scale = Math.min(containerW / naturalW, containerH / naturalH);
+        const renderedW = naturalW * scale;
+        const renderedH = naturalH * scale;
+        const offsetX = (containerW - renderedW) / 2;
+        const offsetY = (containerH - renderedH) / 2;
+
+        return { x: offsetX, y: offsetY, w: renderedW, h: renderedH };
+    }
+
+    /**
+     * Position an SVG overlay so it exactly covers the rendered area of
+     * the associated <img> element (which uses object-fit: contain).
+     */
+    function alignSvgToImage(svgEl, imgEl) {
+        if (!imgEl || !svgEl) return;
+        const rect = getRenderedImageRect(imgEl);
+        svgEl.style.position = 'absolute';
+        svgEl.style.left   = rect.x + 'px';
+        svgEl.style.top    = rect.y + 'px';
+        svgEl.style.width  = rect.w + 'px';
+        svgEl.style.height = rect.h + 'px';
+    }
+
+    /** Re-align all visible landmark SVGs after layout changes. */
+    function realignLandmarkSvgs() {
+        if (landmarksSvg.style.display !== 'none') {
+            alignSvgToImage(landmarksSvg, afterImg);
+        }
+        if (landmarksOnlySvg.style.display !== 'none') {
+            alignSvgToImage(landmarksOnlySvg, landmarksOnlyImg);
+        }
+    }
+
+    // Re-align on window resize so landmarks stay pinned to the face
+    window.addEventListener('resize', realignLandmarkSvgs);
+
+    /**
      * Fetch 468 MediaPipe FaceMesh landmarks from the backend and render
      * them as turquoise SVG dots over the face image.
      *
@@ -471,6 +527,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error('No landmarks returned from backend.');
             }
 
+            // Use the preprocessed 512×512 image from backend for the
+            // Landmarks-only tab so coordinates match pixel-perfectly.
+            if (data.image_b64) {
+                landmarksOnlyImg.src = data.image_b64;
+                landmarksOnlyImg.style.display = 'block';
+                landmarksPlaceholder.style.display = 'none';
+            }
+
             // --- Build SVG content ---
             let svgContent = '';
 
@@ -499,6 +563,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             landmarksSvg.style.display = 'block';
             landmarksOnlySvg.style.display = 'block';
+
+            // Align SVGs to the actual rendered image area
+            requestAnimationFrame(() => realignLandmarkSvgs());
 
             console.log(`[Landmarks] Rendered ${landmarks.length} points.`);
         } catch (err) {
@@ -596,8 +663,11 @@ document.addEventListener('DOMContentLoaded', () => {
     applyBtn.addEventListener('click', async () => {
         if (!uploadedFile || !currentOriginalImage) return;
 
+        const isAgeEstimation = selectedOperation === 'age_estimation';
         const isWarpOperation = ['smile', 'eyebrow', 'lip', 'slim'].includes(selectedOperation);
-        const endpoint = isWarpOperation ? `${API_BASE}/process/warp` : `${API_BASE}/process/age`;
+        const endpoint = isAgeEstimation
+            ? `${API_BASE}/process/estimate_age`
+            : isWarpOperation ? `${API_BASE}/process/warp` : `${API_BASE}/process/age`;
         const formData = new FormData();
         formData.append('image', uploadedFile);
         formData.append('operation', selectedOperation);
@@ -620,6 +690,23 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) {
                 throw new Error(payload?.detail || 'Processing failed.');
             }
+
+            // --- Age Estimation: JSON-only response (no image) ---
+            if (isAgeEstimation) {
+                const ageLabel = i18n[currentLang]?.ageResult || 'Estimated Age:';
+                const age = payload.estimated_age ?? '—';
+                const bucket = payload.age_bucket || '';
+                analysisSummary.innerHTML =
+                    `<div style="text-align:center;padding:12px 0;">`
+                    + `<span style="font-size:1rem;opacity:0.8;">${ageLabel}</span><br/>`
+                    + `<span style="font-size:2.8rem;font-weight:800;color:#00e5ff;line-height:1.2;">${age}</span>`
+                    + (bucket ? `<br/><span style="font-size:0.9rem;opacity:0.6;">${bucket}</span>` : '')
+                    + `</div>`;
+                addHistory(i18n[currentLang]?.ageEstimation || 'Age Estimation');
+                loadingOverlay.style.display = 'none';
+                return; // Skip image rendering
+            }
+
             if (!payload?.image_b64) {
                 throw new Error('Missing image_b64 in response.');
             }
