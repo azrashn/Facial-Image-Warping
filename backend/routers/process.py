@@ -95,6 +95,7 @@ async def process_warp(
         "process_warp.received",
         extra={"operation": op, "intensity": intensity, "smoothing": smoothing},
     )
+
     try:
         contents = await image.read()
         original = _decode_upload(contents)
@@ -110,27 +111,53 @@ async def process_warp(
 
         smooth_strength = max(0.0, min(1.0, float(smoothing) / 100.0))
         if smooth_strength > 0:
-            smoothed = cv2.GaussianBlur(processed, (0, 0), 0.5 + smooth_strength * 2.0)
-            processed = cv2.addWeighted(processed, 1.0 - smooth_strength * 0.4, smoothed, smooth_strength * 0.4, 0)
+            smoothed = cv2.GaussianBlur(
+                processed,
+                (0, 0),
+                0.5 + smooth_strength * 2.0,
+            )
+            processed = cv2.addWeighted(
+                processed,
+                1.0 - smooth_strength * 0.4,
+                smoothed,
+                smooth_strength * 0.4,
+                0,
+            )
 
         metrics = _metrics_dict(original, processed)
+
+        _, _, processed_fft = compute_fft(processed)
+        spectrum = compute_magnitude_spectrum(processed_fft)
+
+        energy = compute_energy_analysis(
+            processed,
+            radius=int(10 + max(0.0, min(1.0, intensity / 100.0)) * 40),
+        )
+
         logger.info(
             "process_warp.success",
-            extra={"operation": op, "mse": metrics["mse"], "psnr": metrics["psnr"], "ssim": metrics["ssim"]},
+            extra={
+                "operation": op,
+                "mse": metrics["mse"],
+                "psnr": metrics["psnr"],
+                "ssim": metrics["ssim"],
+            },
         )
+
         return _response_payload(
             image_b64=_data_url_from_image(processed),
             metrics=metrics,
-            spectrum_b64=None,
-            energy=None,
+            spectrum_b64=_data_url_from_image(cv2.cvtColor(spectrum, cv2.COLOR_GRAY2BGR)),
+            energy=energy,
         )
+
     except HTTPException:
         logger.exception("process_warp.http_error", extra={"operation": op})
         raise
+
     except Exception as exc:
         logger.exception("process_warp.failed", extra={"operation": op})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
 
 @router.post("/process/age")
 async def process_age(
@@ -146,33 +173,51 @@ async def process_age(
         "process_age.received",
         extra={"operation": op, "intensity": intensity},
     )
+
     try:
         contents = await image.read()
         original = _decode_upload(contents)
-        spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
 
         if op == "aging":
             processed = apply_aging(original, intensity)
+
         elif op == "deaging":
             processed = apply_deaging(original, intensity)
-        else:
-            processed, spectrum = apply_fft_filter(original, intensity)
 
-        energy = compute_energy_analysis(original, radius=int(10 + max(0.0, min(1.0, intensity / 100.0)) * 40))
+        else:
+            processed, _ = apply_fft_filter(original, intensity)
+
+        _, _, processed_fft = compute_fft(processed)
+        spectrum = compute_magnitude_spectrum(processed_fft)
+
+        energy = compute_energy_analysis(
+            processed,
+            radius=int(10 + max(0.0, min(1.0, intensity / 100.0)) * 40),
+        )
+
         metrics = _metrics_dict(original, processed)
+
         logger.info(
             "process_age.success",
-            extra={"operation": op, "mse": metrics["mse"], "psnr": metrics["psnr"], "ssim": metrics["ssim"]},
+            extra={
+                "operation": op,
+                "mse": metrics["mse"],
+                "psnr": metrics["psnr"],
+                "ssim": metrics["ssim"],
+            },
         )
+
         return _response_payload(
             image_b64=_data_url_from_image(processed),
             metrics=metrics,
             spectrum_b64=_data_url_from_image(cv2.cvtColor(spectrum, cv2.COLOR_GRAY2BGR)),
             energy=energy,
         )
+
     except HTTPException:
         logger.exception("process_age.http_error", extra={"operation": op})
         raise
+
     except Exception as exc:
         logger.exception("process_age.failed", extra={"operation": op})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
