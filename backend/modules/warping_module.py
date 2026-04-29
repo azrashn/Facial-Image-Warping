@@ -1,0 +1,468 @@
+"""
+MediaPipe face landmarks + piecewise affine geometric warping.
+"""
+
+from __future__ import annotations
+
+import os
+import tempfile
+import urllib.request
+from typing import Optional
+
+import cv2
+import mediapipe as mp
+import numpy as np
+import logging
+from scipy.spatial import Delaunay
+
+logger = logging.getLogger(__name__)
+
+
+def _clamp_intensity(intensity: int) -> float:
+    return max(0.0, min(100.0, float(intensity))) / 100.0
+
+
+def triangle_area(tri: np.ndarray) -> float:
+    """Signed area of a 2-D triangle given (3,2) vertices."""
+    a, b, c = tri
+    return abs(
+        a[0] * (b[1] - c[1]) +
+        b[0] * (c[1] - a[1]) +
+        c[0] * (a[1] - b[1])
+    ) / 2.0
+
+
+def _has_duplicate_vertices(tri: np.ndarray, eps: float = 1e-4) -> bool:
+    """Return True if any two vertices in the triangle are identical."""
+    a, b, c = tri
+    if np.linalg.norm(a - b) < eps:
+        return True
+    if np.linalg.norm(b - c) < eps:
+        return True
+    if np.linalg.norm(a - c) < eps:
+        return True
+    return False
+
+
+_TASK_LANDMARKER = None
+_TASK_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/latest/face_landmarker.task"
+)
+
+
+def _face_landmarker_model_path() -> str:
+    env_p = os.environ.get("MEDIAPIPE_FACE_LANDMARKER_MODEL")
+    if env_p and os.path.isfile(env_p):
+        return env_p
+    cache_dir = os.path.join(tempfile.gettempdir(), "facial_image_warping_mp")
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(cache_dir, "face_landmarker.task")
+    if not os.path.isfile(path) or os.path.getsize(path) < 1024 * 1024:
+        urllib.request.urlretrieve(_TASK_MODEL_URL, path)
+    return path
+
+
+def _get_tasks_face_landmarker():
+    global _TASK_LANDMARKER
+    if _TASK_LANDMARKER is None:
+        from mediapipe.tasks.python.vision import FaceLandmarker
+
+        _TASK_LANDMARKER = FaceLandmarker.create_from_model_path(
+            _face_landmarker_model_path()
+        )
+    return _TASK_LANDMARKER
+
+
+def _landmarks_via_tasks(image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
+    from mediapipe.tasks.python.vision.core import image as mp_image_module
+
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    mp_image = mp_image_module.Image(mp_image_module.ImageFormat.SRGB, rgb)
+    result = _get_tasks_face_landmarker().detect(mp_image)
+    if not result.face_landmarks:
+        return None
+    lm_list = result.face_landmarks[0]
+    pts = np.array([[p.x * w, p.y * h] for p in lm_list], dtype=np.float32)
+    if pts.shape[0] > 468:
+        pts = pts[:468].copy()
+    return pts
+
+
+def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
+    if image_bgr is None or image_bgr.size == 0:
+        return None
+    h, w = image_bgr.shape[:2]
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+
+    if hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh"):
+        with mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        ) as face_mesh:
+            res = face_mesh.process(rgb)
+        if not res.multi_face_landmarks:
+            return None
+        lm = res.multi_face_landmarks[0].landmark
+        return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+
+    return _landmarks_via_tasks(image_bgr, h, w)
+
+
+def _corners(width: int, height: int) -> np.ndarray:
+    return np.array(
+        [
+            [0.0, 0.0],
+            [width - 1.0, 0.0],
+            [0.0, height - 1.0],
+            [width - 1.0, height - 1.0],
+        ],
+        dtype=np.float32,
+    )
+
+
+def geometric_warp(
+    image_bgr: np.ndarray,
+    src_pts: np.ndarray,
+    dst_pts: np.ndarray,
+) -> np.ndarray:
+    """Piecewise affine warp with robust triangle validation."""
+    h, w = image_bgr.shape[:2]
+    out = np.zeros_like(image_bgr)
+
+    # --- Failsafe: wrap everything so the endpoint never crashes ---
+    try:
+        tri = Delaunay(dst_pts)
+    except Exception as exc:
+        logger.error("Delaunay triangulation failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
+    total = len(tri.simplices)
+    skipped_degenerate = 0
+    skipped_duplicate = 0
+    skipped_rect = 0
+    warped_ok = 0
+
+    for ia, ib, ic in tri.simplices:
+        # ------ Req 1: force exact (3,2) float32 shape ------
+        src_tri = np.asarray(
+            [src_pts[ia], src_pts[ib], src_pts[ic]], dtype=np.float32
+        ).reshape(3, 2)
+        dst_tri = np.asarray(
+            [dst_pts[ia], dst_pts[ib], dst_pts[ic]], dtype=np.float32
+        ).reshape(3, 2)
+
+        # ------ Req 3: skip triangles with duplicate vertices ------
+        if _has_duplicate_vertices(src_tri) or _has_duplicate_vertices(dst_tri):
+            skipped_duplicate += 1
+            continue
+
+        # ------ Req 2: skip degenerate (near-zero-area) triangles ------
+        if triangle_area(src_tri) < 1e-3 or triangle_area(dst_tri) < 1e-3:
+            skipped_degenerate += 1
+            continue
+
+        # ------ Req 4: bounding rect safety ------
+        r = cv2.boundingRect(dst_tri)
+        bx, by, bw, bh = r
+        # Clamp to image bounds
+        bx = max(bx, 0)
+        by = max(by, 0)
+        bw = min(bw, w - bx)
+        bh = min(bh, h - by)
+        if bw <= 0 or bh <= 0:
+            skipped_rect += 1
+            continue
+
+        try:
+            mask = np.zeros((bh, bw), dtype=np.uint8)
+            dst_crop = np.asarray(dst_tri - [bx, by], dtype=np.float32).reshape(3, 2)
+            src_crop = np.asarray(src_tri, dtype=np.float32).reshape(3, 2)
+            cv2.fillConvexPoly(mask, np.int32(dst_crop), 255)
+
+            # ------ Req 5: correct affine order src_crop → dst_crop ------
+            warp_mat = cv2.getAffineTransform(src_crop, dst_crop)
+            warped_patch = cv2.warpAffine(
+                image_bgr,
+                warp_mat,
+                (bw, bh),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT_101,
+            )
+
+            roi = out[by : by + bh, bx : bx + bw]
+            blended = np.where(
+                mask[..., None] == 255,
+                warped_patch,
+                roi,
+            )
+            out[by : by + bh, bx : bx + bw] = blended
+            warped_ok += 1
+        except Exception as tri_exc:
+            logger.warning(
+                "Triangle (%d,%d,%d) warp failed: %s", ia, ib, ic, tri_exc
+            )
+            continue
+
+    # ------ Req 6: debug logging ------
+    logger.debug(
+        "geometric_warp stats – total: %d, warped: %d, "
+        "skipped_degenerate: %d, skipped_duplicate: %d, skipped_rect: %d",
+        total,
+        warped_ok,
+        skipped_degenerate,
+        skipped_duplicate,
+        skipped_rect,
+    )
+
+    # ------ Req 7: failsafe – if nothing was warped, return original ------
+    if warped_ok == 0:
+        logger.warning("No triangles warped successfully – returning original image")
+        return image_bgr.copy()
+
+    return out
+
+
+def _prepare_warp(
+    image_bgr: np.ndarray, src_lm: np.ndarray, deltas: np.ndarray
+) -> np.ndarray:
+    try:
+        dst = src_lm + deltas
+        height, width = image_bgr.shape[:2]
+        corners = _corners(width, height)
+        src_all = np.vstack([src_lm, corners])
+        dst_all = np.vstack([dst, corners])
+        return geometric_warp(image_bgr, src_all, dst_all)
+    except Exception as exc:
+        logger.error("_prepare_warp failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
+
+def _gaussian_falloff(lm: np.ndarray, anchor_idx: int, sigma: float) -> np.ndarray:
+    """
+    Compute a (N,) weight array where each landmark's weight is
+    exp(-dist² / 2σ²) relative to the anchor landmark.
+    σ is expressed in pixels.
+    """
+    anchor = lm[anchor_idx]
+    dists = np.linalg.norm(lm - anchor, axis=1)
+    return np.exp(-0.5 * (dists / max(sigma, 1e-6)) ** 2)
+
+
+def _face_scale(lm: np.ndarray) -> float:
+    """Estimate face size (inter-eye distance) for resolution-independent σ."""
+    # Landmarks 33 = nose tip, 133 = left eye outer, 362 = right eye outer
+    left_eye = lm[133]
+    right_eye = lm[362]
+    return float(np.linalg.norm(left_eye - right_eye))
+
+
+def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+    """
+    Natural smile — only lifts the mouth CORNERS outward + upward.
+    Lips keep their original thickness (no botox / puffing effect).
+    Subtle cheek lift for nasolabial fold realism.
+    """
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None:
+            return image_bgr
+        strength = _clamp_intensity(intensity)
+        deltas = np.zeros_like(lm)
+
+        face_sz = _face_scale(lm)
+
+        # ── Mouth corners: outward + up (zygomaticus major) ──
+        # Tight σ so only the corner region moves, lips stay untouched
+        sigma_corner = face_sz * 0.20
+        corner_outward = face_sz * 0.07 * strength
+        corner_upward  = face_sz * 0.05 * strength
+
+        w_L = _gaussian_falloff(lm, 61, sigma_corner)   # left corner
+        w_R = _gaussian_falloff(lm, 291, sigma_corner)   # right corner
+        for i in range(len(lm)):
+            deltas[i, 0] -= w_L[i] * corner_outward
+            deltas[i, 1] -= w_L[i] * corner_upward
+            deltas[i, 0] += w_R[i] * corner_outward
+            deltas[i, 1] -= w_R[i] * corner_upward
+
+        # ── Subtle cheek lift → nasolabial fold ──
+        sigma_cheek = face_sz * 0.16
+        cheek_lift = face_sz * 0.02 * strength
+
+        w_cl = _gaussian_falloff(lm, 205, sigma_cheek)
+        w_cr = _gaussian_falloff(lm, 425, sigma_cheek)
+        for i in range(len(lm)):
+            deltas[i, 1] -= w_cl[i] * cheek_lift
+            deltas[i, 1] -= w_cr[i] * cheek_lift
+
+        return _prepare_warp(image_bgr, lm, deltas)
+    except Exception as exc:
+        logger.error("apply_smile failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
+
+def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+    """
+    Rigid-body eyebrow lift: BOTH the upper and lower boundary
+    landmarks of each brow translate by the exact same delta,
+    preserving original thickness.  Gaussian falloff into the
+    forehead prevents mesh tearing above the brow.
+    """
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None:
+            return image_bgr
+        strength = _clamp_intensity(intensity)
+        deltas = np.zeros_like(lm)
+
+        face_sz = _face_scale(lm)
+        lift = face_sz * 0.10 * strength  # max vertical lift in px
+
+        # --- LEFT BROW: upper + lower boundary (rigid body) ---
+        left_upper = [70, 63, 105, 66, 107]      # top edge
+        left_lower = [46, 53, 52, 65, 55]         # bottom edge
+        # --- RIGHT BROW: upper + lower boundary (rigid body) ---
+        right_upper = [300, 293, 334, 296, 336]
+        right_lower = [276, 283, 282, 295, 285]
+
+        # Move ALL brow points by the same delta → preserves thickness
+        all_brow = left_upper + left_lower + right_upper + right_lower
+        for idx in all_brow:
+            deltas[idx, 1] -= lift
+
+        # Gaussian falloff into forehead above each brow centroid
+        # so the skin above stretches smoothly instead of tearing
+        sigma_fg = face_sz * 0.25
+        left_center_idx = 66    # mid-brow left
+        right_center_idx = 296  # mid-brow right
+
+        w_l = _gaussian_falloff(lm, left_center_idx, sigma_fg)
+        w_r = _gaussian_falloff(lm, right_center_idx, sigma_fg)
+
+        forehead_falloff = lift * 0.4
+        for i in range(len(lm)):
+            # Only apply to points ABOVE the brow (lower y value)
+            if lm[i, 1] < lm[left_center_idx, 1]:
+                deltas[i, 1] -= w_l[i] * forehead_falloff
+            if lm[i, 1] < lm[right_center_idx, 1]:
+                deltas[i, 1] -= w_r[i] * forehead_falloff
+
+        # Zero-out the brow indices from falloff so they keep exact rigid delta
+        for idx in all_brow:
+            deltas[idx, 1] = -lift
+
+        return _prepare_warp(image_bgr, lm, deltas)
+    except Exception as exc:
+        logger.error("apply_eyebrow_raise failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
+
+def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+    """
+    Lip widen with Gaussian falloff from the two lip-corner anchors
+    spreading horizontally outward.
+    """
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None:
+            return image_bgr
+        strength = _clamp_intensity(intensity)
+        deltas = np.zeros_like(lm)
+
+        face_sz = _face_scale(lm)
+        sigma = face_sz * 0.30
+        max_spread = face_sz * 0.10 * strength
+
+        # Left lip corner (idx 61) → pull left
+        w_left = _gaussian_falloff(lm, 61, sigma)
+        for i in range(len(lm)):
+            deltas[i, 0] -= w_left[i] * max_spread
+
+        # Right lip corner (idx 291) → pull right
+        w_right = _gaussian_falloff(lm, 291, sigma)
+        for i in range(len(lm)):
+            deltas[i, 0] += w_right[i] * max_spread
+
+        return _prepare_warp(image_bgr, lm, deltas)
+    except Exception as exc:
+        logger.error("apply_lip_widen failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
+
+def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+    """
+    Face slim with smooth radial contraction toward the nose tip.
+    Each jaw/cheek landmark is pulled along the vector toward the
+    nose tip with a radial falloff — strongest at the outer jaw,
+    decaying smoothly toward inner cheeks.
+    """
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None:
+            return image_bgr
+        strength = _clamp_intensity(intensity)
+        deltas = np.zeros_like(lm)
+
+        face_sz = _face_scale(lm)
+        nose_tip = lm[1].copy()  # landmark 1 = nose tip
+
+        # Jaw contour indices (MediaPipe face mesh silhouette)
+        jaw_contour = [
+            10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+            361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+            176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+            162, 21, 54, 103, 67, 109
+        ]
+
+        # Compute max distance from nose tip among jaw points
+        jaw_positions = lm[jaw_contour]
+        jaw_vecs = jaw_positions - nose_tip
+        jaw_dists = np.linalg.norm(jaw_vecs, axis=1)
+        max_jaw_dist = float(np.max(jaw_dists)) if np.max(jaw_dists) > 1e-3 else 1.0
+
+        max_pull = face_sz * 0.10 * strength
+
+        for i, idx in enumerate(jaw_contour):
+            vec = lm[idx] - nose_tip
+            dist = float(np.linalg.norm(vec))
+            if dist < 1e-3:
+                continue
+
+            # Radial falloff: strongest at outer jaw, zero at nose tip
+            #   normalized_dist in [0, 1] where 1 = outermost jaw point
+            normalized_dist = dist / max_jaw_dist
+
+            # Smooth cubic falloff for natural contour
+            weight = normalized_dist ** 2
+
+            # Pull direction: unit vector from point toward nose tip
+            direction = -vec / dist  # toward nose
+            # Only take the horizontal component to avoid vertical squish
+            pull_x = direction[0] * weight * max_pull
+            pull_y = direction[1] * weight * max_pull * 0.3  # dampen vertical
+
+            deltas[idx, 0] += pull_x
+            deltas[idx, 1] += pull_y
+
+        # Gaussian falloff to neighboring non-jaw landmarks for mesh smoothness
+        sigma_spread = face_sz * 0.15
+        jaw_set = set(jaw_contour)
+        for anchor_idx in jaw_contour:
+            if abs(deltas[anchor_idx, 0]) < 1e-6 and abs(deltas[anchor_idx, 1]) < 1e-6:
+                continue
+            w = _gaussian_falloff(lm, anchor_idx, sigma_spread)
+            for i in range(len(lm)):
+                if i in jaw_set:
+                    continue  # don't double-apply to jaw points
+                deltas[i, 0] += w[i] * deltas[anchor_idx, 0] * 0.3
+                deltas[i, 1] += w[i] * deltas[anchor_idx, 1] * 0.3
+
+        return _prepare_warp(image_bgr, lm, deltas)
+    except Exception as exc:
+        logger.error("apply_face_slim failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
