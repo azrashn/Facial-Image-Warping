@@ -106,62 +106,122 @@ def apply_frequency_filter(image: np.ndarray, radius: int, mode: str = "low") ->
 
 def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     """
-    Frequency-based aging:
-    - preserves original colors
-    - enhances fine high-frequency texture/wrinkle-like details
-    - slightly increases contrast without creating muddy artifacts
+    Realistic aging simulation with three combined effects:
+      1. Wrinkle / skin-texture enhancement  (frequency + CLAHE)
+      2. Hair whitening / graying            (HSV colour manipulation)
+      3. Subtle aged-skin colour tint        (LAB shift)
     """
     if image is None:
         raise ValueError("Input image is None.")
 
     intensity = float(np.clip(intensity, 0.0, 1.0))
+    h, w = image.shape[:2]
 
-    # Work on luminance only, so colors are preserved
+    # ── 1. WRINKLE & TEXTURE ENHANCEMENT ──────────────────────────────
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
+    l_ch, a_ch, b_ch = cv2.split(lab)
 
-    # High-frequency details from luminance channel
+    # High-pass frequency filter → fine skin detail
     radius = int(14 + intensity * 40)
-    high_pass = apply_frequency_filter(l, radius=radius, mode="high")
+    high_pass = apply_frequency_filter(l_ch, radius=radius, mode="high")
     high_pass = cv2.normalize(high_pass, None, 0, 255, cv2.NORM_MINMAX)
 
-    # Remove broad muddy texture, keep only fine detail
+    # Strip broad muddy texture, keep only crisp detail
     detail_blur = cv2.GaussianBlur(high_pass, (0, 0), 1.0)
     detail = high_pass.astype(np.float32) - detail_blur.astype(np.float32)
 
-    # Add controlled wrinkle/detail texture to luminance
-    l_float = l.astype(np.float32)
-    detail_strength = 1.15 + 1.25 * intensity
+    # CLAHE for local contrast – makes existing creases pop
+    clip_limit = 3.0 + 5.0 * intensity
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+    clahe_l = clahe.apply(l_ch)
+
+    # Build wrinkled luminance
+    l_float = l_ch.astype(np.float32)
+    detail_strength = 1.8 + 2.5 * intensity
     aged_l = l_float + detail * detail_strength
 
-    # Mild contrast and slight darkening for aging effect
-    contrast = 1.02 + 0.10 * intensity
-    darkness = 2.0 + 5.0 * intensity
+    # Blend in CLAHE version
+    clahe_blend = 0.25 + 0.35 * intensity
+    aged_l = aged_l * (1.0 - clahe_blend) + clahe_l.astype(np.float32) * clahe_blend
+
+    # Mild contrast push + slight darkening
+    contrast = 1.04 + 0.16 * intensity
+    darkness = 3.0 + 8.0 * intensity
     aged_l = aged_l * contrast - darkness
 
-    # mikro wrinkle noise
-    noise = np.random.normal(0, 5 * intensity, l.shape).astype(np.float32)
-    aged_l = aged_l.astype(np.float32) + noise
-
+    # Micro wrinkle noise
+    noise = np.random.normal(0, 8 * intensity, l_ch.shape).astype(np.float32)
+    aged_l = aged_l + noise
     aged_l = np.clip(aged_l, 0, 255).astype(np.uint8)
 
-    # Merge back with original color channels
-    aged_lab = cv2.merge([aged_l, a, b])
-    aged_color = cv2.cvtColor(aged_lab, cv2.COLOR_LAB2BGR)
+    # Merge back with original colour channels
+    aged_lab = cv2.merge([aged_l, a_ch, b_ch])
+    result = cv2.cvtColor(aged_lab, cv2.COLOR_LAB2BGR)
 
-    # Subtle sharpening, not too aggressive
-    blurred = cv2.GaussianBlur(aged_color, (0, 0), 1.0)
-    sharpened = cv2.addWeighted(
-    aged_color,
-    1.18 + 0.18 * intensity,
-    blurred,
-    -0.18 - 0.18 * intensity,
-    0,
-)
+    # Subtle sharpening to crisp up fine lines
+    blurred = cv2.GaussianBlur(result, (0, 0), 1.0)
+    sharp_s = 0.25 + 0.30 * intensity
+    result = cv2.addWeighted(result, 1.0 + sharp_s, blurred, -sharp_s, 0)
 
-    # Final blend keeps result natural and colored
-    blend_ratio = 0.35 + 0.30 * intensity
-    result = cv2.addWeighted(image, 1.0 - blend_ratio, sharpened, blend_ratio, 0)
+    # Blend with original to keep it natural
+    blend_ratio = 0.45 + 0.40 * intensity
+    result = cv2.addWeighted(image, 1.0 - blend_ratio, result, blend_ratio, 0)
+
+    # ── 2. HAIR WHITENING / GRAYING ───────────────────────────────────
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    v_ch_hsv = hsv[:, :, 2].astype(np.float32)
+    s_ch_hsv = hsv[:, :, 1].astype(np.float32)
+    h_ch_hsv = hsv[:, :, 0].astype(np.float32)
+
+    # Dark-pixel mask (hair is typically dark)
+    dark_thresh = 145 + int(50 * intensity)
+    dark_mask = np.clip((dark_thresh - v_ch_hsv) / max(dark_thresh, 1), 0, 1)
+
+    # Position weight: upper portion of image is more likely hair
+    y_coords = np.linspace(0.0, 1.0, h, dtype=np.float32).reshape(-1, 1)
+    pos_weight = np.clip(1.0 - y_coords * 1.1, 0.12, 1.0)
+    pos_weight = np.broadcast_to(pos_weight, (h, w)).copy()
+
+    # Exclude skin-coloured pixels (hue ≈ 0-30 in OpenCV 0-180 scale)
+    skin_region = (
+        (h_ch_hsv >= 0) & (h_ch_hsv <= 30)
+        & (s_ch_hsv > 30) & (v_ch_hsv > 70)
+    )
+    not_skin = 1.0 - skin_region.astype(np.float32)
+
+    # Combined hair mask
+    hair_mask = dark_mask * pos_weight * not_skin
+
+    # Morphological cleanup for a coherent region
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    hair_u8 = (np.clip(hair_mask, 0, 1) * 255).astype(np.uint8)
+    hair_u8 = cv2.morphologyEx(hair_u8, cv2.MORPH_CLOSE, kernel)
+    hair_u8 = cv2.morphologyEx(hair_u8, cv2.MORPH_OPEN, kernel)
+    hair_mask = hair_u8.astype(np.float32) / 255.0
+
+    # Smooth edges for natural blending
+    hair_mask = cv2.GaussianBlur(hair_mask, (25, 25), 10)
+
+    # Apply desaturation + brightness boost in detected hair region
+    white_str = 0.70 + 0.30 * intensity
+    hsv_result = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float64)
+
+    # Desaturate → gray / white
+    hsv_result[:, :, 1] *= (1.0 - hair_mask * white_str)
+
+    # Lighten hair toward silver-white
+    bright_add = (55 + 100 * intensity) * hair_mask
+    hsv_result[:, :, 2] = np.clip(hsv_result[:, :, 2] + bright_add, 0, 255)
+
+    hsv_result = np.clip(hsv_result, 0, 255).astype(np.uint8)
+    result = cv2.cvtColor(hsv_result, cv2.COLOR_HSV2BGR)
+
+    # ── 3. SUBTLE AGED-SKIN COLOUR TINT ───────────────────────────────
+    # Slight warm-yellow shift (sun damage / age spots appearance)
+    lab_out = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float64)
+    lab_out[:, :, 2] = np.clip(lab_out[:, :, 2] + 2.0 + 3.0 * intensity, 0, 255)
+    lab_out[:, :, 0] = np.clip(lab_out[:, :, 0] - 1.5 * intensity, 0, 255)
+    result = cv2.cvtColor(lab_out.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     return np.clip(result, 0, 255).astype(np.uint8)
 

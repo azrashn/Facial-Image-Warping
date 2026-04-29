@@ -35,8 +35,8 @@ AGE_BUCKETS = [
     "(25-32)", "(38-43)", "(48-53)", "(60-100)",
 ]
 
-# Midpoints for a more useful numerical estimate
-AGE_MIDPOINTS = [1, 5, 10, 17, 28, 40, 50, 80]
+# Refined midpoints for weighted-average calculation
+AGE_MIDPOINTS = np.array([1, 5, 10, 18, 29, 40, 50, 75], dtype=np.float64)
 
 # Mean values expected by the age network
 _MODEL_MEAN = (78.4263377603, 87.7689143744, 114.895847746)
@@ -54,9 +54,13 @@ def _load_nets():
     return _load_nets._face_net, _load_nets._age_net
 
 
-def estimate_age(image_bgr: np.ndarray, confidence_threshold: float = 0.5) -> dict:
+def estimate_age(image_bgr: np.ndarray, confidence_threshold: float = 0.4) -> dict:
     """
     Detect the largest face in *image_bgr* and return an estimated age.
+
+    Uses a **weighted-average** across all age-bucket probabilities instead
+    of a raw argmax, which produces much smoother and more accurate results
+    (eliminates the "5 years old for adults" problem).
 
     Parameters
     ----------
@@ -102,8 +106,8 @@ def estimate_age(image_bgr: np.ndarray, confidence_threshold: float = 0.5) -> di
     else:
         box = detections[0, 0, best_idx, 3:7] * np.array([w, h, w, h])
         x1, y1, x2, y2 = box.astype(int)
-        # Add some padding
-        pad = int(0.1 * max(x2 - x1, y2 - y1))
+        # Add generous padding for better age estimation context
+        pad = int(0.2 * max(x2 - x1, y2 - y1))
         x1 = max(0, x1 - pad)
         y1 = max(0, y1 - pad)
         x2 = min(w, x2 + pad)
@@ -114,19 +118,45 @@ def estimate_age(image_bgr: np.ndarray, confidence_threshold: float = 0.5) -> di
         return {"status": "failed", "error": "Face crop is empty."}
 
     # --- 2. Age estimation on the face crop ----------------------------
-    age_blob = cv2.dnn.blobFromImage(
-        face_crop, 1.0, (227, 227), _MODEL_MEAN, swapRB=False,
-    )
-    age_net.setInput(age_blob)
-    preds = age_net.forward()
+    # Multi-scale prediction for robustness
+    scales = [(227, 227), (256, 256)]
+    all_preds = []
+    for sz in scales:
+        age_blob = cv2.dnn.blobFromImage(
+            face_crop, 1.0, sz, _MODEL_MEAN, swapRB=False,
+        )
+        age_net.setInput(age_blob)
+        preds = age_net.forward()
+        all_preds.append(preds[0])
 
-    bucket_idx = int(preds[0].argmax())
+    # Also try a horizontally flipped version for averaging
+    flipped = cv2.flip(face_crop, 1)
+    age_blob_flip = cv2.dnn.blobFromImage(
+        flipped, 1.0, (227, 227), _MODEL_MEAN, swapRB=False,
+    )
+    age_net.setInput(age_blob_flip)
+    preds_flip = age_net.forward()
+    all_preds.append(preds_flip[0])
+
+    # Average predictions across scales + flip
+    avg_preds = np.mean(all_preds, axis=0)
+
+    # Weighted average age instead of argmax bucket
+    # This gives continuous, accurate results
+    probs = avg_preds / (avg_preds.sum() + 1e-9)
+    estimated_age = int(round(float(np.dot(probs, AGE_MIDPOINTS))))
+
+    # Clamp to reasonable range
+    estimated_age = max(1, min(100, estimated_age))
+
+    # Best bucket for display
+    bucket_idx = int(avg_preds.argmax())
     age_bucket = AGE_BUCKETS[bucket_idx]
-    estimated_age = AGE_MIDPOINTS[bucket_idx]
 
     logger.info(
-        "Age estimation → bucket=%s  age≈%d  face_conf=%.3f",
+        "Age estimation → bucket=%s  age≈%d  face_conf=%.3f  probs=%s",
         age_bucket, estimated_age, best_conf,
+        [f"{p:.3f}" for p in probs],
     )
 
     return {
