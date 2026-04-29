@@ -14,7 +14,9 @@ except ModuleNotFoundError:
     from backend.routers.process import router as process_router
     from backend.routers.upload import router as upload_router
 
+
 app = FastAPI(title="Facial Warping API - Group 14")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
