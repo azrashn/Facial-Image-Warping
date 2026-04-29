@@ -1,6 +1,9 @@
 import base64
+import logging
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def clamp(value: float, min_value: float = 0.0, max_value: float = 1.0) -> float:
@@ -104,18 +107,111 @@ def apply_frequency_filter(image: np.ndarray, radius: int, mode: str = "low") ->
     return result
 
 
+def _build_face_hair_mask(image: np.ndarray) -> np.ndarray:
+    """
+    Build a smooth float mask [0..1] covering the face and hair region.
+
+    Uses MediaPipe FaceMesh to find the face oval, then extends the mask
+    upward to include the hair area.  Returns a single-channel float32
+    array of the same (H, W) as *image*.
+    """
+    from backend.modules.warping_module import detect_face_landmarks
+
+    h, w = image.shape[:2]
+    mask = np.zeros((h, w), dtype=np.float32)
+
+    lm = detect_face_landmarks(image)
+    if lm is None:
+        # Fallback: treat the whole image as face (old behaviour)
+        logger.warning("_build_face_hair_mask: no landmarks – full image mask")
+        return np.ones((h, w), dtype=np.float32)
+
+    # ── Face oval convex hull ────────────────────────────────────────
+    # MediaPipe face-mesh silhouette (FACEMESH_FACE_OVAL) indices
+    face_oval_indices = [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+        361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+        176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+        162, 21, 54, 103, 67, 109,
+    ]
+
+    # Clamp indices to available landmarks
+    n_lm = lm.shape[0]
+    face_pts = lm[[i for i in face_oval_indices if i < n_lm]]
+    hull = cv2.convexHull(face_pts.astype(np.int32))
+    cv2.fillConvexPoly(mask, hull, 1.0)
+
+    # ── Extend upward for hair ───────────────────────────────────────
+    # Find the top of the face oval, then extend a rectangle up to the
+    # image top (or a generous margin) to cover the hair / forehead.
+    top_y = int(face_pts[:, 1].min())
+    left_x = int(face_pts[:, 0].min())
+    right_x = int(face_pts[:, 0].max())
+
+    # Widen slightly for hair that extends beyond face width
+    hair_pad_x = int((right_x - left_x) * 0.25)
+    hair_left = max(0, left_x - hair_pad_x)
+    hair_right = min(w, right_x + hair_pad_x)
+    hair_top = 0  # all the way to the image top
+
+    hair_rect = np.array([
+        [hair_left, hair_top],
+        [hair_right, hair_top],
+        [hair_right, top_y],
+        [hair_left, top_y],
+    ], dtype=np.int32)
+    cv2.fillConvexPoly(mask, hair_rect, 1.0)
+
+    # Also add side regions next to face for sideburns / ears
+    face_center_y = int(face_pts[:, 1].mean())
+    side_pad = int((right_x - left_x) * 0.15)
+    # Left side
+    left_side = np.array([
+        [max(0, left_x - side_pad), top_y],
+        [left_x, top_y],
+        [left_x, face_center_y],
+        [max(0, left_x - side_pad), face_center_y],
+    ], dtype=np.int32)
+    cv2.fillConvexPoly(mask, left_side, 1.0)
+    # Right side
+    right_side = np.array([
+        [right_x, top_y],
+        [min(w, right_x + side_pad), top_y],
+        [min(w, right_x + side_pad), face_center_y],
+        [right_x, face_center_y],
+    ], dtype=np.int32)
+    cv2.fillConvexPoly(mask, right_side, 1.0)
+
+    # ── Smooth edges for seamless blending ────────────────────────────
+    ksize = max(3, int(min(h, w) * 0.06) | 1)  # ensure odd
+    mask = cv2.GaussianBlur(mask, (ksize, ksize), ksize * 0.4)
+    mask = np.clip(mask, 0.0, 1.0)
+
+    return mask
+
+
 def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     """
-    Realistic aging simulation with three combined effects:
+    Realistic aging simulation restricted to the **face and hair** only.
+    Background and clothing are left untouched.
+
+    Three combined effects:
       1. Wrinkle / skin-texture enhancement  (frequency + CLAHE)
       2. Hair whitening / graying            (HSV colour manipulation)
       3. Subtle aged-skin colour tint        (LAB shift)
+
+    A MediaPipe face-mesh mask ensures effects are composited only onto
+    the face + hair region.
     """
     if image is None:
         raise ValueError("Input image is None.")
 
     intensity = float(np.clip(intensity, 0.0, 1.0))
     h, w = image.shape[:2]
+
+    # ── Build face + hair mask ────────────────────────────────────────
+    face_mask = _build_face_hair_mask(image)          # float32 [0..1]
+    face_mask_3 = face_mask[..., np.newaxis]           # (H,W,1) for BGR ops
 
     # ── 1. WRINKLE & TEXTURE ENHANCEMENT ──────────────────────────────
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
@@ -156,16 +252,23 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
 
     # Merge back with original colour channels
     aged_lab = cv2.merge([aged_l, a_ch, b_ch])
-    result = cv2.cvtColor(aged_lab, cv2.COLOR_LAB2BGR)
+    wrinkled = cv2.cvtColor(aged_lab, cv2.COLOR_LAB2BGR)
 
     # Subtle sharpening to crisp up fine lines
-    blurred = cv2.GaussianBlur(result, (0, 0), 1.0)
+    blurred = cv2.GaussianBlur(wrinkled, (0, 0), 1.0)
     sharp_s = 0.25 + 0.30 * intensity
-    result = cv2.addWeighted(result, 1.0 + sharp_s, blurred, -sharp_s, 0)
+    wrinkled = cv2.addWeighted(wrinkled, 1.0 + sharp_s, blurred, -sharp_s, 0)
 
     # Blend with original to keep it natural
     blend_ratio = 0.45 + 0.40 * intensity
-    result = cv2.addWeighted(image, 1.0 - blend_ratio, result, blend_ratio, 0)
+    wrinkled = cv2.addWeighted(image, 1.0 - blend_ratio, wrinkled, blend_ratio, 0)
+
+    # ★ Composite wrinkle effect onto original using face mask
+    result = (
+        image.astype(np.float32) * (1.0 - face_mask_3)
+        + wrinkled.astype(np.float32) * face_mask_3
+    )
+    result = np.clip(result, 0, 255).astype(np.uint8)
 
     # ── 2. HAIR WHITENING / GRAYING ───────────────────────────────────
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -189,8 +292,8 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     )
     not_skin = 1.0 - skin_region.astype(np.float32)
 
-    # Combined hair mask
-    hair_mask = dark_mask * pos_weight * not_skin
+    # Combined hair mask — intersected with face_mask to avoid clothing
+    hair_mask = dark_mask * pos_weight * not_skin * face_mask
 
     # Morphological cleanup for a coherent region
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
@@ -216,14 +319,21 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     hsv_result = np.clip(hsv_result, 0, 255).astype(np.uint8)
     result = cv2.cvtColor(hsv_result, cv2.COLOR_HSV2BGR)
 
-    # ── 3. SUBTLE AGED-SKIN COLOUR TINT ───────────────────────────────
-    # Slight warm-yellow shift (sun damage / age spots appearance)
+    # ── 3. SUBTLE AGED-SKIN COLOUR TINT (face only) ──────────────────
+    # Build the tinted version
     lab_out = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float64)
     lab_out[:, :, 2] = np.clip(lab_out[:, :, 2] + 2.0 + 3.0 * intensity, 0, 255)
     lab_out[:, :, 0] = np.clip(lab_out[:, :, 0] - 1.5 * intensity, 0, 255)
-    result = cv2.cvtColor(lab_out.astype(np.uint8), cv2.COLOR_LAB2BGR)
+    tinted = cv2.cvtColor(lab_out.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
-    return np.clip(result, 0, 255).astype(np.uint8)
+    # ★ Composite tint onto result using face mask (no tint on clothes)
+    result = (
+        result.astype(np.float32) * (1.0 - face_mask_3)
+        + tinted.astype(np.float32) * face_mask_3
+    )
+    result = np.clip(result, 0, 255).astype(np.uint8)
+
+    return result
 
 
 def apply_deaging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
