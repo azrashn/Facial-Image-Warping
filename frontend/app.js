@@ -299,7 +299,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.files.length > 0) handleFile(e.target.files[0]);
     });
 
-    removeImgBtn.addEventListener('click', clearImage);
+    removeImgBtn.addEventListener('click', () => {
+        clearImage();
+        imageUpload.value = "";   // Reset file input so re-uploading the same file triggers 'change'
+    });
 
     // Drag Drop
     uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
@@ -794,5 +797,168 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
     }
+
+    // --- 10. PDF REPORT EXPORT ---
+
+    /**
+     * Dynamically loads jsPDF from CDN (if not already loaded) and generates
+     * a styled PDF report containing:
+     *  - Before / After images
+     *  - Quality metrics (MSE, PSNR, SSIM)
+     *  - Analysis summary text
+     *  - Operation history
+     *  - Spectrum images (if available)
+     */
+    function loadJsPdf() {
+        return new Promise((resolve, reject) => {
+            if (window.jspdf && window.jspdf.jsPDF) {
+                resolve(window.jspdf.jsPDF);
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js';
+            script.onload = () => {
+                if (window.jspdf && window.jspdf.jsPDF) {
+                    resolve(window.jspdf.jsPDF);
+                } else {
+                    reject(new Error('jsPDF failed to initialise after loading.'));
+                }
+            };
+            script.onerror = () => reject(new Error('Failed to load jsPDF from CDN.'));
+            document.head.appendChild(script);
+        });
+    }
+
+    /** Convert a base-64 data-URL to the raw base-64 string and its MIME type. */
+    function splitDataUrl(dataUrl) {
+        if (!dataUrl || !dataUrl.startsWith('data:')) return null;
+        const [header, data] = dataUrl.split(',');
+        const mime = header.match(/data:(.*?);/)?.[1] || 'image/png';
+        const format = mime.includes('png') ? 'PNG' : 'JPEG';
+        return { data, format };
+    }
+
+    downloadBtn.addEventListener('click', async () => {
+        if (!currentOriginalImage) return;
+
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = currentLang === 'TR' ? 'PDF hazırlanıyor…' : 'Generating PDF…';
+
+        try {
+            const JsPDF = await loadJsPdf();
+            const doc = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+            const pageW = doc.internal.pageSize.getWidth();
+            let y = 15; // vertical cursor
+
+            // ── Title ──
+            doc.setFontSize(22);
+            doc.setFont('helvetica', 'bold');
+            doc.text('FaceDSP — Analysis Report', pageW / 2, y, { align: 'center' });
+            y += 10;
+
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(120);
+            doc.text(new Date().toLocaleString(), pageW / 2, y, { align: 'center' });
+            doc.setTextColor(0);
+            y += 10;
+
+            // ── Before / After Images ──
+            const imgW = 80;
+            const imgH = 80;
+
+            const origInfo = splitDataUrl(currentOriginalImage);
+            const procInfo = splitDataUrl(currentProcessedImage);
+
+            doc.setFontSize(12);
+            doc.setFont('helvetica', 'bold');
+
+            if (origInfo) {
+                doc.text(currentLang === 'TR' ? 'Öncesi' : 'Before', 15, y);
+                y += 3;
+                doc.addImage(origInfo.data, origInfo.format, 15, y, imgW, imgH);
+            }
+            if (procInfo) {
+                doc.text(currentLang === 'TR' ? 'Sonrası' : 'After', 110, y - 3);
+                doc.addImage(procInfo.data, procInfo.format, 110, y, imgW, imgH);
+            }
+            y += imgH + 10;
+
+            // ── Quality Metrics ──
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.text(i18n[currentLang]?.qualityMetrics || 'Quality Metrics', 15, y);
+            y += 7;
+
+            doc.setFontSize(11);
+            doc.setFont('helvetica', 'normal');
+            const metrics = [
+                { label: 'MSE',  value: mseValue.textContent },
+                { label: 'PSNR', value: psnrValue.textContent + ' dB' },
+                { label: 'SSIM', value: ssimValue.textContent },
+            ];
+            metrics.forEach(m => {
+                doc.text(`${m.label}: ${m.value}`, 20, y);
+                y += 6;
+            });
+            y += 4;
+
+            // ── Analysis Summary ──
+            const summaryText = analysisSummary.innerText || analysisSummary.textContent || '';
+            if (summaryText) {
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text(i18n[currentLang]?.analysisSummary || 'Analysis Summary', 15, y);
+                y += 7;
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                const lines = doc.splitTextToSize(summaryText, pageW - 30);
+                doc.text(lines, 15, y);
+                y += lines.length * 5 + 6;
+            }
+
+            // ── Operation History ──
+            if (operationHistory.length > 0) {
+                if (y > 260) { doc.addPage(); y = 15; }
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text(i18n[currentLang]?.opHistory || 'Operation History', 15, y);
+                y += 7;
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                operationHistory.forEach((op, i) => {
+                    doc.text(`${i + 1}. ${op}`, 20, y);
+                    y += 5;
+                });
+                y += 6;
+            }
+
+            // ── Spectrum Images (if available) ──
+            const origSpec = splitDataUrl(origSpectrumImg?.src);
+            const procSpec = splitDataUrl(procSpectrumImg?.src);
+            if (origSpec || procSpec) {
+                if (y > 200) { doc.addPage(); y = 15; }
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text('FFT Spectrum', 15, y);
+                y += 5;
+                const specW = 80, specH = 80;
+                if (origSpec) {
+                    doc.addImage(origSpec.data, origSpec.format, 15, y, specW, specH);
+                }
+                if (procSpec) {
+                    doc.addImage(procSpec.data, procSpec.format, 110, y, specW, specH);
+                }
+            }
+
+            doc.save('FaceDSP_Report.pdf');
+        } catch (err) {
+            console.error('[PDF Export] Error:', err);
+            alert((currentLang === 'TR' ? 'PDF oluşturulamadı: ' : 'PDF generation failed: ') + err.message);
+        } finally {
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = i18n[currentLang]?.downloadPDF || 'Download Results as PDF';
+        }
+    });
 
 });
