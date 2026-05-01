@@ -636,7 +636,7 @@ document.addEventListener('DOMContentLoaded', () => {
             psnr: Number(metrics?.psnr ?? 0),
             ssim: Number(metrics?.ssim ?? 0),
         };
-        mseValue.textContent = parsed.mse.toFixed(2);
+        mseValue.textContent = parsed.mse < 0.01 ? parsed.mse.toFixed(4) : parsed.mse.toFixed(2);
         psnrValue.textContent = parsed.psnr.toFixed(2);
         ssimValue.textContent = parsed.ssim.toFixed(3);
 

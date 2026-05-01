@@ -247,7 +247,9 @@ async def process_estimate_age(
     Estimate the age of the person in the uploaded face image.
 
     Uses an OpenCV DNN Caffe model for face detection + age classification.
-    Returns a numerical age estimate plus the predicted age bucket.
+    Returns a numerical age estimate, the predicted age bucket, and the
+    age difference string between the original and an aged version of the
+    image (``"Görünen yaş değişimi: +X yıl"`` or ``"-X yıl"``).
     """
     logger.info("process_estimate_age.received")
     try:
@@ -260,26 +262,46 @@ async def process_estimate_age(
         except ModuleNotFoundError:
             from backend.modules.ai_module import estimate_age
 
-        result = estimate_age(img)
-
-        if result.get("status") != "success":
+        # --- Before age (original image) ---
+        result_before = estimate_age(img)
+        if result_before.get("status") != "success":
             raise HTTPException(
                 status_code=422,
-                detail=result.get("error", "Age estimation failed."),
+                detail=result_before.get("error", "Age estimation failed."),
             )
+        before_age = result_before["estimated_age"]
+
+        # --- After age (aged version of the image) ---
+        aged_img = apply_aging(img, intensity=50)
+        result_after = estimate_age(aged_img)
+        if result_after.get("status") != "success":
+            after_age = before_age          # fallback: no difference
+        else:
+            after_age = result_after["estimated_age"]
+
+        # --- Compute difference string ---
+        diff = after_age - before_age
+        if diff >= 0:
+            age_diff_str = f"Görünen yaş değişimi: +{diff} yıl"
+        else:
+            age_diff_str = f"Görünen yaş değişimi: {diff} yıl"
 
         logger.info(
             "process_estimate_age.success",
             extra={
-                "estimated_age": result["estimated_age"],
-                "age_bucket": result.get("age_bucket"),
+                "before_age": before_age,
+                "after_age": after_age,
+                "age_diff": age_diff_str,
+                "age_bucket": result_before.get("age_bucket"),
             },
         )
         return {
             "status": "success",
-            "estimated_age": result["estimated_age"],
-            "age_bucket": result.get("age_bucket", ""),
-            "confidence": result.get("confidence", 0),
+            "estimated_age": before_age,
+            "after_age": after_age,
+            "age_bucket": result_before.get("age_bucket", ""),
+            "confidence": result_before.get("confidence", 0),
+            "age_diff_str": age_diff_str,
         }
     except HTTPException:
         logger.exception("process_estimate_age.http_error")
