@@ -293,7 +293,232 @@ def compute_energy_analysis(image: np.ndarray, radius: int = 30) -> dict:
         "high_frequency_ratio": high_ratio,
         "radius": radius,
     }
+def apply_cartoon_filter(image: np.ndarray) -> np.ndarray:
+    """
+    Cartoon / caricature filter:
+    - detects edges with Canny
+    - smooths colors using bilateral filtering
+    - reduces color levels with quantization
+    - overlays black edges on the quantized image
+    """
+    if image is None:
+        raise ValueError("Input image is None.")
 
+    # 1) Edge detection
+    gray = ensure_grayscale(image)
+    gray_blur = cv2.medianBlur(gray, 5)
+    edges = cv2.Canny(gray_blur, 100, 200)
+
+    # 2) Smooth colors while preserving edges
+    smooth = cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
+
+    # 3) Color quantization
+    quantized = (smooth // 32) * 32
+
+    # 4) Combine edges with quantized image
+    cartoon = quantized.copy()
+    cartoon[edges > 0] = [0, 0, 0]
+
+    return np.clip(cartoon, 0, 255).astype(np.uint8)
+
+def _normalized_landmarks_to_points(
+    landmarks: list,
+    indices: list[int],
+    width: int,
+    height: int,
+) -> np.ndarray:
+    points = []
+
+    for idx in indices:
+        lm = landmarks[idx]
+
+        if isinstance(lm, dict):
+            x = int(lm["x"] * width)
+            y = int(lm["y"] * height)
+        else:
+            x = int(lm[0] * width)
+            y = int(lm[1] * height)
+
+        points.append([x, y])
+
+    return np.array(points, dtype=np.int32)
+
+
+def _apply_color_with_mask(
+    image: np.ndarray,
+    mask: np.ndarray,
+    hue: int,
+    opacity: float,
+    saturation_multiplier: float = 1.4,
+) -> np.ndarray:
+    opacity = float(np.clip(opacity, 0.0, 1.0))
+    hue = int(np.clip(hue, 0, 179))
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
+
+    mask_bool = mask > 0
+
+    hsv[:, :, 0][mask_bool] = hue
+    hsv[:, :, 1][mask_bool] = np.clip(
+        hsv[:, :, 1][mask_bool] * saturation_multiplier,
+        0,
+        255,
+    )
+
+    colored = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+    soft_mask = cv2.GaussianBlur(mask.astype(np.float32) / 255.0, (0, 0), 5)
+    soft_mask = soft_mask[..., None] * opacity
+
+    result = (
+        colored.astype(np.float32) * soft_mask
+        + image.astype(np.float32) * (1.0 - soft_mask)
+    )
+
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def apply_virtual_makeup(
+    image: np.ndarray,
+    landmarks: list,
+    region: str = "lip",
+    hue: int = 0,
+    opacity: float = 0.5,
+) -> np.ndarray:
+    """
+    Virtual makeup using landmark masks + HSV color manipulation + alpha blending.
+
+    region:
+    - lip
+    - blush
+    - eyeshadow
+    """
+    if image is None:
+        raise ValueError("Input image is None.")
+
+    if not landmarks:
+        raise ValueError("Landmarks are required for makeup.")
+
+    h, w = image.shape[:2]
+    region = (region or "").strip().lower()
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+
+    if region == "lip":
+        indices = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291]
+        points = _normalized_landmarks_to_points(landmarks, indices, w, h)
+        cv2.fillPoly(mask, [points], 255)
+        saturation_multiplier = 1.5
+
+    elif region == "eyeshadow":
+        left_eye = [33, 246, 161, 160, 159, 158, 157, 173, 133]
+        right_eye = [362, 398, 384, 385, 386, 387, 388, 466, 263]
+
+        left_points = _normalized_landmarks_to_points(landmarks, left_eye, w, h)
+        right_points = _normalized_landmarks_to_points(landmarks, right_eye, w, h)
+
+        left_points[:, 1] -= int(0.04 * h)
+        right_points[:, 1] -= int(0.04 * h)
+
+        cv2.fillPoly(mask, [left_points], 255)
+        cv2.fillPoly(mask, [right_points], 255)
+        saturation_multiplier = 1.35
+
+    elif region == "blush":
+        left_cheek_center = landmarks[205]
+        right_cheek_center = landmarks[425]
+
+        if isinstance(left_cheek_center, dict):
+            lx, ly = int(left_cheek_center["x"] * w), int(left_cheek_center["y"] * h)
+            rx, ry = int(right_cheek_center["x"] * w), int(right_cheek_center["y"] * h)
+        else:
+            lx, ly = int(left_cheek_center[0] * w), int(left_cheek_center[1] * h)
+            rx, ry = int(right_cheek_center[0] * w), int(right_cheek_center[1] * h)
+
+        radius_x = int(0.07 * w)
+        radius_y = int(0.045 * h)
+
+        cv2.ellipse(mask, (lx, ly), (radius_x, radius_y), 0, 0, 360, 255, -1)
+        cv2.ellipse(mask, (rx, ry), (radius_x, radius_y), 0, 0, 360, 255, -1)
+        saturation_multiplier = 1.25
+
+    else:
+        raise ValueError("Region must be 'lip', 'blush', or 'eyeshadow'.")
+
+    return _apply_color_with_mask(
+        image=image,
+        mask=mask,
+        hue=hue,
+        opacity=opacity,
+        saturation_multiplier=saturation_multiplier,
+    )
+def create_face_region_mask(image: np.ndarray, landmarks: list) -> np.ndarray:
+    """
+    Create a soft face mask using MediaPipe FaceMesh face oval landmarks.
+    This allows aging/de-aging effects to be applied only to the face area.
+    """
+    if image is None:
+        raise ValueError("Input image is None.")
+
+    if not landmarks:
+        raise ValueError("Landmarks are required for face mask.")
+
+    h, w = image.shape[:2]
+
+    face_oval_indices = [
+        10, 338, 297, 332, 284, 251, 389, 356,
+        454, 323, 361, 288, 397, 365, 379, 378,
+        400, 377, 152, 148, 176, 149, 150, 136,
+        172, 58, 132, 93, 234, 127, 162, 21,
+        54, 103, 67, 109
+    ]
+
+    points = []
+
+    for idx in face_oval_indices:
+        lm = landmarks[idx]
+
+        if isinstance(lm, dict):
+            x = int(lm["x"] * w)
+            y = int(lm["y"] * h)
+        else:
+            x = int(lm[0] * w)
+            y = int(lm[1] * h)
+
+        points.append([x, y])
+
+    points = np.array(points, dtype=np.int32)
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [points], 255)
+
+    # Smooth edges so the effect blends naturally with the background
+    mask = cv2.GaussianBlur(mask, (0, 0), 12)
+
+    return mask
+
+
+def blend_effect_with_mask(
+    original: np.ndarray,
+    effected: np.ndarray,
+    mask: np.ndarray,
+) -> np.ndarray:
+    """
+    Blend effected image onto original image using a soft mask.
+    Background stays unchanged.
+    """
+    if original is None or effected is None or mask is None:
+        raise ValueError("Original, effected image and mask are required.")
+
+    mask_float = mask.astype(np.float32) / 255.0
+    mask_float = mask_float[..., None]
+
+    result = (
+        effected.astype(np.float32) * mask_float
+        + original.astype(np.float32) * (1.0 - mask_float)
+    )
+
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 def encode_image_to_base64(image: np.ndarray) -> str:
     """
