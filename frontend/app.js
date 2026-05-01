@@ -299,7 +299,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.files.length > 0) handleFile(e.target.files[0]);
     });
 
-    removeImgBtn.addEventListener('click', clearImage);
+    removeImgBtn.addEventListener('click', () => {
+        clearImage();
+        imageUpload.value = "";   // Reset file input so re-uploading the same file triggers 'change'
+    });
 
     // Drag Drop
     uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
