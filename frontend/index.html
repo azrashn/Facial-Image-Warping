@@ -78,6 +78,65 @@
                 </div>
             </section>
 
+            <!-- Emoji Presets -->
+            <section class="control-section">
+                <h3 data-i18n="emojiPresets">Emoji Presets</h3>
+                <div class="emoji-grid" id="emojiGrid">
+                    <button class="emoji-btn" data-op="smile" data-intensity="80" title="Happy">😀</button>
+                    <button class="emoji-btn" data-op="eyebrow" data-intensity="90" title="Surprised">😲</button>
+                    <button class="emoji-btn" data-op="lip" data-intensity="70" title="Wide">😬</button>
+                    <button class="emoji-btn" data-op="slim" data-intensity="60" title="Slim">👽</button>
+                    <button class="emoji-btn" data-op="aging" data-intensity="100" title="Old">👴</button>
+                    <button class="emoji-btn" data-op="deaging" data-intensity="100" title="Young">👶</button>
+                </div>
+            </section>
+
+            <!-- Makeup Panel -->
+            <section class="control-section">
+                <h3 data-i18n="makeupPanel">Makeup</h3>
+                <div class="makeup-region-selector">
+                    <select id="makeupRegion" class="custom-select">
+                        <option value="lips">Lips</option>
+                        <option value="eyeshadow">Eyeshadow</option>
+                        <option value="blush">Blush</option>
+                    </select>
+                </div>
+                <div class="makeup-controls">
+                    <input type="color" id="makeupColor" value="#ff0000" class="custom-color-picker">
+                    <input type="range" id="makeupOpacity" min="0" max="100" value="50" class="custom-range" style="margin: 0 10px; width: 60%;">
+                    <button class="op-btn" id="applyMakeupBtn" style="margin-top: 8px; width: 100%;">Apply</button>
+                </div>
+            </section>
+
+            <!-- Hair Color Panel -->
+            <section class="control-section">
+                <h3 data-i18n="hairColor">Hair Color</h3>
+                <div class="hair-swatches">
+                    <button class="hair-swatch" style="background-color: #FFD700;" data-color="yellow" title="Blonde"></button>
+                    <button class="hair-swatch" style="background-color: #FF4500;" data-color="red" title="Red"></button>
+                    <button class="hair-swatch" style="background-color: #1A1A1A;" data-color="black" title="Black"></button>
+                    <button class="hair-swatch" style="background-color: #0000FF;" data-color="blue" title="Blue"></button>
+                    <button class="hair-swatch" style="background-color: #8B4513;" data-color="brown" title="Brown"></button>
+                </div>
+            </section>
+
+            <!-- Cartoon Filter -->
+            <section class="control-section">
+                <h3 data-i18n="filters">Filters</h3>
+                <button class="op-btn" id="cartoonBtn" style="width: 100%;">Cartoon Filter</button>
+            </section>
+
+            <!-- Camera UI -->
+            <section class="control-section">
+                <h3 data-i18n="cameraCapture">Camera</h3>
+                <video id="cameraVideo" autoplay playsinline style="width: 100%; border-radius: 8px; display: none; background: #000;"></video>
+                <div style="display: flex; gap: 8px; margin-top: 8px;">
+                    <button class="op-btn" id="startCameraBtn" style="flex: 1;">Start Camera</button>
+                    <button class="op-btn" id="captureBtn" style="flex: 1; display: none;">Capture</button>
+                </div>
+                <canvas id="cameraCanvas" style="display:none;"></canvas>
+            </section>
+
             <!-- Sliders -->
             <section class="control-section">
                 <div class="slider-header">

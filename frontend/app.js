@@ -281,6 +281,10 @@ document.addEventListener('DOMContentLoaded', () => {
         reader.readAsDataURL(file);
     }
 
+    imageUpload.addEventListener('click', function () {
+        this.value = "";
+    });
+
     imageUpload.addEventListener('change', (e) => {
         if (e.target.files.length > 0) handleFile(e.target.files[0]);
     });
@@ -543,7 +547,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const metricsGrid = document.getElementById('metricsGrid');
     const metricsChevron = document.getElementById('metricsChevron');
     const comparisonModeInput = document.getElementById('comparisonMode');
-    
+
     if (metricsHeader && metricsGrid && metricsChevron) {
         metricsHeader.addEventListener('click', () => {
             metricsGrid.classList.toggle('collapsed');
@@ -562,13 +566,189 @@ document.addEventListener('DOMContentLoaded', () => {
                 badge.style.display = isChecked ? 'inline-block' : 'none';
             });
         });
-        
+
         // Initialize comparison mode state
         if (!comparisonModeInput.checked) {
             document.querySelectorAll('.metric-badge').forEach(badge => {
                 badge.style.display = 'none';
             });
         }
+    }
+
+    // --- 9.5. NEW UI INTEGRATIONS ---
+
+    // Emoji Buttons
+    const emojiButtons = document.querySelectorAll('.emoji-btn');
+    emojiButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const op = btn.dataset.op;
+            const intensity = btn.dataset.intensity;
+
+            // Set operation
+            opButtons.forEach(b => b.classList.remove('active'));
+            const targetOpBtn = document.querySelector(`.op-btn[data-op="${op}"]`);
+            if (targetOpBtn) targetOpBtn.classList.add('active');
+            selectedOperation = op;
+
+            // Set intensity
+            intensitySlider.value = intensity;
+            intensityValue.textContent = intensity + '%';
+
+            // Trigger apply
+            if (!applyBtn.disabled) {
+                applyBtn.click();
+            }
+        });
+    });
+
+    // Makeup
+    const applyMakeupBtn = document.getElementById('applyMakeupBtn');
+    const makeupRegion = document.getElementById('makeupRegion');
+    const makeupColor = document.getElementById('makeupColor');
+    const makeupOpacity = document.getElementById('makeupOpacity');
+
+    if (applyMakeupBtn) {
+        applyMakeupBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('region', makeupRegion.value);
+            formData.append('color', makeupColor.value);
+            formData.append('opacity', makeupOpacity.value / 100.0);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/makeup`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Makeup failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                addHistory(`Makeup: ${makeupRegion.value}`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied makeup to ${makeupRegion.value}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Makeup] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Makeup failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // Hair Color
+    const hairSwatches = document.querySelectorAll('.hair-swatch');
+    hairSwatches.forEach(swatch => {
+        swatch.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+            const color = swatch.dataset.color;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('color', color);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/hair-color`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Hair color failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                addHistory(`Hair Color: ${color}`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied hair color ${color}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Hair Color] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Hair color failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    });
+
+    // Cartoon Filter
+    const cartoonBtn = document.getElementById('cartoonBtn');
+    if (cartoonBtn) {
+        cartoonBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/cartoon`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Cartoon filter failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                addHistory('Cartoon Filter');
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Cartoon Filter.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Cartoon Filter] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Cartoon filter failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // Camera Capture
+    const cameraVideo = document.getElementById('cameraVideo');
+    const startCameraBtn = document.getElementById('startCameraBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const cameraCanvas = document.getElementById('cameraCanvas');
+    let mediaStream = null;
+
+    if (startCameraBtn) {
+        startCameraBtn.addEventListener('click', async () => {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+                cameraVideo.style.display = 'none';
+                captureBtn.style.display = 'none';
+                startCameraBtn.textContent = 'Start Camera';
+            } else {
+                try {
+                    mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    cameraVideo.srcObject = mediaStream;
+                    cameraVideo.style.display = 'block';
+                    captureBtn.style.display = 'block';
+                    startCameraBtn.textContent = 'Stop Camera';
+                } catch (err) {
+                    console.error('Error accessing camera:', err);
+                    alert('Could not access camera. Please allow permissions.');
+                }
+            }
+        });
+    }
+
+    if (captureBtn) {
+        captureBtn.addEventListener('click', () => {
+            if (!mediaStream) return;
+            cameraCanvas.width = cameraVideo.videoWidth;
+            cameraCanvas.height = cameraVideo.videoHeight;
+            cameraCanvas.getContext('2d').drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
+            cameraCanvas.toBlob((blob) => {
+                if (blob) {
+                    const file = new File([blob], 'camera-capture.png', { type: 'image/png' });
+                    handleFile(file);
+                }
+            }, 'image/png');
+        });
     }
 
 });
