@@ -375,6 +375,12 @@ async def process_estimate_age(
 async def process_landmarks(
     image: UploadFile = File(...),
 ):
+    """
+    Extract 468 MediaPipe FaceMesh landmarks from the uploaded image.
+
+    The image is resized to 512x512 and converted to RGB before landmark
+    extraction. Returned coordinates are normalized between 0.0 and 1.0.
+    """
     try:
         contents = await image.read()
         original = _decode_upload(contents)
