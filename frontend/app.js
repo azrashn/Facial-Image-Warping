@@ -295,6 +295,10 @@ document.addEventListener('DOMContentLoaded', () => {
         reader.readAsDataURL(file);
     }
 
+    imageUpload.addEventListener('click', function () {
+        this.value = "";
+    });
+
     imageUpload.addEventListener('change', (e) => {
         if (e.target.files.length > 0) handleFile(e.target.files[0]);
     });
@@ -770,7 +774,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const metricsGrid = document.getElementById('metricsGrid');
     const metricsChevron = document.getElementById('metricsChevron');
     const comparisonModeInput = document.getElementById('comparisonMode');
-    
+
     if (metricsHeader && metricsGrid && metricsChevron) {
         metricsHeader.addEventListener('click', () => {
             metricsGrid.classList.toggle('collapsed');
@@ -789,7 +793,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 badge.style.display = isChecked ? 'inline-block' : 'none';
             });
         });
-        
+
         // Initialize comparison mode state
         if (!comparisonModeInput.checked) {
             document.querySelectorAll('.metric-badge').forEach(badge => {
@@ -798,167 +802,180 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- 10. PDF REPORT EXPORT ---
+    // --- 9.5. NEW UI INTEGRATIONS ---
 
-    /**
-     * Dynamically loads jsPDF from CDN (if not already loaded) and generates
-     * a styled PDF report containing:
-     *  - Before / After images
-     *  - Quality metrics (MSE, PSNR, SSIM)
-     *  - Analysis summary text
-     *  - Operation history
-     *  - Spectrum images (if available)
-     */
-    function loadJsPdf() {
-        return new Promise((resolve, reject) => {
-            if (window.jspdf && window.jspdf.jsPDF) {
-                resolve(window.jspdf.jsPDF);
-                return;
+    // Emoji Buttons
+    const emojiButtons = document.querySelectorAll('.emoji-btn');
+    emojiButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const op = btn.dataset.op;
+            const intensity = btn.dataset.intensity;
+
+            // Set operation
+            opButtons.forEach(b => b.classList.remove('active'));
+            const targetOpBtn = document.querySelector(`.op-btn[data-op="${op}"]`);
+            if (targetOpBtn) targetOpBtn.classList.add('active');
+            selectedOperation = op;
+
+            // Set intensity
+            intensitySlider.value = intensity;
+            intensityValue.textContent = intensity + '%';
+
+            // Trigger apply
+            if (!applyBtn.disabled) {
+                applyBtn.click();
             }
-            const script = document.createElement('script');
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js';
-            script.onload = () => {
-                if (window.jspdf && window.jspdf.jsPDF) {
-                    resolve(window.jspdf.jsPDF);
-                } else {
-                    reject(new Error('jsPDF failed to initialise after loading.'));
-                }
-            };
-            script.onerror = () => reject(new Error('Failed to load jsPDF from CDN.'));
-            document.head.appendChild(script);
+        });
+    });
+
+    // Makeup
+    const applyMakeupBtn = document.getElementById('applyMakeupBtn');
+    const makeupRegion = document.getElementById('makeupRegion');
+    const makeupColor = document.getElementById('makeupColor');
+    const makeupOpacity = document.getElementById('makeupOpacity');
+
+    if (applyMakeupBtn) {
+        applyMakeupBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('region', makeupRegion.value);
+            formData.append('color', makeupColor.value);
+            formData.append('opacity', makeupOpacity.value / 100.0);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/makeup`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Makeup failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                addHistory(`Makeup: ${makeupRegion.value}`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied makeup to ${makeupRegion.value}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Makeup] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Makeup failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
         });
     }
 
-    /** Convert a base-64 data-URL to the raw base-64 string and its MIME type. */
-    function splitDataUrl(dataUrl) {
-        if (!dataUrl || !dataUrl.startsWith('data:')) return null;
-        const [header, data] = dataUrl.split(',');
-        const mime = header.match(/data:(.*?);/)?.[1] || 'image/png';
-        const format = mime.includes('png') ? 'PNG' : 'JPEG';
-        return { data, format };
+    // Hair Color
+    const hairSwatches = document.querySelectorAll('.hair-swatch');
+    hairSwatches.forEach(swatch => {
+        swatch.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+            const color = swatch.dataset.color;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('color', color);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/hair-color`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Hair color failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                addHistory(`Hair Color: ${color}`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied hair color ${color}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Hair Color] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Hair color failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    });
+
+    // Cartoon Filter
+    const cartoonBtn = document.getElementById('cartoonBtn');
+    if (cartoonBtn) {
+        cartoonBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/cartoon`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Cartoon filter failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                addHistory('Cartoon Filter');
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Cartoon Filter.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Cartoon Filter] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Cartoon filter failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
     }
 
-    downloadBtn.addEventListener('click', async () => {
-        if (!currentOriginalImage) return;
+    // Camera Capture
+    const cameraVideo = document.getElementById('cameraVideo');
+    const startCameraBtn = document.getElementById('startCameraBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const cameraCanvas = document.getElementById('cameraCanvas');
+    let mediaStream = null;
 
-        downloadBtn.disabled = true;
-        downloadBtn.textContent = currentLang === 'TR' ? 'PDF hazırlanıyor…' : 'Generating PDF…';
-
-        try {
-            const JsPDF = await loadJsPdf();
-            const doc = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-            const pageW = doc.internal.pageSize.getWidth();
-            let y = 15; // vertical cursor
-
-            // ── Title ──
-            doc.setFontSize(22);
-            doc.setFont('helvetica', 'bold');
-            doc.text('FaceDSP — Analysis Report', pageW / 2, y, { align: 'center' });
-            y += 10;
-
-            doc.setFontSize(10);
-            doc.setFont('helvetica', 'normal');
-            doc.setTextColor(120);
-            doc.text(new Date().toLocaleString(), pageW / 2, y, { align: 'center' });
-            doc.setTextColor(0);
-            y += 10;
-
-            // ── Before / After Images ──
-            const imgW = 80;
-            const imgH = 80;
-
-            const origInfo = splitDataUrl(currentOriginalImage);
-            const procInfo = splitDataUrl(currentProcessedImage);
-
-            doc.setFontSize(12);
-            doc.setFont('helvetica', 'bold');
-
-            if (origInfo) {
-                doc.text(currentLang === 'TR' ? 'Öncesi' : 'Before', 15, y);
-                y += 3;
-                doc.addImage(origInfo.data, origInfo.format, 15, y, imgW, imgH);
-            }
-            if (procInfo) {
-                doc.text(currentLang === 'TR' ? 'Sonrası' : 'After', 110, y - 3);
-                doc.addImage(procInfo.data, procInfo.format, 110, y, imgW, imgH);
-            }
-            y += imgH + 10;
-
-            // ── Quality Metrics ──
-            doc.setFontSize(14);
-            doc.setFont('helvetica', 'bold');
-            doc.text(i18n[currentLang]?.qualityMetrics || 'Quality Metrics', 15, y);
-            y += 7;
-
-            doc.setFontSize(11);
-            doc.setFont('helvetica', 'normal');
-            const metrics = [
-                { label: 'MSE',  value: mseValue.textContent },
-                { label: 'PSNR', value: psnrValue.textContent + ' dB' },
-                { label: 'SSIM', value: ssimValue.textContent },
-            ];
-            metrics.forEach(m => {
-                doc.text(`${m.label}: ${m.value}`, 20, y);
-                y += 6;
-            });
-            y += 4;
-
-            // ── Analysis Summary ──
-            const summaryText = analysisSummary.innerText || analysisSummary.textContent || '';
-            if (summaryText) {
-                doc.setFontSize(14);
-                doc.setFont('helvetica', 'bold');
-                doc.text(i18n[currentLang]?.analysisSummary || 'Analysis Summary', 15, y);
-                y += 7;
-                doc.setFontSize(10);
-                doc.setFont('helvetica', 'normal');
-                const lines = doc.splitTextToSize(summaryText, pageW - 30);
-                doc.text(lines, 15, y);
-                y += lines.length * 5 + 6;
-            }
-
-            // ── Operation History ──
-            if (operationHistory.length > 0) {
-                if (y > 260) { doc.addPage(); y = 15; }
-                doc.setFontSize(14);
-                doc.setFont('helvetica', 'bold');
-                doc.text(i18n[currentLang]?.opHistory || 'Operation History', 15, y);
-                y += 7;
-                doc.setFontSize(10);
-                doc.setFont('helvetica', 'normal');
-                operationHistory.forEach((op, i) => {
-                    doc.text(`${i + 1}. ${op}`, 20, y);
-                    y += 5;
-                });
-                y += 6;
-            }
-
-            // ── Spectrum Images (if available) ──
-            const origSpec = splitDataUrl(origSpectrumImg?.src);
-            const procSpec = splitDataUrl(procSpectrumImg?.src);
-            if (origSpec || procSpec) {
-                if (y > 200) { doc.addPage(); y = 15; }
-                doc.setFontSize(14);
-                doc.setFont('helvetica', 'bold');
-                doc.text('FFT Spectrum', 15, y);
-                y += 5;
-                const specW = 80, specH = 80;
-                if (origSpec) {
-                    doc.addImage(origSpec.data, origSpec.format, 15, y, specW, specH);
-                }
-                if (procSpec) {
-                    doc.addImage(procSpec.data, procSpec.format, 110, y, specW, specH);
+    if (startCameraBtn) {
+        startCameraBtn.addEventListener('click', async () => {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+                cameraVideo.style.display = 'none';
+                captureBtn.style.display = 'none';
+                startCameraBtn.textContent = 'Start Camera';
+            } else {
+                try {
+                    mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    cameraVideo.srcObject = mediaStream;
+                    cameraVideo.style.display = 'block';
+                    captureBtn.style.display = 'block';
+                    startCameraBtn.textContent = 'Stop Camera';
+                } catch (err) {
+                    console.error('Error accessing camera:', err);
+                    alert('Could not access camera. Please allow permissions.');
                 }
             }
+        });
+    }
 
-            doc.save('FaceDSP_Report.pdf');
-        } catch (err) {
-            console.error('[PDF Export] Error:', err);
-            alert((currentLang === 'TR' ? 'PDF oluşturulamadı: ' : 'PDF generation failed: ') + err.message);
-        } finally {
-            downloadBtn.disabled = false;
-            downloadBtn.textContent = i18n[currentLang]?.downloadPDF || 'Download Results as PDF';
-        }
-    });
+    if (captureBtn) {
+        captureBtn.addEventListener('click', () => {
+            if (!mediaStream) return;
+            cameraCanvas.width = cameraVideo.videoWidth;
+            cameraCanvas.height = cameraVideo.videoHeight;
+            cameraCanvas.getContext('2d').drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
+            cameraCanvas.toBlob((blob) => {
+                if (blob) {
+                    const file = new File([blob], 'camera-capture.png', { type: 'image/png' });
+                    handleFile(file);
+                }
+            }, 'image/png');
+        });
+    }
 
 });
