@@ -11,8 +11,35 @@ logger = logging.getLogger("facial_pipeline.hair_module")
 # ---------------------------------------------------------------------------
 # MediaPipe Selfie Segmentation (saç maskesi için)
 # ---------------------------------------------------------------------------
-_mp_selfie = mp.solutions.selfie_segmentation
- 
+import os
+import tempfile
+import urllib.request
+from typing import Optional
+
+_TASK_SEGMENTER = None
+_SEG_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite"
+
+def _selfie_segmenter_model_path() -> str:
+    cache_dir = os.path.join(tempfile.gettempdir(), "facial_image_warping_mp")
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(cache_dir, "selfie_segmenter.tflite")
+    if not os.path.isfile(path) or os.path.getsize(path) < 1024 * 1024:
+        urllib.request.urlretrieve(_SEG_MODEL_URL, path)
+    return path
+
+def _get_segmenter():
+    global _TASK_SEGMENTER
+    if _TASK_SEGMENTER is None:
+        from mediapipe.tasks.python.vision import ImageSegmenter, ImageSegmenterOptions
+        from mediapipe.tasks.python.core.base_options import BaseOptions
+        options = ImageSegmenterOptions(
+            base_options=BaseOptions(model_asset_path=_selfie_segmenter_model_path()),
+            output_confidence_masks=True,
+            output_category_mask=False
+        )
+        _TASK_SEGMENTER = ImageSegmenter.create_from_options(options)
+    return _TASK_SEGMENTER
+
 # Hedef saç rengi presetleri (HSV H kanalı, 0-179 arası OpenCV değerleri)
 HAIR_COLOR_PRESETS = {
     "blonde":  {"h": 28,  "s_boost": 1.3, "v_boost": 1.1},
@@ -34,15 +61,19 @@ def _get_hair_mask(image_bgr: np.ndarray) -> np.ndarray:
     h, w = image_bgr.shape[:2]
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
  
-    with _mp_selfie.SelfieSegmentation(model_selection=1) as seg:
-        results = seg.process(image_rgb)
- 
-    if results.segmentation_mask is None:
-        logger.warning("Segmentation mask is None — returning empty mask")
+    try:
+        from mediapipe.tasks.python.vision.core import image as mp_image_module
+        mp_image = mp_image_module.Image(mp_image_module.ImageFormat.SRGB, image_rgb)
+        result = _get_segmenter().segment(mp_image)
+        
+        if not result.confidence_masks:
+            logger.warning("Segmentation mask is None — returning empty mask")
+            return np.zeros((h, w), dtype=np.uint8)
+            
+        raw_mask = (result.confidence_masks[1].numpy_view() * 255).astype(np.uint8)
+    except Exception as e:
+        logger.warning("Selfie segmenter failed: %s — falling back to empty mask", e)
         return np.zeros((h, w), dtype=np.uint8)
- 
-    # Segmentasyon maskesini [0,1] → [0,255] uint8'e çevir
-    raw_mask = (results.segmentation_mask * 255).astype(np.uint8)
  
     # Sadece üst yarı: saç genellikle kafanın üstünde
     upper_half = np.zeros_like(raw_mask)
