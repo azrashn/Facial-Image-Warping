@@ -2,6 +2,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from backend.routers.ai_router import router as ai_router
 
 try:
     from routers.export import router as export_router
@@ -40,3 +41,4 @@ app.include_router(upload_router)
 app.include_router(process_router)
 app.include_router(metrics_router)
 app.include_router(export_router)
+app.include_router(ai_router)
