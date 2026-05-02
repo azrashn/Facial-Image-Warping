@@ -29,6 +29,8 @@ document.addEventListener('DOMContentLoaded', () => {
             aging: "Yaşlandırma",
             deaging: "Gençleştirme",
             fftFilter: "FFT Filtresi",
+            ageEstimation: "Yaş Tahmini",
+            ageResult: "Tahmini Yaş:",
             intensity: "Yoğunluk",
             transformStrength: "Dönüşüm gücü",
             smoothing: "Yumuşatma",
@@ -71,6 +73,8 @@ document.addEventListener('DOMContentLoaded', () => {
             aging: "Aging",
             deaging: "De-Aging",
             fftFilter: "FFT Filter",
+            ageEstimation: "Age Estimation",
+            ageResult: "Estimated Age:",
             intensity: "Intensity",
             transformStrength: "Transform strength",
             smoothing: "Smoothing",
@@ -295,7 +299,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.files.length > 0) handleFile(e.target.files[0]);
     });
 
-    removeImgBtn.addEventListener('click', clearImage);
+    removeImgBtn.addEventListener('click', () => {
+        clearImage();
+        imageUpload.value = "";   // Reset file input so re-uploading the same file triggers 'change'
+    });
 
     // Drag Drop
     uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
@@ -355,6 +362,9 @@ document.addEventListener('DOMContentLoaded', () => {
             toggleLandmarks.checked = true;
             if (uploadedFile) generateLandmarks();
         }
+
+        // Re-align landmarks after layout change
+        requestAnimationFrame(() => realignLandmarkSvgs());
     }
 
     tabButtons.forEach(btn => {
@@ -379,6 +389,7 @@ document.addEventListener('DOMContentLoaded', () => {
         imageWrapper.classList.add('split-mode');
         imageWrapper.style.display = 'block';
         afterContainer.style.clipPath = `inset(0 0 0 ${sliderPos}%)`;
+        requestAnimationFrame(() => realignLandmarkSvgs());
     });
 
     btnSideBySide.addEventListener('click', () => {
@@ -390,6 +401,7 @@ document.addEventListener('DOMContentLoaded', () => {
         imageWrapper.classList.add('side-mode');
         imageWrapper.style.display = 'flex';
         afterContainer.style.clipPath = 'none'; // reset clip
+        requestAnimationFrame(() => realignLandmarkSvgs());
     });
 
     // Drag Event Listeners (mouse)
@@ -438,6 +450,53 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- 6. LANDMARKS – Fetch from backend & render as SVG ---
 
     /**
+     * Compute the actual rendered position/size of an <img> using
+     * object-fit: contain inside its container.  Returns {x, y, w, h}
+     * in px relative to the container.
+     */
+    function getRenderedImageRect(imgEl) {
+        const containerW = imgEl.clientWidth;
+        const containerH = imgEl.clientHeight;
+        const naturalW = imgEl.naturalWidth || 512;
+        const naturalH = imgEl.naturalHeight || 512;
+
+        const scale = Math.min(containerW / naturalW, containerH / naturalH);
+        const renderedW = naturalW * scale;
+        const renderedH = naturalH * scale;
+        const offsetX = (containerW - renderedW) / 2;
+        const offsetY = (containerH - renderedH) / 2;
+
+        return { x: offsetX, y: offsetY, w: renderedW, h: renderedH };
+    }
+
+    /**
+     * Position an SVG overlay so it exactly covers the rendered area of
+     * the associated <img> element (which uses object-fit: contain).
+     */
+    function alignSvgToImage(svgEl, imgEl) {
+        if (!imgEl || !svgEl) return;
+        const rect = getRenderedImageRect(imgEl);
+        svgEl.style.position = 'absolute';
+        svgEl.style.left   = rect.x + 'px';
+        svgEl.style.top    = rect.y + 'px';
+        svgEl.style.width  = rect.w + 'px';
+        svgEl.style.height = rect.h + 'px';
+    }
+
+    /** Re-align all visible landmark SVGs after layout changes. */
+    function realignLandmarkSvgs() {
+        if (landmarksSvg.style.display !== 'none') {
+            alignSvgToImage(landmarksSvg, afterImg);
+        }
+        if (landmarksOnlySvg.style.display !== 'none') {
+            alignSvgToImage(landmarksOnlySvg, landmarksOnlyImg);
+        }
+    }
+
+    // Re-align on window resize so landmarks stay pinned to the face
+    window.addEventListener('resize', realignLandmarkSvgs);
+
+    /**
      * Fetch 468 MediaPipe FaceMesh landmarks from the backend and render
      * them as turquoise SVG dots over the face image.
      *
@@ -471,6 +530,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error('No landmarks returned from backend.');
             }
 
+            // Use the preprocessed 512×512 image from backend for the
+            // Landmarks-only tab so coordinates match pixel-perfectly.
+            if (data.image_b64) {
+                landmarksOnlyImg.src = data.image_b64;
+                landmarksOnlyImg.style.display = 'block';
+                landmarksPlaceholder.style.display = 'none';
+            }
+
             // --- Build SVG content ---
             let svgContent = '';
 
@@ -499,6 +566,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             landmarksSvg.style.display = 'block';
             landmarksOnlySvg.style.display = 'block';
+
+            // Align SVGs to the actual rendered image area
+            requestAnimationFrame(() => realignLandmarkSvgs());
 
             console.log(`[Landmarks] Rendered ${landmarks.length} points.`);
         } catch (err) {
@@ -566,7 +636,7 @@ document.addEventListener('DOMContentLoaded', () => {
             psnr: Number(metrics?.psnr ?? 0),
             ssim: Number(metrics?.ssim ?? 0),
         };
-        mseValue.textContent = parsed.mse.toFixed(2);
+        mseValue.textContent = parsed.mse < 0.01 ? parsed.mse.toExponential(2) : parsed.mse.toFixed(2);
         psnrValue.textContent = parsed.psnr.toFixed(2);
         ssimValue.textContent = parsed.ssim.toFixed(3);
 
@@ -596,8 +666,11 @@ document.addEventListener('DOMContentLoaded', () => {
     applyBtn.addEventListener('click', async () => {
         if (!uploadedFile || !currentOriginalImage) return;
 
+        const isAgeEstimation = selectedOperation === 'age_estimation';
         const isWarpOperation = ['smile', 'eyebrow', 'lip', 'slim'].includes(selectedOperation);
-        const endpoint = isWarpOperation ? `${API_BASE}/process/warp` : `${API_BASE}/process/age`;
+        const endpoint = isAgeEstimation
+            ? `${API_BASE}/process/estimate_age`
+            : isWarpOperation ? `${API_BASE}/process/warp` : `${API_BASE}/process/age`;
         const formData = new FormData();
         formData.append('image', uploadedFile);
         formData.append('operation', selectedOperation);
@@ -620,6 +693,23 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) {
                 throw new Error(payload?.detail || 'Processing failed.');
             }
+
+            // --- Age Estimation: JSON-only response (no image) ---
+            if (isAgeEstimation) {
+                const ageLabel = i18n[currentLang]?.ageResult || 'Estimated Age:';
+                const age = payload.estimated_age ?? '—';
+                const bucket = payload.age_bucket || '';
+                analysisSummary.innerHTML =
+                    `<div style="text-align:center;padding:12px 0;">`
+                    + `<span style="font-size:1rem;opacity:0.8;">${ageLabel}</span><br/>`
+                    + `<span style="font-size:2.8rem;font-weight:800;color:#00e5ff;line-height:1.2;">${age}</span>`
+                    + (bucket ? `<br/><span style="font-size:0.9rem;opacity:0.6;">${bucket}</span>` : '')
+                    + `</div>`;
+                addHistory(i18n[currentLang]?.ageEstimation || 'Age Estimation');
+                loadingOverlay.style.display = 'none';
+                return; // Skip image rendering
+            }
+
             if (!payload?.image_b64) {
                 throw new Error('Missing image_b64 in response.');
             }
@@ -707,5 +797,168 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
     }
+
+    // --- 10. PDF REPORT EXPORT ---
+
+    /**
+     * Dynamically loads jsPDF from CDN (if not already loaded) and generates
+     * a styled PDF report containing:
+     *  - Before / After images
+     *  - Quality metrics (MSE, PSNR, SSIM)
+     *  - Analysis summary text
+     *  - Operation history
+     *  - Spectrum images (if available)
+     */
+    function loadJsPdf() {
+        return new Promise((resolve, reject) => {
+            if (window.jspdf && window.jspdf.jsPDF) {
+                resolve(window.jspdf.jsPDF);
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js';
+            script.onload = () => {
+                if (window.jspdf && window.jspdf.jsPDF) {
+                    resolve(window.jspdf.jsPDF);
+                } else {
+                    reject(new Error('jsPDF failed to initialise after loading.'));
+                }
+            };
+            script.onerror = () => reject(new Error('Failed to load jsPDF from CDN.'));
+            document.head.appendChild(script);
+        });
+    }
+
+    /** Convert a base-64 data-URL to the raw base-64 string and its MIME type. */
+    function splitDataUrl(dataUrl) {
+        if (!dataUrl || !dataUrl.startsWith('data:')) return null;
+        const [header, data] = dataUrl.split(',');
+        const mime = header.match(/data:(.*?);/)?.[1] || 'image/png';
+        const format = mime.includes('png') ? 'PNG' : 'JPEG';
+        return { data, format };
+    }
+
+    downloadBtn.addEventListener('click', async () => {
+        if (!currentOriginalImage) return;
+
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = currentLang === 'TR' ? 'PDF hazırlanıyor…' : 'Generating PDF…';
+
+        try {
+            const JsPDF = await loadJsPdf();
+            const doc = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+            const pageW = doc.internal.pageSize.getWidth();
+            let y = 15; // vertical cursor
+
+            // ── Title ──
+            doc.setFontSize(22);
+            doc.setFont('helvetica', 'bold');
+            doc.text('FaceDSP — Analysis Report', pageW / 2, y, { align: 'center' });
+            y += 10;
+
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(120);
+            doc.text(new Date().toLocaleString(), pageW / 2, y, { align: 'center' });
+            doc.setTextColor(0);
+            y += 10;
+
+            // ── Before / After Images ──
+            const imgW = 80;
+            const imgH = 80;
+
+            const origInfo = splitDataUrl(currentOriginalImage);
+            const procInfo = splitDataUrl(currentProcessedImage);
+
+            doc.setFontSize(12);
+            doc.setFont('helvetica', 'bold');
+
+            if (origInfo) {
+                doc.text(currentLang === 'TR' ? 'Öncesi' : 'Before', 15, y);
+                y += 3;
+                doc.addImage(origInfo.data, origInfo.format, 15, y, imgW, imgH);
+            }
+            if (procInfo) {
+                doc.text(currentLang === 'TR' ? 'Sonrası' : 'After', 110, y - 3);
+                doc.addImage(procInfo.data, procInfo.format, 110, y, imgW, imgH);
+            }
+            y += imgH + 10;
+
+            // ── Quality Metrics ──
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.text(i18n[currentLang]?.qualityMetrics || 'Quality Metrics', 15, y);
+            y += 7;
+
+            doc.setFontSize(11);
+            doc.setFont('helvetica', 'normal');
+            const metrics = [
+                { label: 'MSE',  value: mseValue.textContent },
+                { label: 'PSNR', value: psnrValue.textContent + ' dB' },
+                { label: 'SSIM', value: ssimValue.textContent },
+            ];
+            metrics.forEach(m => {
+                doc.text(`${m.label}: ${m.value}`, 20, y);
+                y += 6;
+            });
+            y += 4;
+
+            // ── Analysis Summary ──
+            const summaryText = analysisSummary.innerText || analysisSummary.textContent || '';
+            if (summaryText) {
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text(i18n[currentLang]?.analysisSummary || 'Analysis Summary', 15, y);
+                y += 7;
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                const lines = doc.splitTextToSize(summaryText, pageW - 30);
+                doc.text(lines, 15, y);
+                y += lines.length * 5 + 6;
+            }
+
+            // ── Operation History ──
+            if (operationHistory.length > 0) {
+                if (y > 260) { doc.addPage(); y = 15; }
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text(i18n[currentLang]?.opHistory || 'Operation History', 15, y);
+                y += 7;
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                operationHistory.forEach((op, i) => {
+                    doc.text(`${i + 1}. ${op}`, 20, y);
+                    y += 5;
+                });
+                y += 6;
+            }
+
+            // ── Spectrum Images (if available) ──
+            const origSpec = splitDataUrl(origSpectrumImg?.src);
+            const procSpec = splitDataUrl(procSpectrumImg?.src);
+            if (origSpec || procSpec) {
+                if (y > 200) { doc.addPage(); y = 15; }
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text('FFT Spectrum', 15, y);
+                y += 5;
+                const specW = 80, specH = 80;
+                if (origSpec) {
+                    doc.addImage(origSpec.data, origSpec.format, 15, y, specW, specH);
+                }
+                if (procSpec) {
+                    doc.addImage(procSpec.data, procSpec.format, 110, y, specW, specH);
+                }
+            }
+
+            doc.save('FaceDSP_Report.pdf');
+        } catch (err) {
+            console.error('[PDF Export] Error:', err);
+            alert((currentLang === 'TR' ? 'PDF oluşturulamadı: ' : 'PDF generation failed: ') + err.message);
+        } finally {
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = i18n[currentLang]?.downloadPDF || 'Download Results as PDF';
+        }
+    });
 
 });

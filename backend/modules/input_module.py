@@ -267,9 +267,36 @@ def preprocess_image(image: np.ndarray) -> np.ndarray:
     return rgb
 
 
+def _get_landmark_model_path() -> str:
+    """Download / cache the FaceLandmarker .task model (same as warping_module)."""
+    import os
+    import tempfile
+    import urllib.request
+
+    _MODEL_URL = (
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+        "face_landmarker/float16/latest/face_landmarker.task"
+    )
+    env_p = os.environ.get("MEDIAPIPE_FACE_LANDMARKER_MODEL")
+    if env_p and os.path.isfile(env_p):
+        return env_p
+    cache_dir = os.path.join(tempfile.gettempdir(), "facial_image_warping_mp")
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(cache_dir, "face_landmarker.task")
+    if not os.path.isfile(path) or os.path.getsize(path) < 1024 * 1024:
+        urllib.request.urlretrieve(_MODEL_URL, path)
+    return path
+
+
+_TASK_LANDMARKER_INPUT: Any = None
+
+
 def get_landmarks(image: np.ndarray) -> list[dict[str, float]]:
     """
     Extract 468 facial landmarks using MediaPipe FaceMesh.
+
+    Uses the new MediaPipe Tasks API (``FaceLandmarker``) as primary,
+    falling back to the legacy ``mp.solutions.face_mesh`` if available.
 
     Parameters
     ----------
@@ -287,17 +314,54 @@ def get_landmarks(image: np.ndarray) -> list[dict[str, float]]:
     HTTPException (400)
         If MediaPipe cannot detect a face mesh in the image.
     """
-    mp_face_mesh = mp.solutions.face_mesh  # type: ignore[attr-defined]
+    global _TASK_LANDMARKER_INPUT  # noqa: PLW0603
 
-    with mp_face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
-    ) as face_mesh:
-        results = face_mesh.process(image)
+    landmarks: list[dict[str, float]] | None = None
 
-    if not results or not results.multi_face_landmarks:
+    # ── Strategy 1: legacy mp.solutions (if available) ──
+    if hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh"):
+        mp_face_mesh = mp.solutions.face_mesh  # type: ignore[attr-defined]
+        with mp_face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+        ) as face_mesh:
+            results = face_mesh.process(image)
+
+        if results and results.multi_face_landmarks:
+            face = results.multi_face_landmarks[0]
+            landmarks = [
+                {"x": round(float(lm.x), 6), "y": round(float(lm.y), 6)}
+                for lm in face.landmark[:FACEMESH_NUM_LANDMARKS]
+            ]
+
+    # ── Strategy 2: new Tasks API (FaceLandmarker) ──
+    if landmarks is None:
+        try:
+            from mediapipe.tasks.python.vision import FaceLandmarker
+            from mediapipe.tasks.python.vision.core import image as mp_image_module
+
+            if _TASK_LANDMARKER_INPUT is None:
+                _TASK_LANDMARKER_INPUT = FaceLandmarker.create_from_model_path(
+                    _get_landmark_model_path()
+                )
+
+            mp_img = mp_image_module.Image(
+                mp_image_module.ImageFormat.SRGB, image
+            )
+            result = _TASK_LANDMARKER_INPUT.detect(mp_img)
+
+            if result.face_landmarks:
+                lm_list = result.face_landmarks[0]
+                landmarks = [
+                    {"x": round(float(p.x), 6), "y": round(float(p.y), 6)}
+                    for p in lm_list[:FACEMESH_NUM_LANDMARKS]
+                ]
+        except Exception as exc:
+            logger.error("Tasks API landmark detection failed: %s", exc)
+
+    if not landmarks:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -306,15 +370,8 @@ def get_landmarks(image: np.ndarray) -> list[dict[str, float]]:
             ),
         )
 
-    face = results.multi_face_landmarks[0]
-
     # MediaPipe with refine_landmarks=True returns 478 points (468 base +
     # 10 iris).  We take exactly the first 468 base landmarks.
-    landmarks: list[dict[str, float]] = [
-        {"x": round(float(lm.x), 6), "y": round(float(lm.y), 6)}
-        for lm in face.landmark[:FACEMESH_NUM_LANDMARKS]
-    ]
-
     if len(landmarks) != FACEMESH_NUM_LANDMARKS:
         raise HTTPException(
             status_code=400,
