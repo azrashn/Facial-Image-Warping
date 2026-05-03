@@ -552,10 +552,10 @@ def _apply_color_with_mask(
     mask_bool = mask_float > 0.01
 
     hsv[:, :, 0][mask_bool] = (
-        hsv[:, :, 0][mask_bool] * 0.28 + hue * 0.72
+        hsv[:, :, 0][mask_bool] * 0.15 + hue * 0.85
     )
     hsv[:, :, 1][mask_bool] = np.clip(
-        hsv[:, :, 1][mask_bool] * saturation_multiplier + 6,
+        hsv[:, :, 1][mask_bool] * saturation_multiplier + 15,
         0,
         255,
     )
@@ -711,9 +711,9 @@ def apply_virtual_makeup(
         _add_eyeshadow_gradient(mask, left_eye_points, left_brow_points)
         _add_eyeshadow_gradient(mask, right_eye_points, right_brow_points)
 
-        saturation_multiplier = 1.24
-        blur_sigma = max(3.0, min(h, w) * 0.008)
-        opacity = min(opacity, 0.58)
+        saturation_multiplier = 1.55
+        blur_sigma = max(2.5, min(h, w) * 0.006)
+        opacity = min(opacity, 0.78)
         normalize_mask = False
 
     elif region == "blush":
@@ -723,17 +723,23 @@ def apply_virtual_makeup(
         lx, ly = _landmark_to_point(left_cheek_center, w, h)
         rx, ry = _landmark_to_point(right_cheek_center, w, h)
 
-        radius_x = max(10.0, min(w, h) * 0.105)
-        radius_y = max(8.0, min(w, h) * 0.068)
+        # Estimate blush size from inter-cheek distance
+        cheek_dist = max(30, int(np.sqrt((rx - lx) ** 2 + (ry - ly) ** 2)))
+        blush_rx = max(15, int(cheek_dist * 0.32))
+        blush_ry = max(12, int(cheek_dist * 0.24))
 
-        _add_blush_gradient(mask, (lx, ly), radius_x, radius_y, -10)
-        _add_blush_gradient(mask, (rx, ry), radius_x, radius_y, 10)
-        mask *= _face_oval_float_mask(landmarks, w, h)
+        # Draw soft ellipses directly on cheeks — no face_oval clipping needed
+        cv2.ellipse(mask, (lx, ly), (blush_rx, blush_ry), -15, 0, 360, 1.0, -1)
+        cv2.ellipse(mask, (rx, ry), (blush_rx, blush_ry), 15, 0, 360, 1.0, -1)
 
-        saturation_multiplier = 1.12
-        blur_sigma = max(5.0, min(h, w) * 0.012)
-        opacity = min(opacity, 0.34)
-        normalize_mask = False
+        # Soften edges with Gaussian blur
+        ksize = max(15, blush_rx * 2) | 1  # ensure odd
+        mask = cv2.GaussianBlur(mask, (ksize, ksize), ksize * 0.35)
+
+        saturation_multiplier = 1.50
+        blur_sigma = max(3.0, min(h, w) * 0.008)
+        opacity = min(opacity, 0.72)
+        normalize_mask = True
 
     else:
         raise ValueError("Region must be 'lip', 'blush', or 'eyeshadow'.")

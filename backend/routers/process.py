@@ -390,6 +390,54 @@ async def process_estimate_age(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/process/eye-size")
+async def process_eye_size(
+    image: UploadFile = File(...),
+    scale: float = Form(0),
+):
+    """
+    Apply eye scaling (enlargement/shrinking) to the uploaded image.
+
+    Parameters
+    ----------
+    scale : float
+        Scaling intensity from -100 to 100. Positive enlarges, negative shrinks.
+    """
+    try:
+        contents = await image.read()
+        original = _decode_upload(contents)
+
+        try:
+            from modules.warping_module import apply_eye_scaling
+        except ModuleNotFoundError:
+            from backend.modules.warping_module import apply_eye_scaling
+
+        processed = apply_eye_scaling(original, int(scale))
+
+        metrics = _metrics_dict(original, processed)
+
+        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
+        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+
+        orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
+        proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
+        energy = compute_energy_analysis(processed, radius=30)
+
+        return _response_payload(
+            image_b64=_data_url_from_image(processed),
+            metrics=metrics,
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
+            energy=energy,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/process/landmarks")
 async def process_landmarks(
     image: UploadFile = File(...),

@@ -1010,6 +1010,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 afterImg.src = currentProcessedImage;
                 landmarksOnlyImg.src = currentProcessedImage;
 
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
                 addHistory(`Makeup: ${makeupRegion.value}`);
                 analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied makeup to ${makeupRegion.value}.`;
 
@@ -1045,6 +1048,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 afterImg.src = currentProcessedImage;
                 landmarksOnlyImg.src = currentProcessedImage;
 
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
                 addHistory(`Hair Color: ${color}`);
                 analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied hair color ${color}.`;
 
@@ -1076,6 +1082,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentProcessedImage = payload.image_b64;
                 afterImg.src = currentProcessedImage;
                 landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
 
                 addHistory('Cartoon Filter');
                 analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Cartoon Filter.`;
@@ -1204,6 +1213,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 afterImg.src = currentProcessedImage;
                 landmarksOnlyImg.src = currentProcessedImage;
 
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
                 addHistory(`Eye Scale: ${eyeSizeSlider.value}%`);
                 analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Eye Scale.`;
 
@@ -1235,6 +1247,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentProcessedImage = payload.image_b64;
                 afterImg.src = currentProcessedImage;
                 landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
 
                 addHistory(`Hair Length: ${hairLengthSlider.value}`);
                 analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Hair Length.`;
@@ -1269,6 +1284,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentProcessedImage = payload.image_b64;
                 afterImg.src = currentProcessedImage;
                 landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
 
                 addHistory(`Facial Hair: ${beardSelect.value}`);
                 analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Facial Hair (${beardSelect.value}).`;
@@ -1349,38 +1367,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // PDF Download Event
-    if (downloadBtn) {
-        downloadBtn.addEventListener('click', () => {
-            if (!currentOriginalImage || !currentProcessedImage) return;
-            
-            try {
-                const { jsPDF } = window.jspdf;
-                const doc = new jsPDF();
-                
-                doc.setFontSize(20);
-                doc.text("Facial Image Processing Report", 10, 20);
-                
-                doc.setFontSize(12);
-                doc.text("Original Image:", 10, 35);
-                // Try to add the images. jsPDF usually works well with standard base64 data URIs.
-                // Depending on aspect ratio, images will be constrained to 80x80 box.
-                doc.addImage(currentOriginalImage, 'JPEG', 10, 40, 80, 80);
-                
-                doc.text("Processed Image:", 110, 35);
-                doc.addImage(currentProcessedImage, 'JPEG', 110, 40, 80, 80);
-                
-                doc.text("Analysis Summary:", 10, 130);
-                // Clean up the text content from the HTML block to avoid HTML tags
-                const rawSummary = analysisSummary.innerText.replace(/\n+/g, '\n').trim() || "No details available.";
-                doc.text(rawSummary, 10, 140, { maxWidth: 180 });
-                
-                doc.save('facewarp_report.pdf');
-            } catch (err) {
-                console.error("PDF Generation failed:", err);
-                alert("Failed to generate PDF. Make sure you have an active internet connection to load the PDF library.");
-            }
-        });
-    }
+    // PDF Download: handled by the downloadBtn listener in section 8 above
+    // (sends data to backend /export/pdf endpoint)
 
 });
