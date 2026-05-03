@@ -17,6 +17,13 @@ from scipy.spatial import Delaunay
 
 logger = logging.getLogger(__name__)
 
+EMOJI_PRESETS = {
+    "happy": {"smile": 0.7, "eyebrow_raise": 0.3, "lip_widen": 0.0, "eye_enlarge": 0.0},
+    "surprised": {"smile": 0.0, "eyebrow_raise": 0.8, "lip_widen": 0.4, "eye_enlarge": 0.0},
+    "joyful": {"smile": 1.0, "eyebrow_raise": 0.0, "lip_widen": 0.0, "eye_enlarge": 0.5},
+    "neutral": {"smile": 0.0, "eyebrow_raise": 0.0, "lip_widen": 0.0, "eye_enlarge": 0.0},
+}
+
 
 def _clamp_intensity(intensity: int) -> float:
     return max(0.0, min(100.0, float(intensity))) / 100.0
@@ -270,34 +277,13 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         lm = detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
-        strength = _clamp_intensity(intensity)
+        px = float(intensity)
         deltas = np.zeros_like(lm)
-
-        face_sz = _face_scale(lm)
-
-        # ── Mouth corners: outward + up (zygomaticus major) ──
-        # Tight σ so only the corner region moves, lips stay untouched
-        sigma_corner = face_sz * 0.20
-        corner_outward = face_sz * 0.07 * strength
-        corner_upward  = face_sz * 0.05 * strength
-
-        w_L = _gaussian_falloff(lm, 61, sigma_corner)   # left corner
-        w_R = _gaussian_falloff(lm, 291, sigma_corner)   # right corner
-        for i in range(len(lm)):
-            deltas[i, 0] -= w_L[i] * corner_outward
-            deltas[i, 1] -= w_L[i] * corner_upward
-            deltas[i, 0] += w_R[i] * corner_outward
-            deltas[i, 1] -= w_R[i] * corner_upward
-
-        # ── Subtle cheek lift → nasolabial fold ──
-        sigma_cheek = face_sz * 0.16
-        cheek_lift = face_sz * 0.02 * strength
-
-        w_cl = _gaussian_falloff(lm, 205, sigma_cheek)
-        w_cr = _gaussian_falloff(lm, 425, sigma_cheek)
-        for i in range(len(lm)):
-            deltas[i, 1] -= w_cl[i] * cheek_lift
-            deltas[i, 1] -= w_cr[i] * cheek_lift
+        # Smile: corner displacement = (dx, dy) where
+        # dy = -intensity, dx = +/- intensity * 0.3 (outward).
+        for idx, sign in ((61, -1.0), (291, 1.0)):
+            deltas[idx, 0] += sign * px * 0.3
+            deltas[idx, 1] -= px
 
         return _prepare_warp(image_bgr, lm, deltas)
     except Exception as exc:
@@ -370,22 +356,11 @@ def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         lm = detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
-        strength = _clamp_intensity(intensity)
+        px = float(intensity)
         deltas = np.zeros_like(lm)
-
-        face_sz = _face_scale(lm)
-        sigma = face_sz * 0.30
-        max_spread = face_sz * 0.10 * strength
-
-        # Left lip corner (idx 61) → pull left
-        w_left = _gaussian_falloff(lm, 61, sigma)
-        for i in range(len(lm)):
-            deltas[i, 0] -= w_left[i] * max_spread
-
-        # Right lip corner (idx 291) → pull right
-        w_right = _gaussian_falloff(lm, 291, sigma)
-        for i in range(len(lm)):
-            deltas[i, 0] += w_right[i] * max_spread
+        # Lip-widen: only horizontal expansion (dy = 0).
+        for idx, sign in ((61, -1.0), (291, 1.0)):
+            deltas[idx, 0] += sign * px
 
         return _prepare_warp(image_bgr, lm, deltas)
     except Exception as exc:
@@ -464,5 +439,97 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return _prepare_warp(image_bgr, lm, deltas)
     except Exception as exc:
         logger.error("apply_face_slim failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
+
+def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+    """
+    Radial eye scaling from the eye-corner center.
+    intensity > 0 enlarges, intensity < 0 shrinks.
+    """
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None:
+            return image_bgr
+
+        factor = max(-1.0, min(1.0, float(intensity) / 100.0))
+        deltas = np.zeros_like(lm)
+
+        eye_corner_idx = np.array([33, 133, 362, 263], dtype=np.int32)
+        center = np.mean(lm[eye_corner_idx], axis=0)
+        eye_ring = [
+            33, 133, 160, 158, 153, 144, 159, 145,
+            362, 263, 387, 385, 380, 373, 386, 374,
+        ]
+        for idx in eye_ring:
+            displacement = (lm[idx] - center) * factor
+            deltas[idx] += displacement
+
+        return _prepare_warp(image_bgr, lm, deltas)
+    except Exception as exc:
+        logger.error("apply_eye_scaling failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
+
+def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
+    """
+    Apply predefined expression presets by chaining existing warps.
+    """
+    try:
+        preset_key = (emoji_name or "neutral").strip().lower()
+        preset = EMOJI_PRESETS.get(preset_key, EMOJI_PRESETS["neutral"])
+        out = image_bgr.copy()
+
+        if preset.get("smile", 0.0) > 0:
+            out = apply_smile(out, int(round(preset["smile"] * 100)))
+        if preset.get("eyebrow_raise", 0.0) > 0:
+            out = apply_eyebrow_raise(out, int(round(preset["eyebrow_raise"] * 100)))
+        if preset.get("lip_widen", 0.0) > 0:
+            out = apply_lip_widen(out, int(round(preset["lip_widen"] * 100)))
+        if preset.get("eye_enlarge", 0.0) != 0:
+            out = apply_eye_scaling(out, int(round(preset["eye_enlarge"] * 100)))
+
+        return out
+    except Exception as exc:
+        logger.error("apply_emoji_preset failed: %s – returning original image", exc)
+        return image_bgr.copy()
+
+
+def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+    """
+    Generate a noise-based beard/mustache texture and blend it on lower face.
+    """
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None:
+            return image_bgr
+
+        alpha = _clamp_intensity(intensity)
+        if alpha <= 0:
+            return image_bgr.copy()
+
+        h, w = image_bgr.shape[:2]
+        beard_poly_idx = [17, 18, 200, 199, 175, 15, 12, 0]
+        beard_poly = np.array([lm[i] for i in beard_poly_idx], dtype=np.int32).reshape((-1, 1, 2))
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [beard_poly], 255)
+
+        noise = np.zeros((h, w), dtype=np.uint8)
+        cv2.randu(noise, 0, 255)
+        noise = cv2.GaussianBlur(noise, (0, 0), 2.2)
+        _, hair = cv2.threshold(noise, 145, 255, cv2.THRESH_BINARY)
+        hair = cv2.bitwise_and(hair, mask)
+        hair = cv2.GaussianBlur(hair, (0, 0), 1.2)
+
+        beard_color = np.zeros_like(image_bgr)
+        beard_color[:, :] = (25, 35, 45)
+
+        alpha_map = (hair.astype(np.float32) / 255.0) * alpha * 0.8
+        alpha_map = alpha_map[..., None]
+        blended = image_bgr.astype(np.float32) * (1.0 - alpha_map) + beard_color.astype(np.float32) * alpha_map
+        return np.clip(blended, 0, 255).astype(np.uint8)
+    except Exception as exc:
+        logger.error("apply_beard failed: %s – returning original image", exc)
         return image_bgr.copy()
 
