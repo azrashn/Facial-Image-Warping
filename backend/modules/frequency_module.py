@@ -230,26 +230,26 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     detail = high_pass.astype(np.float32) - detail_blur.astype(np.float32)
 
     # CLAHE for local contrast – makes existing creases pop
-    clip_limit = 3.0 + 5.0 * intensity
+    clip_limit = 2.2 + 3.2 * intensity
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
     clahe_l = clahe.apply(l_ch)
 
     # Build wrinkled luminance
     l_float = l_ch.astype(np.float32)
-    detail_strength = 1.8 + 2.5 * intensity
+    detail_strength = 1.1 + 1.7 * intensity
     aged_l = l_float + detail * detail_strength
 
     # Blend in CLAHE version
-    clahe_blend = 0.25 + 0.35 * intensity
+    clahe_blend = 0.18 + 0.24 * intensity
     aged_l = aged_l * (1.0 - clahe_blend) + clahe_l.astype(np.float32) * clahe_blend
 
     # Mild contrast push + slight darkening
-    contrast = 1.04 + 0.16 * intensity
-    darkness = 3.0 + 8.0 * intensity
+    contrast = 1.02 + 0.10 * intensity
+    darkness = 2.0 + 5.0 * intensity
     aged_l = aged_l * contrast - darkness
 
     # Micro wrinkle noise
-    noise = np.random.normal(0, 8 * intensity, l_ch.shape).astype(np.float32)
+    noise = np.random.normal(0, 4 * intensity, l_ch.shape).astype(np.float32)
     aged_l = aged_l + noise
     aged_l = np.clip(aged_l, 0, 255).astype(np.uint8)
 
@@ -259,11 +259,11 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
 
     # Subtle sharpening to crisp up fine lines
     blurred = cv2.GaussianBlur(wrinkled, (0, 0), 1.0)
-    sharp_s = 0.25 + 0.30 * intensity
+    sharp_s = 0.16 + 0.20 * intensity
     wrinkled = cv2.addWeighted(wrinkled, 1.0 + sharp_s, blurred, -sharp_s, 0)
 
     # Blend with original to keep it natural
-    blend_ratio = 0.45 + 0.40 * intensity
+    blend_ratio = 0.32 + 0.30 * intensity
     wrinkled = cv2.addWeighted(image, 1.0 - blend_ratio, wrinkled, blend_ratio, 0)
 
     # ★ Composite wrinkle effect onto original using face mask
@@ -309,14 +309,14 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     hair_mask = cv2.GaussianBlur(hair_mask, (25, 25), 10)
 
     # Apply desaturation + brightness boost in detected hair region
-    white_str = 0.70 + 0.30 * intensity
+    white_str = 0.48 + 0.22 * intensity
     hsv_result = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float64)
 
     # Desaturate → gray / white
     hsv_result[:, :, 1] *= (1.0 - hair_mask * white_str)
 
     # Lighten hair toward silver-white
-    bright_add = (55 + 100 * intensity) * hair_mask
+    bright_add = (32 + 62 * intensity) * hair_mask
     hsv_result[:, :, 2] = np.clip(hsv_result[:, :, 2] + bright_add, 0, 255)
 
     hsv_result = np.clip(hsv_result, 0, 255).astype(np.uint8)
@@ -325,8 +325,8 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     # ── 3. SUBTLE AGED-SKIN COLOUR TINT (face only) ──────────────────
     # Build the tinted version
     lab_out = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float64)
-    lab_out[:, :, 2] = np.clip(lab_out[:, :, 2] + 2.0 + 3.0 * intensity, 0, 255)
-    lab_out[:, :, 0] = np.clip(lab_out[:, :, 0] - 1.5 * intensity, 0, 255)
+    lab_out[:, :, 2] = np.clip(lab_out[:, :, 2] + 1.0 + 1.8 * intensity, 0, 255)
+    lab_out[:, :, 0] = np.clip(lab_out[:, :, 0] - 0.8 * intensity, 0, 255)
     tinted = cv2.cvtColor(lab_out.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     # ★ Composite tint onto result using face mask (no tint on clothes)
@@ -480,17 +480,23 @@ def apply_cartoon_filter(image: np.ndarray) -> np.ndarray:
     # 1) Edge detection
     gray = ensure_grayscale(image)
     gray_blur = cv2.medianBlur(gray, 5)
-    edges = cv2.Canny(gray_blur, 100, 200)
+    edges = cv2.Canny(gray_blur, 120, 230)
+    edges = cv2.GaussianBlur(edges, (0, 0), 0.7)
 
     # 2) Smooth colors while preserving edges
-    smooth = cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
+    smooth = cv2.bilateralFilter(image, d=7, sigmaColor=55, sigmaSpace=55)
 
     # 3) Color quantization
-    quantized = (smooth // 32) * 32
+    quantized = (smooth // 24) * 24
+    quantized = cv2.addWeighted(smooth, 0.35, quantized, 0.65, 0)
 
     # 4) Combine edges with quantized image
-    cartoon = quantized.copy()
-    cartoon[edges > 0] = [0, 0, 0]
+    edge_mask = (edges.astype(np.float32) / 255.0)[..., None] * 0.55
+    edge_color = np.zeros_like(quantized, dtype=np.float32)
+    cartoon = (
+        quantized.astype(np.float32) * (1.0 - edge_mask)
+        + edge_color * edge_mask
+    )
 
     return np.clip(cartoon, 0, 255).astype(np.uint8)
 
@@ -517,30 +523,49 @@ def _normalized_landmarks_to_points(
     return np.array(points, dtype=np.int32)
 
 
+def _landmark_to_point(lm, width: int, height: int) -> tuple[int, int]:
+    if isinstance(lm, dict):
+        return int(lm["x"] * width), int(lm["y"] * height)
+
+    return int(lm[0] * width), int(lm[1] * height)
+
+
 def _apply_color_with_mask(
     image: np.ndarray,
     mask: np.ndarray,
     hue: int,
     opacity: float,
     saturation_multiplier: float = 1.4,
+    blur_sigma: float = 5.0,
+    normalize_mask: bool = True,
 ) -> np.ndarray:
     opacity = float(np.clip(opacity, 0.0, 1.0))
     hue = int(np.clip(hue, 0, 179))
 
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
 
-    mask_bool = mask > 0
+    mask_float = mask.astype(np.float32)
+    if mask_float.max() > 1.0:
+        mask_float /= 255.0
+    mask_float = np.clip(mask_float, 0.0, 1.0)
 
-    hsv[:, :, 0][mask_bool] = hue
+    mask_bool = mask_float > 0.01
+
+    hsv[:, :, 0][mask_bool] = (
+        hsv[:, :, 0][mask_bool] * 0.28 + hue * 0.72
+    )
     hsv[:, :, 1][mask_bool] = np.clip(
-        hsv[:, :, 1][mask_bool] * saturation_multiplier,
+        hsv[:, :, 1][mask_bool] * saturation_multiplier + 6,
         0,
         255,
     )
 
     colored = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    soft_mask = cv2.GaussianBlur(mask.astype(np.float32) / 255.0, (0, 0), 5)
+    soft_mask = cv2.GaussianBlur(mask_float, (0, 0), blur_sigma)
+    max_value = float(soft_mask.max())
+    if normalize_mask and max_value > 0:
+        soft_mask /= max_value
     soft_mask = soft_mask[..., None] * opacity
 
     result = (
@@ -549,6 +574,79 @@ def _apply_color_with_mask(
     )
 
     return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def _face_oval_float_mask(landmarks: list, width: int, height: int) -> np.ndarray:
+    face_oval_indices = [
+        10, 338, 297, 332, 284, 251, 389, 356,
+        454, 323, 361, 288, 397, 365, 379, 378,
+        400, 377, 152, 148, 176, 149, 150, 136,
+        172, 58, 132, 93, 234, 127, 162, 21,
+        54, 103, 67, 109,
+    ]
+    points = _normalized_landmarks_to_points(landmarks, face_oval_indices, width, height)
+    face_mask = np.zeros((height, width), dtype=np.float32)
+    cv2.fillPoly(face_mask, [points], 1.0)
+    return cv2.GaussianBlur(face_mask, (0, 0), max(3.0, min(width, height) * 0.018))
+
+
+def _add_eyeshadow_gradient(
+    mask: np.ndarray,
+    eye_top: np.ndarray,
+    brow_lower: np.ndarray,
+) -> None:
+    height, width = mask.shape
+    polygon = np.vstack([eye_top, brow_lower[::-1]])
+    poly_mask = np.zeros((height, width), dtype=np.float32)
+    cv2.fillPoly(poly_mask, [polygon.astype(np.int32)], 1.0)
+
+    x_min, y_min, box_w, box_h = cv2.boundingRect(polygon.astype(np.int32))
+    if box_w <= 1 or box_h <= 1:
+        return
+
+    x0 = max(0, x_min)
+    y0 = max(0, y_min)
+    x1 = min(width, x_min + box_w)
+    y1 = min(height, y_min + box_h)
+
+    eye_y = float(np.mean(eye_top[:, 1]))
+    brow_y = float(np.mean(brow_lower[:, 1]))
+    low_y = min(eye_y, brow_y)
+    high_y = max(eye_y, brow_y)
+
+    yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+    vertical = np.clip((yy - low_y) / max(high_y - low_y, 1.0), 0.0, 1.0)
+    if brow_y > eye_y:
+        vertical = 1.0 - vertical
+
+    center_x = float(np.mean(eye_top[:, 0]))
+    sigma_x = max(float(np.ptp(eye_top[:, 0])) * 0.62, 1.0)
+    lateral = np.exp(-0.5 * ((xx - center_x) / sigma_x) ** 2)
+
+    alpha = poly_mask[y0:y1, x0:x1] * (vertical ** 1.15) * lateral
+    mask[y0:y1, x0:x1] = np.maximum(mask[y0:y1, x0:x1], alpha)
+
+
+def _add_blush_gradient(
+    mask: np.ndarray,
+    center: tuple[int, int],
+    radius_x: float,
+    radius_y: float,
+    angle_degrees: float,
+) -> None:
+    height, width = mask.shape
+    cx, cy = center
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    theta = np.deg2rad(angle_degrees)
+    cos_t = float(np.cos(theta))
+    sin_t = float(np.sin(theta))
+    x = xx - float(cx)
+    y = yy - float(cy)
+    xr = x * cos_t + y * sin_t
+    yr = -x * sin_t + y * cos_t
+    gaussian = np.exp(-0.5 * ((xr / max(radius_x, 1.0)) ** 2 + (yr / max(radius_y, 1.0)) ** 2))
+    gaussian[gaussian < 0.08] = 0.0
+    mask[:] = np.maximum(mask, gaussian)
 
 
 def apply_virtual_makeup(
@@ -575,45 +673,67 @@ def apply_virtual_makeup(
     h, w = image.shape[:2]
     region = (region or "").strip().lower()
 
-    mask = np.zeros((h, w), dtype=np.uint8)
+    mask = np.zeros((h, w), dtype=np.float32)
+    normalize_mask = True
 
-    if region == "lip":
-        indices = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291]
-        points = _normalized_landmarks_to_points(landmarks, indices, w, h)
-        cv2.fillPoly(mask, [points], 255)
-        saturation_multiplier = 1.5
+    if region in {"lip", "lips"}:
+        outer_lip = [
+            61, 146, 91, 181, 84, 17, 314, 405, 321, 375,
+            291, 409, 270, 269, 267, 0, 37, 39, 40, 185,
+        ]
+        inner_lip = [
+            78, 95, 88, 178, 87, 14, 317, 402, 318, 324,
+            308, 415, 310, 311, 312, 13, 82, 81, 80, 191,
+        ]
+        outer_points = _normalized_landmarks_to_points(landmarks, outer_lip, w, h)
+        inner_points = _normalized_landmarks_to_points(landmarks, inner_lip, w, h)
+        cv2.fillPoly(mask, [outer_points], 1.0)
+        cv2.fillPoly(mask, [inner_points], 0.0)
+        saturation_multiplier = 1.45
+        blur_sigma = max(1.5, min(h, w) * 0.004)
+        opacity = min(opacity, 0.75)
 
     elif region == "eyeshadow":
-        left_eye = [33, 246, 161, 160, 159, 158, 157, 173, 133]
-        right_eye = [362, 398, 384, 385, 386, 387, 388, 466, 263]
+        left_eye_top = [33, 246, 161, 160, 159, 158, 157, 173, 133]
+        right_eye_top = [362, 398, 384, 385, 386, 387, 388, 466, 263]
+        left_brow_lower = [55, 65, 52, 53, 46]
+        right_brow_lower = [285, 295, 282, 283, 276]
 
-        left_points = _normalized_landmarks_to_points(landmarks, left_eye, w, h)
-        right_points = _normalized_landmarks_to_points(landmarks, right_eye, w, h)
+        left_eye_points = _normalized_landmarks_to_points(landmarks, left_eye_top, w, h)
+        right_eye_points = _normalized_landmarks_to_points(landmarks, right_eye_top, w, h)
+        left_brow_points = _normalized_landmarks_to_points(landmarks, left_brow_lower, w, h)
+        right_brow_points = _normalized_landmarks_to_points(landmarks, right_brow_lower, w, h)
 
-        left_points[:, 1] -= int(0.04 * h)
-        right_points[:, 1] -= int(0.04 * h)
+        eye_clearance = max(2, int(0.006 * h))
+        left_eye_points[:, 1] -= eye_clearance
+        right_eye_points[:, 1] -= eye_clearance
 
-        cv2.fillPoly(mask, [left_points], 255)
-        cv2.fillPoly(mask, [right_points], 255)
-        saturation_multiplier = 1.35
+        _add_eyeshadow_gradient(mask, left_eye_points, left_brow_points)
+        _add_eyeshadow_gradient(mask, right_eye_points, right_brow_points)
+
+        saturation_multiplier = 1.24
+        blur_sigma = max(3.0, min(h, w) * 0.008)
+        opacity = min(opacity, 0.58)
+        normalize_mask = False
 
     elif region == "blush":
         left_cheek_center = landmarks[205]
         right_cheek_center = landmarks[425]
 
-        if isinstance(left_cheek_center, dict):
-            lx, ly = int(left_cheek_center["x"] * w), int(left_cheek_center["y"] * h)
-            rx, ry = int(right_cheek_center["x"] * w), int(right_cheek_center["y"] * h)
-        else:
-            lx, ly = int(left_cheek_center[0] * w), int(left_cheek_center[1] * h)
-            rx, ry = int(right_cheek_center[0] * w), int(right_cheek_center[1] * h)
+        lx, ly = _landmark_to_point(left_cheek_center, w, h)
+        rx, ry = _landmark_to_point(right_cheek_center, w, h)
 
-        radius_x = int(0.07 * w)
-        radius_y = int(0.045 * h)
+        radius_x = max(10.0, min(w, h) * 0.105)
+        radius_y = max(8.0, min(w, h) * 0.068)
 
-        cv2.ellipse(mask, (lx, ly), (radius_x, radius_y), 0, 0, 360, 255, -1)
-        cv2.ellipse(mask, (rx, ry), (radius_x, radius_y), 0, 0, 360, 255, -1)
-        saturation_multiplier = 1.25
+        _add_blush_gradient(mask, (lx, ly), radius_x, radius_y, -10)
+        _add_blush_gradient(mask, (rx, ry), radius_x, radius_y, 10)
+        mask *= _face_oval_float_mask(landmarks, w, h)
+
+        saturation_multiplier = 1.12
+        blur_sigma = max(5.0, min(h, w) * 0.012)
+        opacity = min(opacity, 0.34)
+        normalize_mask = False
 
     else:
         raise ValueError("Region must be 'lip', 'blush', or 'eyeshadow'.")
@@ -624,6 +744,8 @@ def apply_virtual_makeup(
         hue=hue,
         opacity=opacity,
         saturation_multiplier=saturation_multiplier,
+        blur_sigma=blur_sigma,
+        normalize_mask=normalize_mask,
     )
 def create_face_region_mask(image: np.ndarray, landmarks: list) -> np.ndarray:
     """
