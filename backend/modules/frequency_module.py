@@ -115,7 +115,10 @@ def _build_face_hair_mask(image: np.ndarray) -> np.ndarray:
     upward to include the hair area.  Returns a single-channel float32
     array of the same (H, W) as *image*.
     """
-    from backend.modules.warping_module import detect_face_landmarks
+    try:
+        from modules.warping_module import detect_face_landmarks
+    except ModuleNotFoundError:
+        from backend.modules.warping_module import detect_face_landmarks
 
     h, w = image.shape[:2]
     mask = np.zeros((h, w), dtype=np.float32)
