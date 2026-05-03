@@ -70,7 +70,8 @@ def _get_hair_mask(image_bgr: np.ndarray) -> np.ndarray:
             logger.warning("Segmentation mask is None — returning empty mask")
             return np.zeros((h, w), dtype=np.uint8)
             
-        raw_mask = (result.confidence_masks[1].numpy_view() * 255).astype(np.uint8)
+        idx = 1 if len(result.confidence_masks) > 1 else 0
+        raw_mask = (result.confidence_masks[idx].numpy_view() * 255).astype(np.uint8)
     except Exception as e:
         logger.warning("Selfie segmenter failed: %s — falling back to empty mask", e)
         return np.zeros((h, w), dtype=np.uint8)

@@ -769,6 +769,46 @@ document.addEventListener('DOMContentLoaded', () => {
         else element.classList.add('negative');
     }
 
+    downloadBtn.addEventListener('click', async () => {
+        if (!currentOriginalImage || !currentProcessedImage) return;
+        
+        downloadBtn.disabled = true;
+        const originalText = downloadBtn.innerHTML;
+        downloadBtn.innerHTML = `<span data-i18n="processing">Processing...</span>`;
+        
+        try {
+            const formData = new FormData();
+            formData.append('before_image', currentOriginalImage);
+            formData.append('after_image', currentProcessedImage);
+            formData.append('mse', previousMetrics?.mse || 0);
+            formData.append('psnr', previousMetrics?.psnr || 0);
+            formData.append('ssim', previousMetrics?.ssim || 0);
+
+            const response = await fetch(`${API_BASE}/export/pdf`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) throw new Error('PDF Export failed');
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'image_processing_report.pdf';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        } catch (e) {
+            console.error('[PDF Export]', e);
+            alert('Failed to generate PDF: ' + e.message);
+        } finally {
+            downloadBtn.innerHTML = originalText;
+            downloadBtn.disabled = false;
+        }
+    });
+
     // --- 9. METRICS TOGGLES & COMPARISON MODE ---
     const metricsHeader = document.getElementById('metricsHeader');
     const metricsGrid = document.getElementById('metricsGrid');
@@ -876,7 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const formData = new FormData();
             formData.append('image', uploadedFile);
-            formData.append('color', color);
+            formData.append('target_color', color);
 
             loadingOverlay.style.display = 'flex';
             try {
