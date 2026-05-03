@@ -874,14 +874,34 @@ document.addEventListener('DOMContentLoaded', () => {
     const makeupColor = document.getElementById('makeupColor');
     const makeupOpacity = document.getElementById('makeupOpacity');
 
+    function hexToOpenCVHue(hex) {
+        hex = hex.replace('#', '');
+        let r = parseInt(hex.substring(0, 2), 16) / 255;
+        let g = parseInt(hex.substring(2, 4), 16) / 255;
+        let b = parseInt(hex.substring(4, 6), 16) / 255;
+        let max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h = 0, d = max - min;
+        if (max !== min) {
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+        return Math.round(h * 179);
+    }
+
     if (applyMakeupBtn) {
         applyMakeupBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage) return;
 
+            const hueValue = hexToOpenCVHue(makeupColor.value);
+
             const formData = new FormData();
             formData.append('image', uploadedFile);
             formData.append('region', makeupRegion.value);
-            formData.append('color', makeupColor.value);
+            formData.append('hue', hueValue);
             formData.append('opacity', makeupOpacity.value / 100.0);
 
             loadingOverlay.style.display = 'flex';
