@@ -39,18 +39,8 @@
             </div>
         </header>
 
-        <!-- Upload Zone -->
-        <div class="upload-section">
-            <input type="file" id="imageUpload" accept="image/*" hidden>
-            
-            <!-- Default Upload View -->
-            <label for="imageUpload" class="upload-zone" id="uploadZone">
-                <div class="upload-icon">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                </div>
-                <p><strong data-i18n="dropImage">Drop image here</strong></p>
-                <p class="upload-hint" data-i18n="clickBrowse">or click to browse</p>
-            </label>
+        <!-- Thumbnail Zone -->
+        <div class="upload-section" style="border-bottom: 1px solid var(--border-color); padding: 15px; position: relative; min-height: 50px;">
 
             <!-- Thumbnail View (Hidden initially) -->
             <div class="thumbnail-view" id="thumbnailView" style="display: none;">
@@ -98,15 +88,15 @@
                 <h3 data-i18n="makeupPanel">Makeup</h3>
                 <div class="makeup-region-selector">
                     <select id="makeupRegion" class="custom-select">
-                        <option value="lips">Lips</option>
-                        <option value="eyeshadow">Eyeshadow</option>
-                        <option value="blush">Blush</option>
+                        <option value="lips" data-i18n="makeupLips">Lips</option>
+                        <option value="eyeshadow" data-i18n="makeupEyeshadow">Eyeshadow</option>
+                        <option value="blush" data-i18n="makeupBlush">Blush</option>
                     </select>
                 </div>
                 <div class="makeup-controls">
                     <input type="color" id="makeupColor" value="#ff0000" class="custom-color-picker">
                     <input type="range" id="makeupOpacity" min="0" max="100" value="50" class="custom-range" style="margin: 0 10px; width: 60%;">
-                    <button class="op-btn" id="applyMakeupBtn" style="margin-top: 8px; width: 100%;">Apply</button>
+                    <button class="op-btn" id="applyMakeupBtn" style="margin-top: 8px; width: 100%;" data-i18n="applyMakeup">Apply</button>
                 </div>
             </section>
 
@@ -125,19 +115,58 @@
             <!-- Cartoon Filter -->
             <section class="control-section">
                 <h3 data-i18n="filters">Filters</h3>
-                <button class="op-btn" id="cartoonBtn" style="width: 100%;">Cartoon Filter</button>
+                <button class="op-btn" id="cartoonBtn" style="width: 100%;" data-i18n="cartoonFilter">Cartoon Filter</button>
             </section>
 
-            <!-- Camera UI -->
+            <!-- Yeni Özellikler: Göz, Saç Uzunluğu, Sakal, Yaş Karşılaştırma -->
             <section class="control-section">
-                <h3 data-i18n="cameraCapture">Camera</h3>
-                <video id="cameraVideo" autoplay playsinline style="width: 100%; border-radius: 8px; display: none; background: #000;"></video>
-                <div style="display: flex; gap: 8px; margin-top: 8px;">
-                    <button class="op-btn" id="startCameraBtn" style="flex: 1;">Start Camera</button>
-                    <button class="op-btn" id="captureBtn" style="flex: 1; display: none;">Capture</button>
+                <h3 data-i18n="newFaceFeatures">New Face Features</h3>
+                
+                <!-- Göz Büyütme/Küçültme -->
+                <div style="margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                        <span data-i18n="eyeScale">Eye Scale</span>
+                        <span id="eyeSizeVal">0%</span>
+                    </div>
+                    <input type="range" id="eyeSizeSlider" min="-100" max="100" value="0" class="custom-range">
+                    <button class="op-btn" id="eyeSizeBtn" style="width: 100%; margin-top: 8px;" data-i18n="applyEyeScale">Apply Eye Scale</button>
                 </div>
-                <canvas id="cameraCanvas" style="display:none;"></canvas>
+
+                <!-- Saç Uzunluğu Simülasyonu -->
+                <div style="margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                        <span data-i18n="hairLengthDelta">Hair Length Delta</span>
+                        <span id="hairLengthVal">20</span>
+                    </div>
+                    <input type="range" id="hairLengthSlider" min="0" max="100" value="20" class="custom-range">
+                    <button class="op-btn" id="hairLengthBtn" style="width: 100%; margin-top: 8px;" data-i18n="applyHairLength">Apply Hair Length</button>
+                </div>
+
+                <!-- Sakal/Bıyık Ekleme -->
+                <div style="margin-bottom: 15px;">
+                    <div style="margin-bottom: 4px; font-size: 0.85rem;" data-i18n="facialHairStyle">Facial Hair Style</div>
+                    <select id="beardSelect" class="custom-select" style="width: 100%; margin-bottom: 8px;">
+                        <option value="beard" data-i18n="fullBeard">Full Beard</option>
+                        <option value="mustache" data-i18n="mustache">Mustache</option>
+                    </select>
+                    
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                        <span data-i18n="beardDarkness">Beard Darkness</span>
+                        <span id="beardDarknessVal">60%</span>
+                    </div>
+                    <input type="range" id="beardDarknessSlider" min="0" max="100" value="60" class="custom-range">
+                    
+                    <button class="op-btn" id="beardBtn" style="width: 100%; margin-top: 8px;" data-i18n="addFacialHair">Add Facial Hair</button>
+                </div>
+
+                <!-- Before/After Yaş Karşılaştırması -->
+                <div style="margin-bottom: 8px;">
+                    <div style="margin-bottom: 4px; font-size: 0.85rem;" data-i18n="ageComparison">Age Comparison (Before vs After)</div>
+                    <button class="op-btn" id="ageCompareBtn" style="width: 100%;" data-i18n="compareAges">Compare Ages</button>
+                </div>
             </section>
+
+
 
             <!-- Sliders -->
             <section class="control-section">
@@ -191,8 +220,8 @@
 
         <!-- Action Buttons -->
         <div class="sidebar-footer">
+
             <button class="apply-btn" id="applyBtn" disabled><span data-i18n="applyTrans">Apply Transformation</span></button>
-            <button class="download-btn" id="downloadBtn" data-i18n="downloadPDF" disabled>Download Results as PDF</button>
         </div>
     </aside>
 
@@ -204,6 +233,16 @@
             <button class="tab-btn active" data-target="visual" data-i18n="tabVisual">Visual</button>
             <button class="tab-btn" data-target="frequency" data-i18n="tabFrequency">Frequency Spectrum</button>
             <button class="tab-btn" data-target="landmarks" data-i18n="tabLandmarks">Landmarks</button>
+            <div class="download-actions">
+                <button class="download-action-btn" id="downloadBtn" data-i18n="downloadPDF" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 18 15 15"></polyline></svg>
+                    <span>PDF</span>
+                </button>
+                <button class="download-action-btn" id="downloadPngBtn" data-i18n="downloadPng" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                    <span>PNG</span>
+                </button>
+            </div>
         </nav>
 
         <!-- Multi-View Container -->
@@ -213,8 +252,43 @@
             <div class="view-panel active-view" id="view-visual">
                 
                 <div class="preview-area" id="visualPreviewArea">
-                    <div class="preview-placeholder" id="previewPlaceholder" data-i18n="uploadWait">
-                        Upload an image to begin
+                    <div class="preview-placeholder" id="previewPlaceholder" style="display: flex; align-items: stretch; justify-content: center; width: 100%; height: 100%; gap: 16px; padding: 16px;">
+                        
+                        <!-- LEFT COLUMN: UPLOAD -->
+                        <div class="split-col" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: var(--radius-md); background: transparent; padding: 0;">
+                            <input type="file" id="imageUpload" accept="image/*" hidden>
+                            <label for="imageUpload" class="upload-zone" id="uploadZone" style="display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; flex-grow: 1; width: 100%; border-radius: var(--radius-md);">
+                                <div class="upload-icon">
+                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                </div>
+                                <p><strong data-i18n="dropImage">Drop image here</strong></p>
+                                <p class="upload-hint" data-i18n="clickBrowse">or click to browse</p>
+                            </label>
+                        </div>
+
+                        <!-- RIGHT COLUMN: CAMERA -->
+                        <div class="split-col" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--primary-color); border-radius: var(--radius-md); background: transparent; padding: 20px; position: relative; overflow: hidden; transition: border-color 0.3s ease;">
+                            
+                            <!-- Camera Viewport -->
+                            <div style="position: relative; width: 100%; flex-grow: 1; border-radius: calc(var(--radius-md) - 4px); overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--surface-color); border: 1px solid var(--border-color);">
+                                
+                                <div id="cameraPlaceholder" style="text-align: center; opacity: 0.6; padding: 20px;">
+                                    <i class="fas fa-camera" style="font-size: 3rem; margin-bottom: 10px;"></i>
+                                    <p style="margin: 0; font-weight: 500;" data-i18n="cameraOffline">Camera Offline</p>
+                                </div>
+                                
+                                <video id="cameraVideo" autoplay playsinline style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 1; background: #000;"></video>
+                                <canvas id="cameraCanvas" style="display:none;"></canvas>
+                            </div>
+
+                            <!-- Camera Controls -->
+                            <div style="display: flex; gap: 10px; width: 100%; margin-top: 15px; justify-content: center; z-index: 2;">
+                                <button class="split-btn" id="startCameraBtn" style="flex: 1; background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); color: white; border: none;"><i class="fas fa-video"></i> <span data-i18n="startCamera">Start Camera</span></button>
+                                <button class="split-btn capture-mode" id="captureBtn" style="flex: 1; display: none;"><i class="fas fa-camera"></i> <span data-i18n="capturePhoto">Capture</span></button>
+                                <button class="split-btn stop-mode" id="stopCameraBtn" style="display: none; width: auto; padding: 0 15px;"><i class="fas fa-times"></i></button>
+                            </div>
+                        </div>
+
                     </div>
                     
                     <div class="image-wrapper" id="imageWrapper" style="display: none;">

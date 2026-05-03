@@ -13,11 +13,8 @@ logger = logging.getLogger("facial_pipeline.ai_module")
 _MODULE_DIR = Path(__file__).resolve().parent
 _MODELS_DIR = _MODULE_DIR.parent / "models"
 
-# Türkçe karakter sorunu için mutlak path
-import os
-_MODELS_DIR_STR = str(_MODELS_DIR)
-if not os.path.exists(_MODELS_DIR_STR):
-    _MODELS_DIR = Path("C:/FaceWarp/Facial-Image-Warping-main/backend/models")
+# Türkçe karakter sorunu için dinamik path
+_MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 import logging
 logger = logging.getLogger("facial_pipeline.ai_module")
