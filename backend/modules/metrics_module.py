@@ -48,7 +48,14 @@ def compute_psnr(img1: np.ndarray, img2: np.ndarray) -> Dict[str, float]:
     _validate_images(img1, img2)
     img1_f = img1.astype(np.float64)
     img2_f = img2.astype(np.float64)
-    psnr_value = float(peak_signal_noise_ratio(img1_f, img2_f, data_range=255.0))
+    
+    if np.allclose(img1_f, img2_f):
+        psnr_value = 100.0
+    else:
+        psnr_value = float(peak_signal_noise_ratio(img1_f, img2_f, data_range=255.0))
+        if np.isinf(psnr_value):
+            psnr_value = 100.0
+            
     return {"psnr": psnr_value}
 
 

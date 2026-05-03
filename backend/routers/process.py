@@ -56,6 +56,24 @@ WARP_OPS = {"smile", "eyebrow", "lip", "slim"}
 AGE_OPS = {"aging", "deaging", "age", "deage", "fft"}
 
 
+def _hex_color_to_hue(color: str | None, fallback: int = 0) -> int:
+    if not color:
+        return fallback
+
+    value = color.strip().lstrip("#")
+    if len(value) != 6:
+        return fallback
+
+    try:
+        rgb = tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return fallback
+
+    bgr_pixel = np.uint8([[[rgb[2], rgb[1], rgb[0]]]])
+    hsv_pixel = cv2.cvtColor(bgr_pixel, cv2.COLOR_BGR2HSV)
+    return int(hsv_pixel[0, 0, 0])
+
+
 def _decode_upload(contents: bytes) -> np.ndarray:
     file_bytes = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
@@ -171,21 +189,22 @@ async def process_age(
 
         if op in ["aging", "age", "deaging", "deage"]:
             # Original boyutu koruyoruz, 512x512 yapmıyoruz
-            rgb_for_landmarks = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
-
-            landmarks = get_landmarks(rgb_for_landmarks)
-            face_mask = create_face_region_mask(original, landmarks)
-
             if op in ["aging", "age"]:
-                effected = apply_aging(original, intensity)
+                processed = apply_aging(original, intensity)
             else:
                 effected = apply_deaging(original, intensity)
-
-            processed = blend_effect_with_mask(
-                original=original,
-                effected=effected,
-                mask=face_mask,
-            )
+                try:
+                    rgb_for_landmarks = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
+                    landmarks = get_landmarks(rgb_for_landmarks)
+                    face_mask = create_face_region_mask(original, landmarks)
+                    processed = blend_effect_with_mask(
+                        original=original,
+                        effected=effected,
+                        mask=face_mask,
+                    )
+                except Exception as exc:
+                    logger.warning("Face mask unavailable for deaging; using full image: %s", exc)
+                    processed = effected
 
             original_for_metrics = original
 
@@ -278,27 +297,27 @@ async def process_makeup(
     image: UploadFile = File(...),
     region: str = Form("lip"),
     hue: int = Form(0),
+    color: str | None = Form(None),
     opacity: float = Form(0.5),
 ):
     try:
         contents = await image.read()
         original = _decode_upload(contents)
 
-        preprocessed = preprocess_image(original)
-        landmarks = get_landmarks(preprocessed)
-        preprocessed_bgr = cv2.cvtColor(preprocessed, cv2.COLOR_RGB2BGR)
+        rgb_for_landmarks = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
+        landmarks = get_landmarks(rgb_for_landmarks)
 
         processed = apply_virtual_makeup(
-            image=preprocessed_bgr,
+            image=original,
             landmarks=landmarks,
             region=region,
-            hue=hue,
+            hue=_hex_color_to_hue(color, hue),
             opacity=opacity,
         )
 
-        metrics = _metrics_dict(preprocessed_bgr, processed)
+        metrics = _metrics_dict(original, processed)
 
-        orig_spectrum = compute_magnitude_spectrum(compute_fft(preprocessed_bgr)[2])
+        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
         proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
 
         orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))

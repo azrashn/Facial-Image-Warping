@@ -5,9 +5,9 @@ import numpy as np
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 try:
-    from backend.modules.metrics_module import compute_mse, compute_psnr, compute_ssim
+    from modules.metrics_module import compute_mse, compute_psnr, compute_ssim
 except ModuleNotFoundError:
-    from backend.modules.metrics_module import compute_mse, compute_psnr, compute_ssim
+    from modules.metrics_module import compute_mse, compute_psnr, compute_ssim
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 

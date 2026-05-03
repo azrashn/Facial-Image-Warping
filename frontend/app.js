@@ -850,6 +850,46 @@ document.addEventListener('DOMContentLoaded', () => {
         else element.classList.add('negative');
     }
 
+    downloadBtn.addEventListener('click', async () => {
+        if (!currentOriginalImage || !currentProcessedImage) return;
+        
+        downloadBtn.disabled = true;
+        const originalText = downloadBtn.innerHTML;
+        downloadBtn.innerHTML = `<span data-i18n="processing">Processing...</span>`;
+        
+        try {
+            const formData = new FormData();
+            formData.append('before_image', currentOriginalImage);
+            formData.append('after_image', currentProcessedImage);
+            formData.append('mse', previousMetrics?.mse || 0);
+            formData.append('psnr', previousMetrics?.psnr || 0);
+            formData.append('ssim', previousMetrics?.ssim || 0);
+
+            const response = await fetch(`${API_BASE}/export/pdf`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) throw new Error('PDF Export failed');
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'image_processing_report.pdf';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        } catch (e) {
+            console.error('[PDF Export]', e);
+            alert('Failed to generate PDF: ' + e.message);
+        } finally {
+            downloadBtn.innerHTML = originalText;
+            downloadBtn.disabled = false;
+        }
+    });
+
     // --- 9. METRICS TOGGLES & COMPARISON MODE ---
     const metricsHeader = document.getElementById('metricsHeader');
     const metricsGrid = document.getElementById('metricsGrid');
@@ -915,9 +955,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const makeupColor = document.getElementById('makeupColor');
     const makeupOpacity = document.getElementById('makeupOpacity');
 
+    function hexToOpenCVHue(hex) {
+        hex = hex.replace('#', '');
+        let r = parseInt(hex.substring(0, 2), 16) / 255;
+        let g = parseInt(hex.substring(2, 4), 16) / 255;
+        let b = parseInt(hex.substring(4, 6), 16) / 255;
+        let max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h = 0, d = max - min;
+        if (max !== min) {
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+        return Math.round(h * 179);
+    }
+
     if (applyMakeupBtn) {
         applyMakeupBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage) return;
+
+            const hueValue = hexToOpenCVHue(makeupColor.value);
 
             const formData = new FormData();
             formData.append('image', uploadedFile);
