@@ -5,3 +5,4 @@ opencv-python
 numpy
 mediapipe
 scikit-image
+fpdf2

@@ -850,46 +850,6 @@ document.addEventListener('DOMContentLoaded', () => {
         else element.classList.add('negative');
     }
 
-    downloadBtn.addEventListener('click', async () => {
-        if (!currentOriginalImage || !currentProcessedImage) return;
-        
-        downloadBtn.disabled = true;
-        const originalText = downloadBtn.innerHTML;
-        downloadBtn.innerHTML = `<span data-i18n="processing">Processing...</span>`;
-        
-        try {
-            const formData = new FormData();
-            formData.append('before_image', currentOriginalImage);
-            formData.append('after_image', currentProcessedImage);
-            formData.append('mse', previousMetrics?.mse || 0);
-            formData.append('psnr', previousMetrics?.psnr || 0);
-            formData.append('ssim', previousMetrics?.ssim || 0);
-
-            const response = await fetch(`${API_BASE}/export/pdf`, {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!response.ok) throw new Error('PDF Export failed');
-
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'image_processing_report.pdf';
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            a.remove();
-        } catch (e) {
-            console.error('[PDF Export]', e);
-            alert('Failed to generate PDF: ' + e.message);
-        } finally {
-            downloadBtn.innerHTML = originalText;
-            downloadBtn.disabled = false;
-        }
-    });
-
     // --- 9. METRICS TOGGLES & COMPARISON MODE ---
     const metricsHeader = document.getElementById('metricsHeader');
     const metricsGrid = document.getElementById('metricsGrid');
@@ -1367,7 +1327,139 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // PDF Download: handled by the downloadBtn listener in section 8 above
-    // (sends data to backend /export/pdf endpoint)
+    // --- PDF REPORT EXPORT ---
+
+    /** Convert a base-64 data-URL to the raw base-64 string and its MIME type. */
+    function splitDataUrl(dataUrl) {
+        if (!dataUrl || !dataUrl.startsWith('data:')) return null;
+        const [header, data] = dataUrl.split(',');
+        const mime = header.match(/data:(.*?);/)?.[1] || 'image/png';
+        const format = mime.includes('png') ? 'PNG' : 'JPEG';
+        return { data, format };
+    }
+
+    downloadBtn.addEventListener('click', async () => {
+        if (!currentOriginalImage) return;
+
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = currentLang === 'TR' ? 'PDF hazırlanıyor…' : 'Generating PDF…';
+
+        try {
+            // jsPDF is loaded globally via <script> tag in index.html
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+            const pageW = doc.internal.pageSize.getWidth();
+            let y = 15; // vertical cursor
+
+            // ── Title ──
+            doc.setFontSize(22);
+            doc.setFont('helvetica', 'bold');
+            doc.text('FaceDSP — Analysis Report', pageW / 2, y, { align: 'center' });
+            y += 10;
+
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(120);
+            doc.text(new Date().toLocaleString(), pageW / 2, y, { align: 'center' });
+            doc.setTextColor(0);
+            y += 10;
+
+            // ── Before / After Images ──
+            const imgW = 80;
+            const imgH = 80;
+
+            const origInfo = splitDataUrl(currentOriginalImage);
+            const procInfo = splitDataUrl(currentProcessedImage);
+
+            doc.setFontSize(12);
+            doc.setFont('helvetica', 'bold');
+
+            if (origInfo) {
+                doc.text(currentLang === 'TR' ? 'Öncesi' : 'Before', 15, y);
+                y += 3;
+                doc.addImage(origInfo.data, origInfo.format, 15, y, imgW, imgH);
+            }
+            if (procInfo) {
+                doc.text(currentLang === 'TR' ? 'Sonrası' : 'After', 110, y - 3);
+                doc.addImage(procInfo.data, procInfo.format, 110, y, imgW, imgH);
+            }
+            y += imgH + 10;
+
+            // ── Quality Metrics ──
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.text(i18n[currentLang]?.qualityMetrics || 'Quality Metrics', 15, y);
+            y += 7;
+
+            doc.setFontSize(11);
+            doc.setFont('helvetica', 'normal');
+            const metrics = [
+                { label: 'MSE',  value: mseValue.textContent },
+                { label: 'PSNR', value: psnrValue.textContent + ' dB' },
+                { label: 'SSIM', value: ssimValue.textContent },
+            ];
+            metrics.forEach(m => {
+                doc.text(`${m.label}: ${m.value}`, 20, y);
+                y += 6;
+            });
+            y += 4;
+
+            // ── Analysis Summary ──
+            const summaryText = analysisSummary.innerText || analysisSummary.textContent || '';
+            if (summaryText) {
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text(i18n[currentLang]?.analysisSummary || 'Analysis Summary', 15, y);
+                y += 7;
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                const lines = doc.splitTextToSize(summaryText, pageW - 30);
+                doc.text(lines, 15, y);
+                y += lines.length * 5 + 6;
+            }
+
+            // ── Operation History ──
+            if (operationHistory.length > 0) {
+                if (y > 260) { doc.addPage(); y = 15; }
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text(i18n[currentLang]?.opHistory || 'Operation History', 15, y);
+                y += 7;
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                operationHistory.forEach((op, i) => {
+                    doc.text(`${i + 1}. ${op}`, 20, y);
+                    y += 5;
+                });
+                y += 6;
+            }
+
+            // ── Spectrum Images (if available) ──
+            const origSpec = splitDataUrl(origSpectrumImg?.src);
+            const procSpec = splitDataUrl(procSpectrumImg?.src);
+            if (origSpec || procSpec) {
+                if (y > 200) { doc.addPage(); y = 15; }
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text('FFT Spectrum', 15, y);
+                y += 5;
+                const specW = 80, specH = 80;
+                if (origSpec) {
+                    doc.addImage(origSpec.data, origSpec.format, 15, y, specW, specH);
+                }
+                if (procSpec) {
+                    doc.addImage(procSpec.data, procSpec.format, 110, y, specW, specH);
+                }
+            }
+
+            doc.save('FaceDSP_Report.pdf');
+        } catch (err) {
+            console.error('[PDF Export] Error:', err);
+            alert((currentLang === 'TR' ? 'PDF oluşturulamadı: ' : 'PDF generation failed: ') + err.message);
+        } finally {
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = i18n[currentLang]?.downloadPDF || 'Download Results as PDF';
+        }
+    });
 
 });
