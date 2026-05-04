@@ -64,8 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
             newFaceFeatures: "Yeni Yüz Özellikleri",
             eyeScale: "Göz Ölçeği",
             applyEyeScale: "Göz Ölçeği Uygula",
-            hairLengthDelta: "Saç Uzunluk Farkı",
-            applyHairLength: "Saç Uzunluğu Uygula",
             facialHairStyle: "Yüz Kılı Stili",
             fullBeard: "Tam Sakal",
             mustache: "Bıyık",
@@ -139,8 +137,6 @@ document.addEventListener('DOMContentLoaded', () => {
             newFaceFeatures: "New Face Features",
             eyeScale: "Eye Scale",
             applyEyeScale: "Apply Eye Scale",
-            hairLengthDelta: "Hair Length Delta",
-            applyHairLength: "Apply Hair Length",
             facialHairStyle: "Facial Hair Style",
             fullBeard: "Full Beard",
             mustache: "Mustache",
@@ -1119,14 +1115,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- NEW FACE FEATURES (Göz, Saç Uzunluğu, Sakal, Yaş Karşılaştırma) ---
+    // --- NEW FACE FEATURES (Göz, Sakal, Yaş Karşılaştırma) ---
     const eyeSizeSlider = document.getElementById('eyeSizeSlider');
     const eyeSizeVal = document.getElementById('eyeSizeVal');
     const eyeSizeBtn = document.getElementById('eyeSizeBtn');
-
-    const hairLengthSlider = document.getElementById('hairLengthSlider');
-    const hairLengthVal = document.getElementById('hairLengthVal');
-    const hairLengthBtn = document.getElementById('hairLengthBtn');
 
     const beardSelect = document.getElementById('beardSelect');
     const beardDarknessSlider = document.getElementById('beardDarknessSlider');
@@ -1139,12 +1131,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (eyeSizeSlider) {
         eyeSizeSlider.addEventListener('input', (e) => {
             eyeSizeVal.textContent = e.target.value + '%';
-        });
-    }
-
-    if (hairLengthSlider) {
-        hairLengthSlider.addEventListener('input', (e) => {
-            hairLengthVal.textContent = e.target.value;
         });
     }
 
@@ -1183,41 +1169,6 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) {
                 console.error('[Eye Scale] Error:', e);
                 analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Eye scale failed.'}`;
-            } finally {
-                loadingOverlay.style.display = 'none';
-            }
-        });
-    }
-
-    // Saç Uzunluğu Event
-    if (hairLengthBtn) {
-        hairLengthBtn.addEventListener('click', async () => {
-            if (!uploadedFile || !currentOriginalImage) return;
-            const formData = new FormData();
-            formData.append('image', uploadedFile);
-            formData.append('length_delta', hairLengthSlider.value);
-            
-            loadingOverlay.style.display = 'flex';
-            try {
-                // Backend endpoint
-                const response = await fetch(`${API_BASE}/process/hair-length`, { method: 'POST', body: formData });
-                const payload = await response.json();
-                if (!response.ok) throw new Error(payload?.detail || 'Hair length processing failed.');
-
-                currentProcessedImage = payload.image_b64;
-                afterImg.src = currentProcessedImage;
-                landmarksOnlyImg.src = currentProcessedImage;
-
-                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
-                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
-
-                addHistory(`Hair Length: ${hairLengthSlider.value}`);
-                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Hair Length.`;
-
-                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
-            } catch (e) {
-                console.error('[Hair Length] Error:', e);
-                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Hair length failed.'}`;
             } finally {
                 loadingOverlay.style.display = 'none';
             }
