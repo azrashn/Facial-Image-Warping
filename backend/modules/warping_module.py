@@ -24,6 +24,30 @@ EMOJI_PRESETS = {
     "neutral": {"smile": 0.0, "eyebrow_raise": 0.0, "lip_widen": 0.0, "eye_enlarge": 0.0},
 }
 
+# Rol 5 / arayüz: Türkçe ve alternatif anahtarlar → EMOJI_PRESETS içindeki İngilizce anahtar
+EMOJI_PRESET_ALIASES = {
+    "mutlu": "happy",
+    "şaşkın": "surprised",
+    "saskin": "surprised",
+    "sevinçli": "joyful",
+    "sevincli": "joyful",
+    "nötr": "neutral",
+    "notr": "neutral",
+}
+
+
+def resolve_emoji_preset_name(emoji_name: str) -> str:
+    """Gelen emoji / ifade adını EMOJI_PRESETS anahtarına çevir."""
+    key = (emoji_name or "neutral").strip().lower()
+    return EMOJI_PRESET_ALIASES.get(key, key)
+
+
+def get_emoji_preset_params(emoji_name: str) -> dict:
+    """Preset sözlüğünden parametre vektörü (yoksa nötr)."""
+    canonical = resolve_emoji_preset_name(emoji_name)
+    base = EMOJI_PRESETS.get(canonical, EMOJI_PRESETS["neutral"])
+    return dict(base)
+
 
 def _clamp_intensity(intensity: int) -> float:
     return max(0.0, min(100.0, float(intensity))) / 100.0
@@ -138,7 +162,9 @@ def geometric_warp(
 ) -> np.ndarray:
     """Piecewise affine warp with robust triangle validation."""
     h, w = image_bgr.shape[:2]
-    out = np.zeros_like(image_bgr)
+    # Orijinalden başla: konveks dışı siyah kalmaz. src≈dst olan (deforme olmayan)
+    # üçgenler önce, en büyük ötelemeli üçgenler en son boyanır ki ağız vb. ezilmesin.
+    out = image_bgr.copy()
 
     # --- Failsafe: wrap everything so the endpoint never crashes ---
     try:
@@ -153,24 +179,32 @@ def geometric_warp(
     skipped_rect = 0
     warped_ok = 0
 
+    tri_jobs = []
     for ia, ib, ic in tri.simplices:
-        # ------ Req 1: force exact (3,2) float32 shape ------
         src_tri = np.asarray(
             [src_pts[ia], src_pts[ib], src_pts[ic]], dtype=np.float32
         ).reshape(3, 2)
         dst_tri = np.asarray(
             [dst_pts[ia], dst_pts[ib], dst_pts[ic]], dtype=np.float32
         ).reshape(3, 2)
-
-        # ------ Req 3: skip triangles with duplicate vertices ------
         if _has_duplicate_vertices(src_tri) or _has_duplicate_vertices(dst_tri):
             skipped_duplicate += 1
             continue
-
-        # ------ Req 2: skip degenerate (near-zero-area) triangles ------
         if triangle_area(src_tri) < 1e-3 or triangle_area(dst_tri) < 1e-3:
             skipped_degenerate += 1
             continue
+        disp = float(np.max(np.abs(src_tri - dst_tri)))
+        tri_jobs.append((disp, ia, ib, ic))
+
+    tri_jobs.sort(key=lambda t: t[0])
+
+    for _disp, ia, ib, ic in tri_jobs:
+        src_tri = np.asarray(
+            [src_pts[ia], src_pts[ib], src_pts[ic]], dtype=np.float32
+        ).reshape(3, 2)
+        dst_tri = np.asarray(
+            [dst_pts[ia], dst_pts[ib], dst_pts[ic]], dtype=np.float32
+        ).reshape(3, 2)
 
         # ------ Req 4: bounding rect safety ------
         r = cv2.boundingRect(dst_tri)
@@ -224,7 +258,6 @@ def geometric_warp(
         skipped_duplicate,
         skipped_rect,
     )
-
     # ------ Req 7: failsafe – if nothing was warped, return original ------
     if warped_ok == 0:
         logger.warning("No triangles warped successfully – returning original image")
@@ -268,28 +301,27 @@ def _face_scale(lm: np.ndarray) -> float:
 
 
 def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
-    """
-    Natural smile — only lifts the mouth CORNERS outward + upward.
-    Lips keep their original thickness (no botox / puffing effect).
-    Subtle cheek lift for nasolabial fold realism.
-    """
     try:
         lm = detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
-        px = float(intensity)
+        px = float(intensity) * 0.4 # Genel çekim kuvvetini biraz artırdım
         deltas = np.zeros_like(lm)
-        # Smile: corner displacement = (dx, dy) where
-        # dy = -intensity, dx = +/- intensity * 0.3 (outward).
-        for idx, sign in ((61, -1.0), (291, 1.0)):
-            deltas[idx, 0] += sign * px * 0.3
-            deltas[idx, 1] -= px
-
+        
+        face_sz = _face_scale(lm)
+        sigma = face_sz * 0.15 
+        
+        for corner_idx, dir_x in [(61, -1.0), (291, 1.0)]:
+            w = _gaussian_falloff(lm, corner_idx, sigma)
+            for i in range(len(lm)):
+                deltas[i, 0] += w[i] * dir_x * px
+                # 0.5'i 1.2 yaptık: Dudak köşeleri artık DİREKT YUKARI kalkacak
+                deltas[i, 1] -= w[i] * px * 1.2 
+                
         return _prepare_warp(image_bgr, lm, deltas)
     except Exception as exc:
-        logger.error("apply_smile failed: %s – returning original image", exc)
+        logger.error("apply_smile failed: %s", exc)
         return image_bgr.copy()
-
 
 def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     """
@@ -348,25 +380,26 @@ def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
 
 
 def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
-    """
-    Lip widen with Gaussian falloff from the two lip-corner anchors
-    spreading horizontally outward.
-    """
     try:
         lm = detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
-        px = float(intensity)
+        px = float(intensity) * 0.3
         deltas = np.zeros_like(lm)
-        # Lip-widen: only horizontal expansion (dy = 0).
-        for idx, sign in ((61, -1.0), (291, 1.0)):
-            deltas[idx, 0] += sign * px
-
+        
+        face_sz = _face_scale(lm)
+        sigma = face_sz * 0.12  # Sadece dudak çevresi
+        
+        for corner_idx, dir_x in [(61, -1.0), (291, 1.0)]:
+            w = _gaussian_falloff(lm, corner_idx, sigma)
+            for i in range(len(lm)):
+                deltas[i, 0] += w[i] * dir_x * px
+                # Dudak genişletmede dikey (yukarı) hareket olmaz
+                
         return _prepare_warp(image_bgr, lm, deltas)
     except Exception as exc:
-        logger.error("apply_lip_widen failed: %s – returning original image", exc)
+        logger.error("apply_lip_widen failed: %s", exc)
         return image_bgr.copy()
-
 
 def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     """
@@ -444,25 +477,32 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
 
 def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     """
-    Radial eye scaling from the eye-corner center.
-    intensity > 0 enlarges, intensity < 0 shrinks.
+    Radial eye scaling: her göz, kendi köşe merkezine göre radyal öteleme.
+    Landmark 33, 133 (sol göz), 362, 263 (sağ göz) — merkez çiftleri ve
+    displacement = (point - center) * intensity_factor; Delaunay _prepare_warp ile uyumlu.
+
+    intensity > 0 büyütme (dışa), intensity < 0 küçültme (içe).
     """
     try:
         lm = detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
 
-        factor = max(-1.0, min(1.0, float(intensity) / 100.0))
+        intensity_factor = max(-1.0, min(1.0, float(intensity) / 100.0))
         deltas = np.zeros_like(lm)
 
-        eye_corner_idx = np.array([33, 133, 362, 263], dtype=np.int32)
-        center = np.mean(lm[eye_corner_idx], axis=0)
-        eye_ring = [
-            33, 133, 160, 158, 153, 144, 159, 145,
-            362, 263, 387, 385, 380, 373, 386, 374,
-        ]
-        for idx in eye_ring:
-            displacement = (lm[idx] - center) * factor
+        # Sol / sağ göz için ayrı merkez (33–133 ve 362–263 köşe çiftleri).
+        center_left = (lm[33] + lm[133]) * 0.5
+        center_right = (lm[362] + lm[263]) * 0.5
+
+        left_eye_idx = [33, 133, 160, 158, 153, 144, 159, 145]
+        right_eye_idx = [362, 263, 387, 385, 380, 373, 386, 374]
+
+        for idx in left_eye_idx:
+            displacement = (lm[idx] - center_left) * intensity_factor
+            deltas[idx] += displacement
+        for idx in right_eye_idx:
+            displacement = (lm[idx] - center_right) * intensity_factor
             deltas[idx] += displacement
 
         return _prepare_warp(image_bgr, lm, deltas)
@@ -476,8 +516,7 @@ def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
     Apply predefined expression presets by chaining existing warps.
     """
     try:
-        preset_key = (emoji_name or "neutral").strip().lower()
-        preset = EMOJI_PRESETS.get(preset_key, EMOJI_PRESETS["neutral"])
+        preset = get_emoji_preset_params(emoji_name)
         out = image_bgr.copy()
 
         if preset.get("smile", 0.0) > 0:
@@ -495,41 +534,136 @@ def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
-    """
-    Generate a noise-based beard/mustache texture and blend it on lower face.
-    """
+def _noise_beard_texture_mask(
+    shape_hw: tuple[int, int],
+    blur_sigma: float = 2.2,
+    threshold_val: int = 145,
+) -> np.ndarray:
+    """Kalıp gibi boyamak yerine gerçekçi kıl (noise) dokusu üretir."""
+    h, w = shape_hw
+    noise = np.zeros((h, w), dtype=np.uint8)
+    cv2.randu(noise, 0, 255)
+    # Önce eşikleme yapıp aralıklı noktalar (kıllar) oluşturuyoruz
+    _, hair_dots = cv2.threshold(noise, 200, 255, cv2.THRESH_BINARY)
+    # Sonra o noktaları çok hafif yumuşatıyoruz ki gerçekçi dursun
+    hair = cv2.GaussianBlur(hair_dots, (3, 3), 0.5)
+    return hair
+
+def _lower_face_beard_polygon(lm: np.ndarray) -> np.ndarray:
+    """Çene (17,18,200,199,175) + alt dudak (0,12,15) ile alt yüz poligonu."""
+    beard_poly_idx = [17, 18, 200, 199, 175, 15, 12, 0]
+    return np.array([[lm[i][0], lm[i][1]] for i in beard_poly_idx], dtype=np.int32).reshape((-1, 1, 2))
+
+
+def _mustache_polygon_from_landmarks(lm: np.ndarray) -> Optional[np.ndarray]:
+    """Burun altı ile üst dudak arası — convex hull ile kapalı poligon."""
+    # Burun altı + üst dudak üst kenarı (MediaPipe 468 mesh)
+    nose_lower = [2, 97, 98, 326, 327]
+    upper_lip_top = [0, 267, 269, 270, 409]
+    pts = []
+    for i in nose_lower + upper_lip_top:
+        if i < len(lm):
+            pts.append([int(lm[i][0]), int(lm[i][1])])
+    if len(pts) < 3:
+        return None
+    arr = np.array(pts, dtype=np.int32)
+    return cv2.convexHull(arr)
+
+
+def _alpha_blend_texture(
+    image_bgr: np.ndarray,
+    region_mask: np.ndarray,
+    hair_mask: np.ndarray,
+    tint_bgr: tuple[float, float, float],
+    intensity_alpha: float,
+) -> np.ndarray:
+    """Maske alanına yarı saydam düz renk basmak YERİNE, kıl dokusunu uygular."""
+    # 1. Kıl dokusunu (hair_mask) sadece belirlenen poligon bölgesiyle (region_mask) sınırla
+    actual_hair = cv2.bitwise_and(hair_mask, region_mask)
+    
+    # 2. Kıl olan yerleri maske olarak kullan (0-1 aralığına getir)
+    hair_f = actual_hair.astype(np.float32) / 255.0
+    
+    # 3. Kılları renklendir (tint_bgr)
+    tint = np.zeros_like(image_bgr, dtype=np.float32)
+    tint[:, :, 0] = tint_bgr[0]
+    tint[:, :, 1] = tint_bgr[1]
+    tint[:, :, 2] = tint_bgr[2]
+    
+    # 4. SADECE kıl olan pikselleri orijinal görüntüyle harmanla (intensity_alpha ile)
+    # Düz maskeyi harmanlamıyoruz! Sadece kılları harmanlıyoruz.
+    alpha = hair_f[..., None] * intensity_alpha
+    
+    out = image_bgr.astype(np.float32) * (1.0 - alpha) + tint * alpha
+    return np.clip(out, 0, 255).astype(np.unit8)
+
+def apply_mustache(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     try:
         lm = detect_face_landmarks(image_bgr)
-        if lm is None:
-            return image_bgr
-
-        alpha = _clamp_intensity(intensity)
-        if alpha <= 0:
-            return image_bgr.copy()
-
-        h, w = image_bgr.shape[:2]
-        beard_poly_idx = [17, 18, 200, 199, 175, 15, 12, 0]
-        beard_poly = np.array([lm[i] for i in beard_poly_idx], dtype=np.int32).reshape((-1, 1, 2))
-
+        if lm is None: return image_bgr
+            
+        must_idx = [61, 98, 97, 164, 326, 327, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185]
+        pts_list = []
+        for i in must_idx:
+            pts_list.append((int(lm[i][0]), int(lm[i][1])))
+        pts = np.array(pts_list, dtype=np.int32)
+        
+        
         mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillPoly(mask, [beard_poly], 255)
-
+        cv2.fillPoly(mask, [pts], 255)
+        
+        lip_idx = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291]
+        lip_list = []
+        for i in lip_idx:
+            lip_list.append((int(lm[i][0]), int(lm[i][1])))
+        cv2.fillPoly(mask, [np.array(lip_list, dtype=np.int32)], 0)
+        
         noise = np.zeros((h, w), dtype=np.uint8)
         cv2.randu(noise, 0, 255)
-        noise = cv2.GaussianBlur(noise, (0, 0), 2.2)
-        _, hair = cv2.threshold(noise, 145, 255, cv2.THRESH_BINARY)
-        hair = cv2.bitwise_and(hair, mask)
-        hair = cv2.GaussianBlur(hair, (0, 0), 1.2)
+        _, hair = cv2.threshold(noise, 160, 255, cv2.THRESH_BINARY)
+        hair_mask = cv2.bitwise_and(hair, mask)
+        hair_mask = cv2.GaussianBlur(hair_mask, (3, 3), 0)
+        
+        alpha = (float(intensity) / 100.0) * 0.9
+        hair_f = hair_mask.astype(np.float32) / 255.0
+        blend_alpha = hair_f[..., None] * alpha
+        tint = np.zeros_like(image_bgr, dtype=np.float32)
+        tint[:] = (30.0, 30.0, 30.0) 
+        
+        out = image_bgr.astype(np.float32) * (1.0 - blend_alpha) + tint * blend_alpha
+        return np.clip(out, 0, 255).astype(np.uint8)
+    except:
+        return image_bgr
 
-        beard_color = np.zeros_like(image_bgr)
-        beard_color[:, :] = (25, 35, 45)
-
-        alpha_map = (hair.astype(np.float32) / 255.0) * alpha * 0.8
-        alpha_map = alpha_map[..., None]
-        blended = image_bgr.astype(np.float32) * (1.0 - alpha_map) + beard_color.astype(np.float32) * alpha_map
-        return np.clip(blended, 0, 255).astype(np.uint8)
-    except Exception as exc:
-        logger.error("apply_beard failed: %s – returning original image", exc)
-        return image_bgr.copy()
-
+def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None: return image_bgr
+            
+        jaw_idx = [132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361]
+        lb_idx = [291, 375, 321, 405, 314, 17, 84, 181, 91, 146, 61]
+        pts_list = []
+        for i in (jaw_idx + lb_idx):
+            pts_list.append((int(lm[i][0]), int(lm[i][1])))
+        pts = np.array(pts_list, dtype=np.int32)
+        
+        h, w = image_bgr.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [pts], 255)
+        
+        noise = np.zeros((h, w), dtype=np.uint8)
+        cv2.randu(noise, 0, 255)
+        _, hair = cv2.threshold(noise, 160, 255, cv2.THRESH_BINARY)
+        hair_mask = cv2.bitwise_and(hair, mask)
+        hair_mask = cv2.GaussianBlur(hair_mask, (3, 3), 0)
+        
+        alpha = (float(intensity) / 100.0) * 0.9
+        hair_f = hair_mask.astype(np.float32) / 255.0
+        blend_alpha = hair_f[..., None] * alpha
+        tint = np.zeros_like(image_bgr, dtype=np.float32)
+        tint[:] = (30.0, 30.0, 30.0)
+        
+        out = image_bgr.astype(np.float32) * (1.0 - blend_alpha) + tint * blend_alpha
+        return np.clip(out, 0, 255).astype(np.uint8)
+    except:
+        return image_bgr

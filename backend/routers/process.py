@@ -21,11 +21,14 @@ try:
     from modules.input_module import get_landmarks, preprocess_image
     from modules.metrics_module import compute_mse, compute_psnr, compute_ssim
     from modules.warping_module import (
+        apply_emoji_preset,
         apply_eyebrow_raise,
         apply_face_slim,
         apply_lip_widen,
         apply_smile,
     )
+    from modules.warping_module import apply_beard as warping_apply_beard
+    from modules.warping_module import apply_mustache as warping_apply_mustache
 except ModuleNotFoundError:
     from backend.modules.frequency_module import (
         apply_aging,
@@ -43,11 +46,14 @@ except ModuleNotFoundError:
     from backend.modules.input_module import get_landmarks, preprocess_image
     from backend.modules.metrics_module import compute_mse, compute_psnr, compute_ssim
     from backend.modules.warping_module import (
+        apply_emoji_preset,
         apply_eyebrow_raise,
         apply_face_slim,
         apply_lip_widen,
         apply_smile,
     )
+    from backend.modules.warping_module import apply_beard as warping_apply_beard
+    from backend.modules.warping_module import apply_mustache as warping_apply_mustache
 
 router = APIRouter()
 logger = logging.getLogger("facial_pipeline.process")
@@ -432,6 +438,71 @@ async def process_eye_size(
             energy=energy,
         )
 
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/process/emoji-preset")
+async def process_emoji_preset(
+    image: UploadFile = File(...),
+    emoji_type: str = Form("neutral"),
+):
+    """
+    Rol 5'ten gelen emoji / ifade adına göre EMOJI_PRESETS parametrelerini uygular
+    (happy, surprised, joyful, neutral veya Türkçe alias: mutlu, şaşkın, sevinçli, nötr).
+    """
+    try:
+        contents = await image.read()
+        original = _decode_upload(contents)
+        processed = apply_emoji_preset(original, emoji_type)
+        metrics = _metrics_dict(original, processed)
+        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
+        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+        orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
+        proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+        energy = compute_energy_analysis(processed, radius=30)
+        return _response_payload(
+            image_b64=_data_url_from_image(processed),
+            metrics=metrics,
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
+            energy=energy,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/process/warp-facial-hair")
+async def process_warp_facial_hair(
+    image: UploadFile = File(...),
+    style: str = Form("beard"),
+    intensity: float = Form(50),
+):
+    """
+    Rol 2: gürültü tabanlı sakal/bıyık (warping_module — cv2.randu + blur + threshold + alpha).
+    Mevcut /process/beard (Rol 4 cilt tonu) ile ayrı; A/B test için kullanılabilir.
+    """
+    try:
+        contents = await image.read()
+        original = _decode_upload(contents)
+        st = (style or "beard").strip().lower()
+        ix = int(round(max(0.0, min(100.0, float(intensity)))))
+        if st == "mustache":
+            processed = warping_apply_mustache(original, ix)
+        else:
+            processed = warping_apply_beard(original, ix)
+        metrics = _metrics_dict(original, processed)
+        return _response_payload(
+            image_b64=_data_url_from_image(processed),
+            metrics=metrics,
+            orig_spectrum_b64=None,
+            proc_spectrum_b64=None,
+            energy=None,
+        )
     except HTTPException:
         raise
     except Exception as exc:
