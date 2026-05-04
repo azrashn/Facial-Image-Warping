@@ -269,10 +269,10 @@ def _face_scale(lm: np.ndarray) -> float:
 
 def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     """
-    Görev 1 Düzeltmesi: Add Smile (Smooth RBF Falloff).
-    Dudak köşelerini sadece dikey (dy) yönde yukarı kaldırır (dx=0).
-    Mesh yırtılmasını (tearing/dimples) engellemek için geniş bir Gaussian (RBF) falloff kullanılır.
-    Çene, burun ve gözler gibi uzak noktalar (anchor points) tamamen sabit kalır.
+    Görev 3 Düzeltmesi: Natural Smile (Diagonal Displacement & Wide Falloff).
+    Dudak köşelerini sadece dikey değil, elmacık kemiklerine doğru çapraz (yukarı ve dışa) çeker.
+    Yanak kaslarının da harekete katılması için etki alanı (sigma) genişletilmiştir.
+    Burun ucu, çene altı ve göz altları gibi kilit noktalar sabitlenerek yırtılma engellenir.
     """
     try:
         lm = detect_face_landmarks(image_bgr)
@@ -283,29 +283,51 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         deltas = np.zeros_like(lm)
         face_sz = _face_scale(lm)
         
-        # Smooth Stretching (RBF Falloff): Yırtılmayı önlemek için yumuşak ve geniş bir geçiş
-        sigma = face_sz * 0.15
+        # Etki Alanını Genişlet: Yanak kasları ve çevresinin harekete dahil olması için sigma büyütüldü
+        sigma = face_sz * 0.25
         
+        # 61: Sol dudak köşesi, 291: Sağ dudak köşesi
         w_left = _gaussian_falloff(lm, 61, sigma)
         w_right = _gaussian_falloff(lm, 291, sigma)
         
         center_x = (lm[61, 0] + lm[291, 0]) / 2.0
         half_width = abs(lm[291, 0] - lm[61, 0]) / 2.0 + 1e-6
         
+        # Çapraz hareket katsayıları (Elmacık kemiklerine doğru: X'te dışarı, Y'de yukarı)
+        move_x = px * 0.6  # Dışa doğru genişleme (X ekseni)
+        move_y = px * 1.0  # Yukarı kaldırma (Y ekseni)
+        
         for i in range(len(lm)):
-            # Sadece Yukarı (Minimal Genişleme): dx = 0, sadece dy = -px
-            dy_left = w_left[i] * (-px)
-            dy_right = w_right[i] * (-px)
+            # Sol köşe (61) için: dx negatif (sola), dy negatif (yukarı)
+            dx_left = w_left[i] * (-move_x)
+            dy_left = w_left[i] * (-move_y)
             
-            # Kademeli Kavis ve Merkez Koruması: Dudak merkezinin yukarı katlanmasını önle
+            # Sağ köşe (291) için: dx pozitif (sağa), dy negatif (yukarı)
+            dx_right = w_right[i] * (move_x)
+            dy_right = w_right[i] * (-move_y)
+            
+            # Merkezdeki (dudak ortası) piksellerin yukarı katlanmasını (Joker efekti) önle
             dist_to_center_x = abs(lm[i, 0] - center_x)
-            dy_damp = 1.0 - np.exp(-0.5 * (dist_to_center_x / (half_width * 0.4)) ** 2)
+            dy_damp = 1.0 - np.exp(-0.5 * (dist_to_center_x / (half_width * 0.6)) ** 2)
             
-            # Displacement uygulaması
+            # Displacement uygulaması (Hem X hem Y ekseni)
+            deltas[i, 0] += (dx_left + dx_right)
             deltas[i, 1] += (dy_left + dy_right) * dy_damp
             
-        # Anchor noktaları korumak için, çok düşük (ihmal edilebilir) hareketleri tam 0'a çekiyoruz
-        # Böylece çene, burun ve gözler (uzak noktalar) KESİNLİKLE sabit kalır.
+        # Sabitlenecek Sınır Noktaları (Anchor Points) - Keskin bükülmeleri engeller
+        anchor_points = [
+            # Burun Ucu ve Çevresi
+            1, 4, 5, 19, 94,
+            # Göz Altları
+            111, 117, 118, 119, 340, 346, 347, 348,
+            # Çene Altı ve Dış Hatlar
+            152, 148, 176, 149, 150, 377, 400, 378, 379, 365
+        ]
+        
+        for idx in anchor_points:
+            deltas[idx] = 0.0
+            
+        # Anchor noktalarını korumak için, çok düşük (ihmal edilebilir) hareketleri tam 0'a çekiyoruz
         deltas[np.abs(deltas) < 0.1] = 0.0
             
         return _prepare_warp(image_bgr, lm, deltas)
@@ -481,8 +503,10 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
 
 def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     """
-    Radial eye scaling from the eye-corner center.
-    intensity > 0 enlarges, intensity < 0 shrinks.
+    Görev 2 Düzeltmesi: Radial Eye Scaling (Smooth Falloff & Anchors).
+    Gözleri kendi merkezlerinden orantılı şekilde büyütür/küçültür.
+    Geniş bir Gauss ağırlığı (falloff) kullanarak çevresel piksellerin yırtılmasını önler.
+    Kaş, burun köprüsü ve yanak üstü gibi anchor noktalar KESİNLİKLE sabitlenir.
     """
     try:
         lm = detect_face_landmarks(image_bgr)
@@ -491,16 +515,49 @@ def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
 
         factor = max(-1.0, min(1.0, float(intensity) / 100.0))
         deltas = np.zeros_like(lm)
+        face_sz = _face_scale(lm)
 
-        eye_corner_idx = np.array([33, 133, 362, 263], dtype=np.int32)
-        center = np.mean(lm[eye_corner_idx], axis=0)
-        eye_ring = [
-            33, 133, 160, 158, 153, 144, 159, 145,
-            362, 263, 387, 385, 380, 373, 386, 374,
+        left_eye_ring = [33, 133, 160, 158, 153, 144, 159, 145]
+        right_eye_ring = [362, 263, 387, 385, 380, 373, 386, 374]
+
+        center_left = np.mean(lm[left_eye_ring], axis=0)
+        center_right = np.mean(lm[right_eye_ring], axis=0)
+
+        # Yumuşak geçiş için Gauss sigma (etki alanı)
+        sigma = face_sz * 0.12
+
+        def custom_falloff(points, center, sig):
+            dists = np.linalg.norm(points - center, axis=1)
+            return np.exp(-0.5 * (dists / max(sig, 1e-6)) ** 2)
+
+        w_left = custom_falloff(lm, center_left, sigma)
+        w_right = custom_falloff(lm, center_right, sigma)
+
+        for i in range(len(lm)):
+            disp_left = (lm[i] - center_left) * factor * w_left[i]
+            disp_right = (lm[i] - center_right) * factor * w_right[i]
+            deltas[i] += disp_left + disp_right
+
+        # Sınırlandırma (Anchor Points) - kesinlikle hareket etmeyecek bölgeler
+        anchor_points = [
+            # Kaşlar (Eyebrows)
+            70, 63, 105, 66, 107, 46, 53, 52, 65, 55,
+            300, 293, 334, 296, 336, 276, 283, 282, 295, 285,
+            # Burun köprüsü (Nose bridge)
+            168, 6, 197, 195, 5, 4,
+            # Elmacık kemiği üstü (Upper cheekbones)
+            116, 117, 118, 119, 100, 101, 345, 346, 347, 348, 329, 330,
+            # Dış hatlar / Çene (Jaw / Outer contour)
+            10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+            361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+            176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+            162, 21, 54, 103, 67, 109
         ]
-        for idx in eye_ring:
-            displacement = (lm[idx] - center) * factor
-            deltas[idx] += displacement
+        for idx in anchor_points:
+            deltas[idx] = 0.0
+
+        # Anchor noktalarını korumak için, çok düşük (ihmal edilebilir) hareketleri tam 0'a çekiyoruz
+        deltas[np.abs(deltas) < 0.1] = 0.0
 
         return _prepare_warp(image_bgr, lm, deltas)
     except Exception as exc:
@@ -534,7 +591,10 @@ def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
 
 def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     """
-    Generate a noise-based beard/mustache texture and blend it on lower face.
+    Görev 5 Düzeltmesi: Ultimate Facial Hair (Multiply Blend & Normalized Mask).
+    Sakal/Bıyık dokusunu fiziksel olarak koyulaştırmak için Multiply Blend kullanır.
+    Maskeyi cv2.normalize ile [0,1] aralığına tam yayarak şeffaflığı tamamen ortadan kaldırır.
+    Alttaki deri rengini "yutmak" yerine direkt olarak cilt piksellerini karartır.
     """
     try:
         lm = detect_face_landmarks(image_bgr)
@@ -552,19 +612,48 @@ def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         mask = np.zeros((h, w), dtype=np.uint8)
         cv2.fillPoly(mask, [beard_poly], 255)
 
+        # Gürültü matrisi (Noise pattern) oluştur
         noise = np.zeros((h, w), dtype=np.uint8)
         cv2.randu(noise, 0, 255)
-        noise = cv2.GaussianBlur(noise, (0, 0), 2.2)
-        _, hair = cv2.threshold(noise, 145, 255, cv2.THRESH_BINARY)
+        
+        # Daha gür ve kalın kıl kökleri için noise'u hafif büyütüp tekrar orijinal boyuta al
+        noise_small = cv2.resize(noise, (w // 2, h // 2))
+        noise = cv2.resize(noise_small, (w, h), interpolation=cv2.INTER_LINEAR)
+        
+        # 1. Maskeyi Keskinleştir (Thresholding & Normalization)
+        # Sıkı bir threshold ile kıl köklerini seç
+        _, hair = cv2.threshold(noise, 170, 255, cv2.THRESH_BINARY)
         hair = cv2.bitwise_and(hair, mask)
-        hair = cv2.GaussianBlur(hair, (0, 0), 1.2)
-
-        beard_color = np.zeros_like(image_bgr)
-        beard_color[:, :] = (25, 35, 45)
-
-        alpha_map = (hair.astype(np.float32) / 255.0) * alpha * 0.8
-        alpha_map = alpha_map[..., None]
-        blended = image_bgr.astype(np.float32) * (1.0 - alpha_map) + beard_color.astype(np.float32) * alpha_map
+        
+        # Kıl sınırlarını hafif yumuşat (aliasing olmasın diye)
+        hair = cv2.GaussianBlur(hair, (0, 0), 0.8)
+        
+        # Maskeyi [0, 1] aralığına tam olarak yay (cv2.normalize)
+        hair_float = np.zeros((h, w), dtype=np.float32)
+        cv2.normalize(hair.astype(np.float32), hair_float, 0.0, 1.0, cv2.NORM_MINMAX)
+        
+        # Alpha (Intensity) değerini direkt olarak harmanlama gücü olarak kullan
+        # %100 seçildiğinde maske içindeki pikseli maksimum oranda etkileyecek
+        blend_power = np.clip(alpha * 1.5, 0.0, 1.0)
+        
+        # Etkili Maske (Effective Mask)
+        effective_mask = hair_float * blend_power
+        effective_mask = effective_mask[..., None] # 3 kanala uygulamak için genişlet
+        
+        image_float = image_bgr.astype(np.float32)
+        
+        # 1 & 2. Çok Koyu Sabit Renk ve Gerçek Multiply Blend Modu
+        # Sakal eklenecek bölgeyi gri bir sis yapmak yerine, maskenin gücüne göre
+        # cildi RGB(20, 20, 20) rengi ile matematiksel olarak çarpıyoruz.
+        beard_color = np.array([20.0, 20.0, 20.0], dtype=np.float32)
+        
+        # Multiply mantığı: (Cilt * Sakal Rengi) / 255. 
+        # Sakal rengi çok düşük olduğu için cilt pikselleri kapkara ama dokulu kalır.
+        multiply_blend = image_float * (beard_color / 255.0)
+        
+        # Maskenin olduğu (kıl kökleri) yerde karanlık multiply_blend, olmadığı yerde orijinal cilt
+        blended = image_float * (1.0 - effective_mask) + multiply_blend * effective_mask
+        
         return np.clip(blended, 0, 255).astype(np.uint8)
     except Exception as exc:
         logger.error("apply_beard failed: %s – returning original image", exc)
