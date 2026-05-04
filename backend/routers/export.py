@@ -36,10 +36,20 @@ async def export_csv() -> Response:
     )
 
 
-@router.get("/pdf")
-async def export_pdf() -> Response:
-    """Export a simple image processing report as a PDF attachment."""
-    rows = _sample_metrics()
+import base64
+import os
+import tempfile
+from fastapi import Form
+
+@router.post("/pdf")
+async def export_pdf(
+    before_image: str = Form(...),
+    after_image: str = Form(...),
+    mse: float = Form(0.0),
+    psnr: float = Form(0.0),
+    ssim: float = Form(0.0),
+) -> Response:
+    """Export an image processing report with before/after images as a PDF attachment."""
     try:
         from fpdf import FPDF
     except ImportError as exc:
@@ -52,30 +62,44 @@ async def export_pdf() -> Response:
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, "Image Processing Report", ln=True)
+    pdf.cell(0, 10, "Image Processing Report", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(50, 8, "MSE", border=1, align="C")
     pdf.cell(50, 8, "PSNR", border=1, align="C")
-    pdf.cell(50, 8, "SSIM", border=1, align="C", ln=True)
+    pdf.cell(50, 8, "SSIM", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_font("Helvetica", size=11)
-    for mse, psnr, ssim in rows:
-        pdf.cell(50, 8, f"{mse:.2f}", border=1, align="C")
-        pdf.cell(50, 8, f"{psnr:.2f}", border=1, align="C")
-        pdf.cell(50, 8, f"{ssim:.2f}", border=1, align="C", ln=True)
+    pdf.cell(50, 8, f"{mse:.2f}", border=1, align="C")
+    pdf.cell(50, 8, f"{psnr:.2f}", border=1, align="C")
+    pdf.cell(50, 8, f"{ssim:.2f}", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(8)
-    pdf.set_font("Helvetica", size=11)
-    pdf.multi_cell(
-        0,
-        8,
-        "Placeholder for input/output visual examples.\n"
-        "Image previews can be added here in a later integration step.",
-    )
+    
+    def decode_b64(b64_str, filename):
+        if "," in b64_str:
+            b64_str = b64_str.split(",")[1]
+        with open(filename, "wb") as f:
+            f.write(base64.b64decode(b64_str))
 
-    pdf_bytes = bytes(pdf.output(dest="S"))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        before_path = os.path.join(tmpdir, "before.png")
+        after_path = os.path.join(tmpdir, "after.png")
+        
+        decode_b64(before_image, before_path)
+        decode_b64(after_image, after_path)
+        
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(90, 10, "Before", align="C")
+        pdf.cell(90, 10, "After", align="C", new_x="LMARGIN", new_y="NEXT")
+        
+        # Add images side by side
+        y_pos = pdf.get_y()
+        pdf.image(before_path, x=15, y=y_pos, w=80)
+        pdf.image(after_path, x=105, y=y_pos, w=80)
+
+    pdf_bytes = bytes(pdf.output())
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
