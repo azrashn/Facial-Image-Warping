@@ -152,20 +152,50 @@ def _prepare_warp(
 
 
 def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
-    """FR-12: ağız köşelerini yukarı/yanlara."""
-    lm = detect_face_landmarks(image_bgr)
-    if lm is None:
-        return image_bgr
-    a = _clamp_intensity(intensity)
-    d = np.zeros_like(lm)
-    up = 5.0 * a
-    out_x = 3.0 * a
-    for idx, sx in ((61, -1), (291, 1)):
-        d[idx, 1] -= up
-        d[idx, 0] += sx * out_x
-    for idx in (39, 269):
-        d[idx, 1] -= 2.0 * a
-    return _prepare_warp(image_bgr, lm, d)
+    """
+    Görev 1 Düzeltmesi: Add Smile (Smooth RBF Falloff).
+    Dudak köşelerini sadece dikey (dy) yönde yukarı kaldırır (dx=0).
+    Mesh yırtılmasını (tearing/dimples) engellemek için geniş bir Gaussian (RBF) falloff kullanılır.
+    Çene, burun ve gözler gibi uzak noktalar (anchor points) tamamen sabit kalır.
+    """
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None:
+            return image_bgr
+            
+        px = float(intensity)
+        deltas = np.zeros_like(lm)
+        face_sz = _face_scale(lm)
+        
+        # Smooth Stretching (RBF Falloff): Yırtılmayı önlemek için yumuşak ve geniş bir geçiş
+        sigma = face_sz * 0.15
+        
+        w_left = _gaussian_falloff(lm, 61, sigma)
+        w_right = _gaussian_falloff(lm, 291, sigma)
+        
+        center_x = (lm[61, 0] + lm[291, 0]) / 2.0
+        half_width = abs(lm[291, 0] - lm[61, 0]) / 2.0 + 1e-6
+        
+        for i in range(len(lm)):
+            # Sadece Yukarı (Minimal Genişleme): dx = 0, sadece dy = -px
+            dy_left = w_left[i] * (-px)
+            dy_right = w_right[i] * (-px)
+            
+            # Kademeli Kavis ve Merkez Koruması: Dudak merkezinin yukarı katlanmasını önle
+            dist_to_center_x = abs(lm[i, 0] - center_x)
+            dy_damp = 1.0 - np.exp(-0.5 * (dist_to_center_x / (half_width * 0.4)) ** 2)
+            
+            # Displacement uygulaması
+            deltas[i, 1] += (dy_left + dy_right) * dy_damp
+            
+        # Anchor noktaları korumak için, çok düşük (ihmal edilebilir) hareketleri tam 0'a çekiyoruz
+        # Böylece çene, burun ve gözler (uzak noktalar) KESİNLİKLE sabit kalır.
+        deltas[np.abs(deltas) < 0.1] = 0.0
+            
+        return _prepare_warp(image_bgr, lm, deltas)
+    except Exception as exc:
+        logger.error("apply_smile failed: %s", exc)
+        return image_bgr.copy()
 
 
 def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
@@ -184,17 +214,38 @@ def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
 
 
 def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
-    """FR-16: dudakları yatay genişlet."""
-    lm = detect_face_landmarks(image_bgr)
-    if lm is None:
-        return image_bgr
-    a = _clamp_intensity(intensity)
-    d = np.zeros_like(lm)
-    wx = 4.0 * a
-    pairs = [(61, -1), (291, 1), (78, -1), (308, 1), (95, -1), (324, 1)]
-    for idx, sign in pairs:
-        d[idx, 0] += sign * wx
-    return _prepare_warp(image_bgr, lm, d)
+    """
+    Görev 1 Düzeltmesi: Lip Widen (Distance-Based Weighted Displacement).
+    Dudak köşesi etrafındaki noktaları Gauss ağırlığıyla yatayda kaydırarak
+    yırtılmayı (pixel tearing) engeller.
+    """
+    try:
+        lm = detect_face_landmarks(image_bgr)
+        if lm is None:
+            return image_bgr
+            
+        px = float(intensity)
+        deltas = np.zeros_like(lm)
+        face_sz = _face_scale(lm)
+        
+        # Yırtılmayı engellemek için etki yarıçapı artırıldı
+        sigma = face_sz * 0.15
+        
+        w_left = _gaussian_falloff(lm, 61, sigma)
+        w_right = _gaussian_falloff(lm, 291, sigma)
+        
+        for i in range(len(lm)):
+            # Lip Widen: dy=0, dx yatayda genişler
+            # Sol köşe (61) dışa (-x)
+            deltas[i, 0] += w_left[i] * (-px)
+            
+            # Sağ köşe (291) dışa (+x)
+            deltas[i, 0] += w_right[i] * (px)
+            
+        return _prepare_warp(image_bgr, lm, deltas)
+    except Exception as exc:
+        logger.error("apply_lip_widen failed: %s", exc)
+        return image_bgr.copy()
 
 
 def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
