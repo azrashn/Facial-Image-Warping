@@ -810,8 +810,11 @@ body {
 .freq-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-auto-rows: min-content;
   gap: 20px;
   height: 100%;
+  overflow-y: auto;
+  padding-bottom: 20px;
 }
 
 .freq-card {
@@ -823,6 +826,7 @@ body {
   flex-direction: column;
   position: relative;
   overflow: hidden;
+  min-height: 350px; /* Ensure there is enough room for the image */
 }
 
 .freq-title { color: var(--text-primary); margin-bottom: 4px; }
@@ -837,9 +841,17 @@ body {
   position: relative;
   margin: 0 auto;
   aspect-ratio: 1;
+  width: 100%;
   max-width: 100%;
-  border-radius: 50%;
+  border-radius: 8px; /* Changed from 50% so square images are not clipped */
   display: flex; align-items: center; justify-content: center;
+}
+
+.freq-visual img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  border-radius: inherit;
 }
 
 /* Gradient backgrounds mimicking the React codebase */

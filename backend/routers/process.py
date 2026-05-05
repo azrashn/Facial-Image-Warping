@@ -99,6 +99,8 @@ def _response_payload(
     metrics: dict,
     orig_spectrum_b64: str | None = None,
     proc_spectrum_b64: str | None = None,
+    orig_phase_b64: str | None = None,
+    proc_phase_b64: str | None = None,
     energy: dict | None = None,
 ) -> dict:
     return {
@@ -106,8 +108,15 @@ def _response_payload(
         "metrics": metrics,
         "orig_spectrum_b64": orig_spectrum_b64,
         "proc_spectrum_b64": proc_spectrum_b64,
+        "orig_phase_b64": orig_phase_b64,
+        "proc_phase_b64": proc_phase_b64,
         "energy": energy,
     }
+
+def _compute_phase_b64(fft_shifted: np.ndarray) -> str:
+    phase = np.angle(fft_shifted)
+    phase_normalized = cv2.normalize(phase, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    return _data_url_from_image(cv2.cvtColor(phase_normalized, cv2.COLOR_GRAY2BGR))
 
 
 @router.post("/process/warp")
@@ -147,11 +156,17 @@ async def process_warp(
 
         metrics = _metrics_dict(original, processed)
 
-        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
-        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+        orig_fft_shifted = compute_fft(original)[2]
+        proc_fft_shifted = compute_fft(processed)[2]
+
+        orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
+        proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
 
         orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
         proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
+        orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
+        proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
 
         energy = compute_energy_analysis(
             processed,
@@ -163,6 +178,8 @@ async def process_warp(
             metrics=metrics,
             orig_spectrum_b64=orig_spectrum_b64,
             proc_spectrum_b64=proc_spectrum_b64,
+            orig_phase_b64=orig_phase_b64,
+            proc_phase_b64=proc_phase_b64,
             energy=energy,
         )
 
@@ -225,16 +242,17 @@ async def process_age(
 
         metrics = _metrics_dict(original_for_metrics, processed)
 
-        orig_spectrum = compute_magnitude_spectrum(
-            compute_fft(original_for_metrics)[2]
-        )
+        orig_fft_shifted = compute_fft(original_for_metrics)[2]
+        orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
+        orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
 
         if op == "fft":
             proc_spectrum = spectrum
+            proc_phase_b64 = _compute_phase_b64(processed_fft)
         else:
-            proc_spectrum = compute_magnitude_spectrum(
-                compute_fft(processed)[2]
-            )
+            proc_fft_shifted = compute_fft(processed)[2]
+            proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
+            proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
 
         orig_spectrum_b64 = _data_url_from_image(
             cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR)
@@ -249,6 +267,8 @@ async def process_age(
             metrics=metrics,
             orig_spectrum_b64=orig_spectrum_b64,
             proc_spectrum_b64=proc_spectrum_b64,
+            orig_phase_b64=orig_phase_b64,
+            proc_phase_b64=proc_phase_b64,
             energy=energy,
         )
 
@@ -270,11 +290,17 @@ async def process_cartoon(
         processed = apply_cartoon_filter(original)
         metrics = _metrics_dict(original, processed)
 
-        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
-        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+        orig_fft_shifted = compute_fft(original)[2]
+        proc_fft_shifted = compute_fft(processed)[2]
+
+        orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
+        proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
 
         orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
         proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
+        orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
+        proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
 
         energy = compute_energy_analysis(processed, radius=30)
 
@@ -283,6 +309,8 @@ async def process_cartoon(
             metrics=metrics,
             orig_spectrum_b64=orig_spectrum_b64,
             proc_spectrum_b64=proc_spectrum_b64,
+            orig_phase_b64=orig_phase_b64,
+            proc_phase_b64=proc_phase_b64,
             energy=energy,
         )
 
@@ -317,11 +345,17 @@ async def process_makeup(
 
         metrics = _metrics_dict(original, processed)
 
-        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
-        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+        orig_fft_shifted = compute_fft(original)[2]
+        proc_fft_shifted = compute_fft(processed)[2]
+
+        orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
+        proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
 
         orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
         proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
+        orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
+        proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
 
         energy = compute_energy_analysis(processed, radius=30)
 
@@ -330,6 +364,8 @@ async def process_makeup(
             metrics=metrics,
             orig_spectrum_b64=orig_spectrum_b64,
             proc_spectrum_b64=proc_spectrum_b64,
+            orig_phase_b64=orig_phase_b64,
+            proc_phase_b64=proc_phase_b64,
             energy=energy,
         )
 
@@ -416,11 +452,17 @@ async def process_eye_size(
 
         metrics = _metrics_dict(original, processed)
 
-        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
-        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+        orig_fft_shifted = compute_fft(original)[2]
+        proc_fft_shifted = compute_fft(processed)[2]
+
+        orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
+        proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
 
         orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
         proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
+        orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
+        proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
 
         energy = compute_energy_analysis(processed, radius=30)
 
@@ -429,6 +471,8 @@ async def process_eye_size(
             metrics=metrics,
             orig_spectrum_b64=orig_spectrum_b64,
             proc_spectrum_b64=proc_spectrum_b64,
+            orig_phase_b64=orig_phase_b64,
+            proc_phase_b64=proc_phase_b64,
             energy=energy,
         )
 

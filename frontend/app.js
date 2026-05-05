@@ -214,6 +214,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const landmarksSvg = document.getElementById('landmarksSvg');
     const origSpectrumImg = document.getElementById('origSpectrumImg');
     const procSpectrumImg = document.getElementById('procSpectrumImg');
+    const origPhaseImg = document.getElementById('origPhaseImg');
+    const procPhaseImg = document.getElementById('procPhaseImg');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -312,7 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
         landmarksOnlyImg.style.display = 'none';
         landmarksOnlySvg.style.display = 'none';
         landmarksPlaceholder.style.display = 'block';
-        setSpectrumImages(null, null);
+        setSpectrumImages(null, null, null, null);
 
         // Reset analysis summary
         analysisSummary.innerHTML = '';
@@ -362,7 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Auto draw landmarks if toggled
         if (toggleLandmarks.checked) generateLandmarks();
-        setSpectrumImages(null, null);
+        setSpectrumImages(null, null, null, null);
     }
 
     function handleFile(file) {
@@ -693,7 +695,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- 8. APPLY TRANSFORMATION & REAL API ---
 
-    function setSpectrumImages(origSpectrumB64, procSpectrumB64) {
+    function setSpectrumImages(origSpectrumB64, procSpectrumB64, origPhaseB64, procPhaseB64) {
         if (origSpectrumB64 && origSpectrumImg) {
             origSpectrumImg.src = origSpectrumB64;
             origSpectrumImg.style.display = 'block';
@@ -708,6 +710,22 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (procSpectrumImg) {
             procSpectrumImg.src = '';
             procSpectrumImg.style.display = 'none';
+        }
+
+        if (origPhaseB64 && origPhaseImg) {
+            origPhaseImg.src = origPhaseB64;
+            origPhaseImg.style.display = 'block';
+        } else if (origPhaseImg) {
+            origPhaseImg.src = '';
+            origPhaseImg.style.display = 'none';
+        }
+
+        if (procPhaseB64 && procPhaseImg) {
+            procPhaseImg.src = procPhaseB64;
+            procPhaseImg.style.display = 'block';
+        } else if (procPhaseImg) {
+            procPhaseImg.src = '';
+            procPhaseImg.style.display = 'none';
         }
     }
 
@@ -800,7 +818,12 @@ document.addEventListener('DOMContentLoaded', () => {
             landmarksOnlyImg.src = currentProcessedImage;
 
             updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
-            setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+            setSpectrumImages(
+                payload.orig_spectrum_b64 || null,
+                payload.proc_spectrum_b64 || null,
+                payload.orig_phase_b64 || null,
+                payload.proc_phase_b64 || null
+            );
 
             const opButton = document.querySelector(`.op-btn[data-op="${selectedOperation}"]`);
             const opTitle = opButton
@@ -1392,7 +1415,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (y > 200) { doc.addPage(); y = 15; }
                 doc.setFontSize(14);
                 doc.setFont('helvetica', 'bold');
-                doc.text('FFT Spectrum', 15, y);
+                doc.text('FFT Magnitude Spectrum', 15, y);
                 y += 5;
                 const specW = 80, specH = 80;
                 if (origSpec) {
@@ -1400,6 +1423,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (procSpec) {
                     doc.addImage(procSpec.data, procSpec.format, 110, y, specW, specH);
+                }
+                y += specH + 10;
+            }
+
+            // ── Phase Images (if available) ──
+            const origPhase = splitDataUrl(origPhaseImg?.src);
+            const procPhase = splitDataUrl(procPhaseImg?.src);
+            if (origPhase || procPhase) {
+                if (y > 200) { doc.addPage(); y = 15; }
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text('FFT Phase Spectrum', 15, y);
+                y += 5;
+                const specW = 80, specH = 80;
+                if (origPhase) {
+                    doc.addImage(origPhase.data, origPhase.format, 15, y, specW, specH);
+                }
+                if (procPhase) {
+                    doc.addImage(procPhase.data, procPhase.format, 110, y, specW, specH);
                 }
             }
 
