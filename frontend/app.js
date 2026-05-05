@@ -94,7 +94,14 @@ document.addEventListener('DOMContentLoaded', () => {
             glassesType: "Gözlük Türü",
             sunglasses: "Güneş Gözlüğü",
             readingGlasses: "Numaralı Gözlük",
-            applyGlasses: "Gözlük Uygula"
+            applyGlasses: "Gözlük Uygula",
+            // Emoji Presets
+            presetAlien: "Uzaylı",
+            presetRobot: "Robot",
+            presetAngry: "Kızgın",
+            presetCold: "Soğuk",
+            presetHeartEyes: "Aşık",
+            presetCrying: "Ağlayan"
         },
         EN: {
             dropImage: "Drop image here",
@@ -173,7 +180,14 @@ document.addEventListener('DOMContentLoaded', () => {
             glassesType: "Glasses Type",
             sunglasses: "Sunglasses",
             readingGlasses: "Reading Glasses",
-            applyGlasses: "Apply Glasses"
+            applyGlasses: "Apply Glasses",
+            // Emoji Presets
+            presetAlien: "Alien",
+            presetRobot: "Robot",
+            presetAngry: "Angry",
+            presetCold: "Cold",
+            presetHeartEyes: "Heart-Eyes",
+            presetCrying: "Crying"
         }
     };
 
@@ -916,28 +930,71 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- 9.5. NEW UI INTEGRATIONS ---
 
-    // Emoji Buttons
-    const emojiButtons = document.querySelectorAll('.emoji-btn');
-    emojiButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const op = btn.dataset.op;
-            const intensity = btn.dataset.intensity;
+    // --- Emoji Preset Buttons (6 specific presets → /process/emoji-preset) ---
+    const emojiPresetNames = [
+        { id: 'btnPresetAlien',    preset: 'alien',      labelKey: 'presetAlien' },
+        { id: 'btnPresetRobot',    preset: 'robot',      labelKey: 'presetRobot' },
+        { id: 'btnPresetAngry',    preset: 'angry',      labelKey: 'presetAngry' },
+        { id: 'btnPresetCold',     preset: 'cold',       labelKey: 'presetCold' },
+        { id: 'btnPresetHeartEyes',preset: 'heart_eyes',  labelKey: 'presetHeartEyes' },
+        { id: 'btnPresetCrying',   preset: 'crying',     labelKey: 'presetCrying' },
+    ];
 
-            // Set operation
-            opButtons.forEach(b => b.classList.remove('active'));
-            const targetOpBtn = document.querySelector(`.op-btn[data-op="${op}"]`);
-            if (targetOpBtn) targetOpBtn.classList.add('active');
-            selectedOperation = op;
+    async function applyEmojiPreset(presetName, labelKey) {
+        if (!currentOriginalImage) return;
 
-            // Set intensity
-            intensitySlider.value = intensity;
-            intensityValue.textContent = intensity + '%';
+        // Highlight the clicked button
+        document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
+        const clickedBtn = document.querySelector(`[data-preset="${presetName}"]`);
+        if (clickedBtn) clickedBtn.classList.add('active');
 
-            // Trigger apply
-            if (!applyBtn.disabled) {
-                applyBtn.click();
-            }
-        });
+        loadingOverlay.style.display = 'flex';
+
+        try {
+            const response = await fetch(`${API_BASE}/process/emoji-preset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    image_b64: currentOriginalImage,
+                    preset_name: presetName,
+                }),
+            });
+
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload?.detail || 'Emoji preset failed.');
+
+            if (!payload?.image_b64) throw new Error('Missing image_b64 in response.');
+
+            currentProcessedImage = payload.image_b64;
+            afterImg.src = currentProcessedImage;
+            landmarksOnlyImg.src = currentProcessedImage;
+
+            updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+            setSpectrumImages(
+                payload.orig_spectrum_b64 || null,
+                payload.proc_spectrum_b64 || null,
+                payload.orig_phase_b64 || null,
+                payload.proc_phase_b64 || null
+            );
+
+            const label = i18n[currentLang]?.[labelKey] || presetName;
+            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Emoji Preset: ${label}.`;
+            addHistory(`Emoji: ${label}`);
+
+            if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+        } catch (e) {
+            console.error(`[Emoji Preset: ${presetName}] Error:`, e);
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Emoji preset failed.'}`;
+        } finally {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+
+    emojiPresetNames.forEach(({ id, preset, labelKey }) => {
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.addEventListener('click', () => applyEmojiPreset(preset, labelKey));
+        }
     });
 
     // Makeup

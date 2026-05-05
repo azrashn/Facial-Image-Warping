@@ -1,8 +1,10 @@
+import base64
 import logging
 
 import cv2
 import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 try:
     from modules.frequency_module import (
@@ -22,6 +24,7 @@ try:
     from modules.metrics_module import compute_mse, compute_psnr, compute_ssim
     from modules.warping_module import (
         apply_eyebrow_raise,
+        apply_eye_scaling,
         apply_face_slim,
         apply_lip_widen,
         apply_smile,
@@ -44,6 +47,7 @@ except ModuleNotFoundError:
     from backend.modules.metrics_module import compute_mse, compute_psnr, compute_ssim
     from backend.modules.warping_module import (
         apply_eyebrow_raise,
+        apply_eye_scaling,
         apply_face_slim,
         apply_lip_widen,
         apply_smile,
@@ -709,3 +713,398 @@ async def process_glasses(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# EMOJI PRESET ENDPOINT – 6 modular preset functions
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class EmojiPresetRequest(BaseModel):
+    """JSON body for the emoji-preset endpoint."""
+    image_b64: str
+    preset_name: str
+
+
+def _decode_base64_image(data_url: str) -> np.ndarray:
+    """Decode a data-URL or raw base64 string into a BGR OpenCV image."""
+    if "," in data_url:
+        data_url = data_url.split(",", 1)[1]
+    raw = base64.b64decode(data_url)
+    arr = np.frombuffer(raw, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Could not decode base64 image.")
+    return img
+
+
+def _create_face_overlay_mask(image: np.ndarray, landmarks: list) -> np.ndarray:
+    """
+    Create a simple convex-hull face mask from MediaPipe landmarks.
+    Returns a single-channel float32 mask in [0, 1].
+    """
+    h, w = image.shape[:2]
+    # Use face oval landmarks for the mask (MediaPipe face mesh silhouette)
+    face_oval_idx = [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+        361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+        176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+        162, 21, 54, 103, 67, 109,
+    ]
+    pts = []
+    for idx in face_oval_idx:
+        if idx < len(landmarks):
+            lm = landmarks[idx]
+            pts.append((int(lm["x"] * w), int(lm["y"] * h)))
+    if len(pts) < 3:
+        return np.zeros((h, w), dtype=np.float32)
+    hull = cv2.convexHull(np.array(pts, dtype=np.int32))
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, hull, 255)
+    # Feather the edges
+    mask = cv2.GaussianBlur(mask, (31, 31), 10)
+    return mask.astype(np.float32) / 255.0
+
+
+def _apply_color_overlay(
+    image: np.ndarray,
+    mask: np.ndarray,
+    color_bgr: tuple,
+    opacity: float = 0.35,
+) -> np.ndarray:
+    """
+    Apply a color overlay on the image using the given mask and opacity.
+    Preserves original image details through alpha blending.
+    """
+    overlay = np.full_like(image, color_bgr, dtype=np.uint8)
+    mask_3ch = np.stack([mask, mask, mask], axis=2)
+    blended = image.astype(np.float32) * (1.0 - mask_3ch * opacity) + \
+              overlay.astype(np.float32) * (mask_3ch * opacity)
+    return np.clip(blended, 0, 255).astype(np.uint8)
+
+
+def _color_eye_landmarks(
+    image: np.ndarray,
+    landmarks: list,
+    color_bgr: tuple,
+    radius: int = 4,
+) -> np.ndarray:
+    """Draw filled circles on eye landmarks with the given color."""
+    h, w = image.shape[:2]
+    out = image.copy()
+    # Left eye ring + right eye ring
+    eye_indices = [33, 133, 160, 158, 153, 144, 159, 145,
+                   362, 263, 387, 385, 380, 373, 386, 374]
+    for idx in eye_indices:
+        if idx < len(landmarks):
+            lm = landmarks[idx]
+            cx, cy = int(lm["x"] * w), int(lm["y"] * h)
+            cv2.circle(out, (cx, cy), radius, color_bgr, -1)
+    return out
+
+
+def _get_lip_landmarks_pts(landmarks: list, h: int, w: int) -> np.ndarray:
+    """Extract outer lip landmark pixel positions."""
+    # MediaPipe outer lip indices
+    lip_idx = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291,
+               308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78]
+    pts = []
+    for idx in lip_idx:
+        if idx < len(landmarks):
+            lm = landmarks[idx]
+            pts.append([int(lm["x"] * w), int(lm["y"] * h)])
+    return np.array(pts, dtype=np.int32) if pts else np.array([], dtype=np.int32)
+
+
+def _apply_lip_color(
+    image: np.ndarray,
+    landmarks: list,
+    color_bgr: tuple,
+    opacity: float = 0.45,
+) -> np.ndarray:
+    """Apply color to lips using landmark-based mask."""
+    h, w = image.shape[:2]
+    pts = _get_lip_landmarks_pts(landmarks, h, w)
+    if len(pts) < 3:
+        return image
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [pts], 255)
+    mask = cv2.GaussianBlur(mask, (7, 7), 3)
+    mask_f = mask.astype(np.float32) / 255.0
+    return _apply_color_overlay(image, mask_f, color_bgr, opacity)
+
+
+# ── 1. ALIEN PRESET ──────────────────────────────────────────────────────────
+def _apply_alien(image: np.ndarray) -> np.ndarray:
+    """
+    👽 Alien: Face slim (strong) + Eye enlarge (strong) + bright green overlay.
+    """
+    out = image.copy()
+    # Warping: slim face
+    out = apply_face_slim(out, 80)
+    # Warping: enlarge eyes
+    out = apply_eye_scaling(out, 70)
+
+    # Get landmarks for face mask
+    try:
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        preprocessed = preprocess_image(rgb)
+        landmarks = get_landmarks(preprocessed)
+        face_mask = _create_face_overlay_mask(out, landmarks)
+    except Exception:
+        # Fallback: use entire image with low opacity
+        face_mask = np.ones(out.shape[:2], dtype=np.float32) * 0.5
+
+    # Bright green overlay (BGR)
+    out = _apply_color_overlay(out, face_mask, (0, 255, 0), opacity=0.30)
+    return out
+
+
+# ── 2. ROBOT PRESET ──────────────────────────────────────────────────────────
+def _apply_robot(image: np.ndarray) -> np.ndarray:
+    """
+    🤖 Robot: Flatten mouth + metallic gray/silver overlay + yellow eyes.
+    """
+    out = image.copy()
+
+    # Warping: straighten/flatten mouth by applying inverse lip widen + zero smile
+    out = apply_lip_widen(out, -30)
+    out = apply_smile(out, -20)
+
+    # Get landmarks for face mask and eye coloring
+    try:
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        preprocessed = preprocess_image(rgb)
+        landmarks = get_landmarks(preprocessed)
+        face_mask = _create_face_overlay_mask(out, landmarks)
+    except Exception:
+        face_mask = np.ones(out.shape[:2], dtype=np.float32) * 0.5
+        landmarks = None
+
+    # Metallic gray/silver overlay (BGR)
+    out = _apply_color_overlay(out, face_mask, (192, 192, 192), opacity=0.30)
+
+    # Color eye landmarks bright yellow
+    if landmarks:
+        out = _color_eye_landmarks(out, landmarks, (0, 255, 255), radius=5)
+
+    return out
+
+
+# ── 3. ANGRY PRESET ──────────────────────────────────────────────────────────
+def _apply_angry(image: np.ndarray) -> np.ndarray:
+    """
+    😡 Angry: Eyebrows frown (downward) + bright red face overlay.
+    """
+    out = image.copy()
+
+    # Warping: move eyebrows downward (negative raise = frown)
+    out = apply_eyebrow_raise(out, -70)
+
+    # Get landmarks for face mask
+    try:
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        preprocessed = preprocess_image(rgb)
+        landmarks = get_landmarks(preprocessed)
+        face_mask = _create_face_overlay_mask(out, landmarks)
+    except Exception:
+        face_mask = np.ones(out.shape[:2], dtype=np.float32) * 0.5
+
+    # Bright red overlay (BGR)
+    out = _apply_color_overlay(out, face_mask, (0, 0, 255), opacity=0.30)
+    return out
+
+
+# ── 4. COLD PRESET ───────────────────────────────────────────────────────────
+def _apply_cold(image: np.ndarray) -> np.ndarray:
+    """
+    🥶 Cold: Light blue face overlay + dark blue/purple lip color + eye squint.
+    """
+    out = image.copy()
+
+    # Warping: squint eyes (inverse/negative scaling)
+    out = apply_eye_scaling(out, -40)
+
+    # Get landmarks for face mask and lip color
+    try:
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        preprocessed = preprocess_image(rgb)
+        landmarks = get_landmarks(preprocessed)
+        face_mask = _create_face_overlay_mask(out, landmarks)
+    except Exception:
+        face_mask = np.ones(out.shape[:2], dtype=np.float32) * 0.5
+        landmarks = None
+
+    # Light blue face overlay (BGR)
+    out = _apply_color_overlay(out, face_mask, (255, 200, 150), opacity=0.30)
+
+    # Dark blue/purple lip color
+    if landmarks:
+        out = _apply_lip_color(out, landmarks, (180, 50, 100), opacity=0.50)
+
+    return out
+
+
+# ── 5. HEART-EYES PRESET ─────────────────────────────────────────────────────
+def _apply_heart_eyes(image: np.ndarray) -> np.ndarray:
+    """
+    😍 Heart-Eyes: Eyebrow raise + lip widen + red lip makeup + heart masks.
+    """
+    out = image.copy()
+
+    # Warping: raise eyebrows + widen lips
+    out = apply_eyebrow_raise(out, 60)
+    out = apply_lip_widen(out, 50)
+
+    # Get landmarks for lip color
+    try:
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        preprocessed = preprocess_image(rgb)
+        landmarks = get_landmarks(preprocessed)
+    except Exception:
+        landmarks = None
+
+    # Red lip makeup
+    if landmarks:
+        out = _apply_lip_color(out, landmarks, (0, 0, 255), opacity=0.45)
+
+    # Place heart-shaped masks over the eyes
+    out = _place_heart_masks(out, landmarks)
+    return out
+
+
+def _place_heart_masks(
+    image: np.ndarray,
+    landmarks: list | None,
+) -> np.ndarray:
+    """
+    Place heart-shaped overlays over both eyes.
+
+    ──────────────────────────────────────────────────────────────
+    TODO: Implement complex heart-shape masking logic here.
+
+    Steps to implement:
+    1. Compute the centre of each eye from landmarks.
+    2. Determine the heart size from the inter-eye distance.
+    3. Draw or stamp a heart-shaped polygon/image on each eye.
+    4. Alpha-blend the hearts onto the image.
+    ──────────────────────────────────────────────────────────────
+    """
+    # Skeleton: return image safely without modification
+    return image
+
+
+# ── 6. CRYING PRESET ─────────────────────────────────────────────────────────
+def _apply_crying(image: np.ndarray) -> np.ndarray:
+    """
+    😢 Crying: Eyebrows frown (downward) + mouth frown (curve down) + tears.
+    """
+    out = image.copy()
+
+    # Warping: eyebrows downward (frown)
+    out = apply_eyebrow_raise(out, -50)
+
+    # Warping: mouth frown (negative smile = downward curve)
+    out = apply_smile(out, -60)
+
+    # Get landmarks for tear placement
+    try:
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        preprocessed = preprocess_image(rgb)
+        landmarks = get_landmarks(preprocessed)
+    except Exception:
+        landmarks = None
+
+    # Place tear-drop overlays below each eye
+    out = _place_tear_masks(out, landmarks)
+    return out
+
+
+def _place_tear_masks(
+    image: np.ndarray,
+    landmarks: list | None,
+) -> np.ndarray:
+    """
+    Place tear-drop overlays below each eye.
+
+    ──────────────────────────────────────────────────────────────
+    TODO: Implement complex tear-drop masking logic here.
+
+    Steps to implement:
+    1. Identify the lower-eye landmark positions (indices 145, 374).
+    2. Compute a teardrop path (e.g. Bézier curve) below each eye.
+    3. Draw semi-transparent blue/white teardrop shapes.
+    4. Alpha-blend onto the image.
+    ──────────────────────────────────────────────────────────────
+    """
+    # Skeleton: return image safely without modification
+    return image
+
+
+# ── Preset dispatcher ────────────────────────────────────────────────────────
+_EMOJI_PRESETS_MAP = {
+    "alien": _apply_alien,
+    "robot": _apply_robot,
+    "angry": _apply_angry,
+    "cold": _apply_cold,
+    "heart_eyes": _apply_heart_eyes,
+    "crying": _apply_crying,
+}
+
+
+@router.post("/process/emoji-preset")
+async def process_emoji_preset(body: EmojiPresetRequest):
+    """
+    Apply one of the 6 emoji-themed facial presets to the uploaded image.
+
+    Accepts a JSON body with ``image_b64`` (data-URL or raw base64) and
+    ``preset_name`` (alien | robot | angry | cold | heart_eyes | crying).
+    """
+    preset_key = (body.preset_name or "").strip().lower()
+    preset_fn = _EMOJI_PRESETS_MAP.get(preset_key)
+    if preset_fn is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown emoji preset '{body.preset_name}'. "
+                   f"Valid presets: {', '.join(_EMOJI_PRESETS_MAP.keys())}",
+        )
+
+    try:
+        original = _decode_base64_image(body.image_b64)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Image decode failed: {exc}") from exc
+
+    try:
+        processed = preset_fn(original)
+
+        metrics = _metrics_dict(original, processed)
+
+        orig_fft_shifted = compute_fft(original)[2]
+        proc_fft_shifted = compute_fft(processed)[2]
+
+        orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
+        proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
+
+        orig_spectrum_b64 = _data_url_from_image(
+            cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR)
+        )
+        proc_spectrum_b64 = _data_url_from_image(
+            cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR)
+        )
+
+        orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
+        proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
+
+        return _response_payload(
+            image_b64=_data_url_from_image(processed),
+            metrics=metrics,
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
+            orig_phase_b64=orig_phase_b64,
+            proc_phase_b64=proc_phase_b64,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Emoji preset '%s' failed: %s", preset_key, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
