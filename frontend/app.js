@@ -177,8 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
             startCamera: "Start Camera",
             capturePhoto: "Capture",
             // Eyewear
-            eyewearPanel: "Eyewear",
-            glassesType: "Glasses Type",
+            eyewearPanel: "Accessory",
+            glassesType: "Glasses",
             metalAviator: "Metal Aviator",
             acetateWayfarer: "Acetate Wayfarer",
             minimalistRound: "Minimalist Round",
@@ -588,9 +588,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!imgEl || !svgEl) return;
         const rect = getRenderedImageRect(imgEl);
         svgEl.style.position = 'absolute';
-        svgEl.style.left   = rect.x + 'px';
-        svgEl.style.top    = rect.y + 'px';
-        svgEl.style.width  = rect.w + 'px';
+        svgEl.style.left = rect.x + 'px';
+        svgEl.style.top = rect.y + 'px';
+        svgEl.style.width = rect.w + 'px';
         svgEl.style.height = rect.h + 'px';
     }
 
@@ -934,12 +934,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Emoji Preset Buttons (6 specific presets → /process/emoji-preset) ---
     const emojiPresetNames = [
-        { id: 'btnPresetAlien',    preset: 'alien',      labelKey: 'presetAlien' },
-        { id: 'btnPresetRobot',    preset: 'robot',      labelKey: 'presetRobot' },
-        { id: 'btnPresetAngry',    preset: 'angry',      labelKey: 'presetAngry' },
-        { id: 'btnPresetCold',     preset: 'cold',       labelKey: 'presetCold' },
-        { id: 'btnPresetHeartEyes',preset: 'heart_eyes',  labelKey: 'presetHeartEyes' },
-        { id: 'btnPresetCrying',   preset: 'crying',     labelKey: 'presetCrying' },
+        { id: 'btnPresetAlien', preset: 'alien', labelKey: 'presetAlien' },
+        { id: 'btnPresetRobot', preset: 'robot', labelKey: 'presetRobot' },
+        { id: 'btnPresetAngry', preset: 'angry', labelKey: 'presetAngry' },
+        { id: 'btnPresetCold', preset: 'cold', labelKey: 'presetCold' },
+        { id: 'btnPresetHeartEyes', preset: 'heart_eyes', labelKey: 'presetHeartEyes' },
+        { id: 'btnPresetCrying', preset: 'crying', labelKey: 'presetCrying' },
     ];
 
     async function applyEmojiPreset(presetName, labelKey) {
@@ -1247,7 +1247,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const formData = new FormData();
             formData.append('image', uploadedFile);
             formData.append('scale', eyeSizeSlider.value);
-            
+
             loadingOverlay.style.display = 'flex';
             try {
                 // Backend endpoint
@@ -1284,7 +1284,7 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('style', beardSelect.value);
             formData.append('intensity', intensitySlider.value); // Use global intensity
             formData.append('darkness', beardDarknessSlider.value / 100.0);
-            
+
             loadingOverlay.style.display = 'flex';
             try {
                 // Backend endpoint
@@ -1316,7 +1316,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ageCompareBtn) {
         ageCompareBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage || !currentProcessedImage) return;
-            
+
             loadingOverlay.style.display = 'flex';
             try {
                 // Convert currentProcessedImage (base64) to Blob
@@ -1327,7 +1327,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const formData = new FormData();
                 formData.append('before_image', uploadedFile);
                 formData.append('after_image', afterFile);
-                
+
                 const response = await fetch(`${API_BASE}/process/estimate-age-compare`, { method: 'POST', body: formData });
                 const payload = await response.json();
                 if (!response.ok) throw new Error(payload?.detail || 'Age comparison failed.');
@@ -1494,7 +1494,7 @@ document.addEventListener('DOMContentLoaded', () => {
             doc.setFontSize(11);
             doc.setFont('helvetica', 'normal');
             const metrics = [
-                { label: 'MSE',  value: mseValue.textContent },
+                { label: 'MSE', value: mseValue.textContent },
                 { label: 'PSNR', value: psnrValue.textContent + ' dB' },
                 { label: 'SSIM', value: ssimValue.textContent },
             ];
@@ -1514,7 +1514,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Extract and display the applied operation explicitly
                 const opMatch = summaryText.match(/Applied Emoji Preset:\s*(.+)/i)
-                             || summaryText.match(/Uygulanan .+?:\s*(.+)/i);
+                    || summaryText.match(/Uygulanan .+?:\s*(.+)/i);
                 if (opMatch) {
                     doc.setFontSize(11);
                     doc.setFont('helvetica', 'bold');
