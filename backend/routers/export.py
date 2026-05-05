@@ -56,6 +56,8 @@ class PDFRequest(BaseModel):
     history: Optional[list] = []
     orig_spectrum: Optional[str] = None
     proc_spectrum: Optional[str] = None
+    orig_phase: Optional[str] = None
+    proc_phase: Optional[str] = None
 
 
 def _decode_b64_to_file(b64_str: str, filepath: str) -> None:
@@ -152,7 +154,7 @@ async def export_pdf(payload: PDFRequest) -> StreamingResponse:
             if pdf.get_y() > 180:
                 pdf.add_page()
             pdf.set_font("Helvetica", "B", 12)
-            pdf.cell(0, 8, "FFT Spectrum", new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 8, "FFT Magnitude Spectrum", new_x="LMARGIN", new_y="NEXT")
             spec_y = pdf.get_y()
 
             if payload.orig_spectrum:
@@ -164,6 +166,26 @@ async def export_pdf(payload: PDFRequest) -> StreamingResponse:
                 proc_spec_path = os.path.join(tmpdir, "proc_spectrum.png")
                 _decode_b64_to_file(payload.proc_spectrum, proc_spec_path)
                 pdf.image(proc_spec_path, x=105, y=spec_y, w=80)
+                
+            pdf.ln(85)
+            
+        # ── Phase images (optional) ──
+        if payload.orig_phase or payload.proc_phase:
+            if pdf.get_y() > 180:
+                pdf.add_page()
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.cell(0, 8, "FFT Phase Spectrum", new_x="LMARGIN", new_y="NEXT")
+            phase_y = pdf.get_y()
+
+            if payload.orig_phase:
+                orig_phase_path = os.path.join(tmpdir, "orig_phase.png")
+                _decode_b64_to_file(payload.orig_phase, orig_phase_path)
+                pdf.image(orig_phase_path, x=15, y=phase_y, w=80)
+
+            if payload.proc_phase:
+                proc_phase_path = os.path.join(tmpdir, "proc_phase.png")
+                _decode_b64_to_file(payload.proc_phase, proc_phase_path)
+                pdf.image(proc_phase_path, x=105, y=phase_y, w=80)
 
         # ── Output ──
         pdf_bytes = bytes(pdf.output())
