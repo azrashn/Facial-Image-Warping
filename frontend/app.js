@@ -88,7 +88,13 @@ document.addEventListener('DOMContentLoaded', () => {
             cartoonFilter: "Karikatür Filtresi",
             cameraOffline: "Kamera Kapalı",
             startCamera: "Kamerayı Başlat",
-            capturePhoto: "Fotoğraf Çek"
+            capturePhoto: "Fotoğraf Çek",
+            // Eyewear
+            eyewearPanel: "Gözlük",
+            glassesType: "Gözlük Türü",
+            sunglasses: "Güneş Gözlüğü",
+            readingGlasses: "Numaralı Gözlük",
+            applyGlasses: "Gözlük Uygula"
         },
         EN: {
             dropImage: "Drop image here",
@@ -161,7 +167,13 @@ document.addEventListener('DOMContentLoaded', () => {
             cartoonFilter: "Cartoon Filter",
             cameraOffline: "Camera Offline",
             startCamera: "Start Camera",
-            capturePhoto: "Capture"
+            capturePhoto: "Capture",
+            // Eyewear
+            eyewearPanel: "Eyewear",
+            glassesType: "Glasses Type",
+            sunglasses: "Sunglasses",
+            readingGlasses: "Reading Glasses",
+            applyGlasses: "Apply Glasses"
         }
     };
 
@@ -1259,6 +1271,47 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) {
                 console.error('[Age Compare] Error:', e);
                 analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Age comparison failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // Glasses / Gözlük Event
+    const applyGlassesBtn = document.getElementById('applyGlassesBtn');
+    const glassesSelect = document.getElementById('glassesSelect');
+
+    if (applyGlassesBtn) {
+        applyGlassesBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('glasses_type', glassesSelect.value);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/glasses`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Glasses processing failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
+                const glassesLabel = glassesSelect.value === 'reading'
+                    ? (i18n[currentLang]?.readingGlasses || 'Reading Glasses')
+                    : (i18n[currentLang]?.sunglasses || 'Sunglasses');
+                addHistory(`Glasses: ${glassesLabel}`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied ${glassesLabel}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Glasses] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Glasses processing failed.'}`;
             } finally {
                 loadingOverlay.style.display = 'none';
             }
