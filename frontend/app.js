@@ -90,11 +90,11 @@ document.addEventListener('DOMContentLoaded', () => {
             startCamera: "Kamerayı Başlat",
             capturePhoto: "Fotoğraf Çek",
             // Eyewear
-            eyewearPanel: "Gözlük",
-            glassesType: "Gözlük Türü",
-            metalAviator: "Metal Aviator",
-            acetateWayfarer: "Asetat Wayfarer",
-            minimalistRound: "Minimalist Yuvarlak",
+            eyewearPanel: "Aksesuar",
+            glassesType: "Gözlük",
+            metalAviator: "Klasik Damla (Aviator)",
+            acetateWayfarer: "Kemik Çerçeve (Modern)",
+            minimalistRound: "İnce Yuvarlak (Retro)",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -179,9 +179,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // Eyewear
             eyewearPanel: "Accessory",
             glassesType: "Glasses",
-            metalAviator: "Metal Aviator",
-            acetateWayfarer: "Acetate Wayfarer",
-            minimalistRound: "Minimalist Round",
+            metalAviator: "Classic Teardrop (Aviator)",
+            acetateWayfarer: "Thick Frame (Modern)",
+            minimalistRound: "Thin Round (Retro)",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -1396,13 +1396,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 );
 
                 const glassesLabelMap = {
-                    aviator: i18n[currentLang]?.metalAviator || 'Metal Aviator',
-                    wayfarer: i18n[currentLang]?.acetateWayfarer || 'Acetate Wayfarer',
-                    round: i18n[currentLang]?.minimalistRound || 'Minimalist Round',
+                    aviator: i18n[currentLang]?.metalAviator || 'Classic Teardrop (Aviator)',
+                    wayfarer: i18n[currentLang]?.acetateWayfarer || 'Thick Frame (Modern)',
+                    round: i18n[currentLang]?.minimalistRound || 'Thin Round (Retro)',
                 };
                 const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);
-                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied ${glassesLabel}.`;
+                const appliedPrefix = currentLang === 'tr' ? 'Uygulanan Gözlük:' : 'Applied Glasses:';
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>${appliedPrefix} ${glassesLabel}.`;
 
                 if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
             } catch (e) {
@@ -1513,7 +1514,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 y += 7;
 
                 // Extract and display the applied operation explicitly
-                const opMatch = summaryText.match(/Applied Emoji Preset:\s*(.+)/i)
+                const opMatch = summaryText.match(/Applied (?:Emoji Preset|Glasses|Makeup|Hair|Beard|Filter):\s*(.+)/i)
                     || summaryText.match(/Uygulanan .+?:\s*(.+)/i);
                 if (opMatch) {
                     doc.setFontSize(11);
