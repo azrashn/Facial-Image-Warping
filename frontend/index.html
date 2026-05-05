@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,423 +10,514 @@
     <script src="https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
     <script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </head>
+
 <body class="dark-mode">
 
-<div class="app-container">
-    
-    <!-- LEFT SIDEBAR -->
-    <aside class="sidebar">
-        <!-- Logo & Header -->
-        <header class="sidebar-header">
-            <h1 class="logo">FaceDSP</h1>
-            <div class="header-controls">
-                <div class="lang-toggle" id="langToggle">
-                    <span data-lang="TR">TR</span>
-                    <span class="active" data-lang="EN">EN</span>
-                </div>
-                <button class="theme-toggle" id="themeToggle" aria-label="Toggle Theme">
-                    <!-- Sun Icon (for Dark Mode to switch to Light) / Moon Icon (for Light Mode) will be set by JS -->
-                    <svg id="themeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="5"></circle>
-                        <line x1="12" y1="1" x2="12" y2="3"></line>
-                        <line x1="12" y1="21" x2="12" y2="23"></line>
-                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-                        <line x1="1" y1="12" x2="3" y2="12"></line>
-                        <line x1="21" y1="12" x2="23" y2="12"></line>
-                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-                    </svg>
-                </button>
-            </div>
-        </header>
+    <div class="app-container">
 
-        <!-- Thumbnail Zone -->
-        <div class="upload-section" style="border-bottom: 1px solid var(--border-color); padding: 15px; position: relative; min-height: 50px;">
-
-            <!-- Thumbnail View (Hidden initially) -->
-            <div class="thumbnail-view" id="thumbnailView" style="display: none;">
-                <img id="thumbnailImg" src="" alt="Uploaded">
-                <button class="remove-btn" id="removeImgBtn">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                </button>
-                <div class="thumbnail-overlay">
-                    <span data-i18n="imageUploaded">Image uploaded</span>
-                </div>
-            </div>
-        </div>
-
-        <div class="sidebar-scrollable">
-            <!-- Operation Types -->
-            <section class="control-section">
-                <h3 data-i18n="opType">Operation Type</h3>
-                <div class="operation-grid" id="operationGrid">
-                    <button class="op-btn active" data-op="smile" data-i18n="addSmile">Add Smile</button>
-                    <button class="op-btn" data-op="eyebrow" data-i18n="eyebrowRaise">Eyebrow Raise</button>
-                    <button class="op-btn" data-op="lip" data-i18n="lipWiden">Lip Widen</button>
-                    <button class="op-btn" data-op="slim" data-i18n="faceSlim">Face Slim</button>
-                    <button class="op-btn" data-op="aging" data-i18n="aging">Aging</button>
-                    <button class="op-btn" data-op="deaging" data-i18n="deaging">De-Aging</button>
-                    <button class="op-btn" data-op="fft" data-i18n="fftFilter">FFT Filter</button>
-                    <button class="op-btn" data-op="age_estimation" data-i18n="ageEstimation">Age Estimation</button>
-                </div>
-            </section>
-
-            <!-- Emoji Presets -->
-            <section class="control-section">
-                <h3 data-i18n="emojiPresets">Emoji Presets</h3>
-                <div class="emoji-grid" id="emojiGrid">
-                    <button class="emoji-btn" data-op="smile" data-intensity="80" title="Happy">😀</button>
-                    <button class="emoji-btn" data-op="eyebrow" data-intensity="90" title="Surprised">😲</button>
-                    <button class="emoji-btn" data-op="lip" data-intensity="70" title="Wide">😬</button>
-                    <button class="emoji-btn" data-op="slim" data-intensity="60" title="Slim">👽</button>
-                    <button class="emoji-btn" data-op="aging" data-intensity="100" title="Old">👴</button>
-                    <button class="emoji-btn" data-op="deaging" data-intensity="100" title="Young">👶</button>
-                </div>
-            </section>
-
-            <!-- Makeup Panel -->
-            <section class="control-section">
-                <h3 data-i18n="makeupPanel">Makeup</h3>
-                <div class="makeup-region-selector">
-                    <select id="makeupRegion" class="custom-select">
-                        <option value="lips" data-i18n="makeupLips">Lips</option>
-                        <option value="eyeshadow" data-i18n="makeupEyeshadow">Eyeshadow</option>
-                        <option value="blush" data-i18n="makeupBlush">Blush</option>
-                    </select>
-                </div>
-                <div class="makeup-controls">
-                    <input type="color" id="makeupColor" value="#ff0000" class="custom-color-picker">
-                    <input type="range" id="makeupOpacity" min="0" max="100" value="50" class="custom-range" style="margin: 0 10px; width: 60%;">
-                    <button class="op-btn" id="applyMakeupBtn" style="margin-top: 8px; width: 100%;" data-i18n="applyMakeup">Apply</button>
-                </div>
-            </section>
-
-            <!-- Hair Color Panel -->
-            <section class="control-section">
-                <h3 data-i18n="hairColor">Hair Color</h3>
-                <div class="hair-swatches">
-                    <button class="hair-swatch" style="background-color: #FFD700;" data-color="blonde" title="Blonde"></button>
-                    <button class="hair-swatch" style="background-color: #FF4500;" data-color="red" title="Red"></button>
-                    <button class="hair-swatch" style="background-color: #1A1A1A;" data-color="black" title="Black"></button>
-                    <button class="hair-swatch" style="background-color: #0000FF;" data-color="blue" title="Blue"></button>
-                    <button class="hair-swatch" style="background-color: #8B4513;" data-color="brown" title="Brown"></button>
-                </div>
-            </section>
-
-            <!-- Cartoon Filter -->
-            <section class="control-section">
-                <h3 data-i18n="filters">Filters</h3>
-                <button class="op-btn" id="cartoonBtn" style="width: 100%;" data-i18n="cartoonFilter">Cartoon Filter</button>
-            </section>
-
-            <!-- Yeni Özellikler: Göz, Sakal, Yaş Karşılaştırma -->
-            <section class="control-section">
-                <h3 data-i18n="newFaceFeatures">New Face Features</h3>
-                
-                <!-- Göz Büyütme/Küçültme -->
-                <div style="margin-bottom: 15px;">
-                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
-                        <span data-i18n="eyeScale">Eye Scale</span>
-                        <span id="eyeSizeVal">0%</span>
+        <!-- LEFT SIDEBAR -->
+        <aside class="sidebar">
+            <!-- Logo & Header -->
+            <header class="sidebar-header">
+                <h1 class="logo">FaceDSP</h1>
+                <div class="header-controls">
+                    <div class="lang-toggle" id="langToggle">
+                        <span data-lang="TR">TR</span>
+                        <span class="active" data-lang="EN">EN</span>
                     </div>
-                    <input type="range" id="eyeSizeSlider" min="-100" max="100" value="0" class="custom-range">
-                    <button class="op-btn" id="eyeSizeBtn" style="width: 100%; margin-top: 8px;" data-i18n="applyEyeScale">Apply Eye Scale</button>
-                </div>
-
-                <!-- Sakal/Bıyık Ekleme -->
-                <div style="margin-bottom: 15px;">
-                    <div style="margin-bottom: 4px; font-size: 0.85rem;" data-i18n="facialHairStyle">Facial Hair Style</div>
-                    <select id="beardSelect" class="custom-select" style="width: 100%; margin-bottom: 8px;">
-                        <option value="beard" data-i18n="fullBeard">Full Beard</option>
-                        <option value="mustache" data-i18n="mustache">Mustache</option>
-                    </select>
-                    
-                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
-                        <span data-i18n="beardDarkness">Beard Darkness</span>
-                        <span id="beardDarknessVal">60%</span>
-                    </div>
-                    <input type="range" id="beardDarknessSlider" min="0" max="100" value="60" class="custom-range">
-                    
-                    <button class="op-btn" id="beardBtn" style="width: 100%; margin-top: 8px;" data-i18n="addFacialHair">Add Facial Hair</button>
-                </div>
-
-                <!-- Before/After Yaş Karşılaştırması -->
-                <div style="margin-bottom: 8px;">
-                    <div style="margin-bottom: 4px; font-size: 0.85rem;" data-i18n="ageComparison">Age Comparison (Before vs After)</div>
-                    <button class="op-btn" id="ageCompareBtn" style="width: 100%;" data-i18n="compareAges">Compare Ages</button>
-                </div>
-            </section>
-
-
-
-            <!-- Sliders -->
-            <section class="control-section">
-                <div class="slider-header">
-                    <div>
-                        <h3 data-i18n="intensity">Intensity</h3>
-                        <span class="slider-hint" data-i18n="transformStrength">Transform strength</span>
-                    </div>
-                    <span class="slider-value" id="intensityValue">50%</span>
-                </div>
-                <input type="range" id="intensitySlider" min="0" max="100" value="50" class="custom-range">
-            </section>
-
-            <section class="control-section">
-                <div class="slider-header">
-                    <div>
-                        <h3 data-i18n="smoothing">Smoothing</h3>
-                        <span class="slider-hint" data-i18n="edgeBlending">Edge blending</span>
-                    </div>
-                    <span class="slider-value" id="smoothingValue">30%</span>
-                </div>
-                <input type="range" id="smoothingSlider" min="0" max="100" value="30" class="custom-range">
-            </section>
-
-            <!-- Toggles -->
-            <section class="control-section custom-toggles">
-                <div class="toggle-row">
-                    <span data-i18n="showLandmarks">Show Landmarks</span>
-                    <label class="switch">
-                        <input type="checkbox" id="showLandmarks">
-                        <span class="slider round"></span>
-                    </label>
-                </div>
-                <div class="toggle-row">
-                    <span data-i18n="frequencyView">Frequency View</span>
-                    <label class="switch">
-                        <input type="checkbox" id="frequencyView">
-                        <span class="slider round"></span>
-                    </label>
-                </div>
-            </section>
-
-            <!-- History -->
-            <section class="control-section" id="historySection" style="display: none;">
-                <h3 data-i18n="opHistory">Operation History</h3>
-                <div class="history-chips" id="historyContainer">
-                    <!-- History chips will be inserted here -->
-                </div>
-            </section>
-        </div>
-
-        <!-- Action Buttons -->
-        <div class="sidebar-footer">
-
-            <button class="apply-btn" id="applyBtn" disabled><span data-i18n="applyTrans">Apply Transformation</span></button>
-        </div>
-    </aside>
-
-    <!-- MAIN CONTENT -->
-    <main class="main-content">
-        
-        <!-- Top Tabs -->
-        <nav class="top-tabs">
-            <button class="tab-btn active" data-target="visual" data-i18n="tabVisual">Visual</button>
-            <button class="tab-btn" data-target="frequency" data-i18n="tabFrequency">Frequency Spectrum</button>
-            <button class="tab-btn" data-target="landmarks" data-i18n="tabLandmarks">Landmarks</button>
-            <div class="download-actions">
-                <button class="download-action-btn" id="downloadBtn" data-i18n="downloadPDF" disabled>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 18 15 15"></polyline></svg>
-                    <span>PDF</span>
-                </button>
-                <button class="download-action-btn" id="downloadPngBtn" data-i18n="downloadPng" disabled>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
-                    <span>PNG</span>
-                </button>
-            </div>
-        </nav>
-
-        <!-- Multi-View Container -->
-        <div class="views-container">
-            
-            <!-- 1. VISUAL VIEW (Split View / Side by Side) -->
-            <div class="view-panel active-view" id="view-visual">
-                
-                <div class="preview-area" id="visualPreviewArea">
-                    <div class="preview-placeholder" id="previewPlaceholder" style="display: flex; align-items: stretch; justify-content: center; width: 100%; height: 100%; gap: 16px; padding: 16px;">
-                        
-                        <!-- LEFT COLUMN: UPLOAD -->
-                        <div class="split-col" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: var(--radius-md); background: transparent; padding: 0;">
-                            <input type="file" id="imageUpload" accept="image/*" hidden>
-                            <label for="imageUpload" class="upload-zone" id="uploadZone" style="display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; flex-grow: 1; width: 100%; border-radius: var(--radius-md);">
-                                <div class="upload-icon">
-                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                                </div>
-                                <p><strong data-i18n="dropImage">Drop image here</strong></p>
-                                <p class="upload-hint" data-i18n="clickBrowse">or click to browse</p>
-                            </label>
-                        </div>
-
-                        <!-- RIGHT COLUMN: CAMERA -->
-                        <div class="split-col" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--primary-color); border-radius: var(--radius-md); background: transparent; padding: 20px; position: relative; overflow: hidden; transition: border-color 0.3s ease;">
-                            
-                            <!-- Camera Viewport -->
-                            <div style="position: relative; width: 100%; flex-grow: 1; border-radius: calc(var(--radius-md) - 4px); overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--surface-color); border: 1px solid var(--border-color);">
-                                
-                                <div id="cameraPlaceholder" style="text-align: center; opacity: 0.6; padding: 20px;">
-                                    <i class="fas fa-camera" style="font-size: 3rem; margin-bottom: 10px;"></i>
-                                    <p style="margin: 0; font-weight: 500;" data-i18n="cameraOffline">Camera Offline</p>
-                                </div>
-                                
-                                <video id="cameraVideo" autoplay playsinline style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 1; background: #000;"></video>
-                                <canvas id="cameraCanvas" style="display:none;"></canvas>
-                            </div>
-
-                            <!-- Camera Controls -->
-                            <div style="display: flex; gap: 10px; width: 100%; margin-top: 15px; justify-content: center; z-index: 2;">
-                                <button class="split-btn" id="startCameraBtn" style="flex: 1; background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); color: white; border: none;"><i class="fas fa-video"></i> <span data-i18n="startCamera">Start Camera</span></button>
-                                <button class="split-btn capture-mode" id="captureBtn" style="flex: 1; display: none;"><i class="fas fa-camera"></i> <span data-i18n="capturePhoto">Capture</span></button>
-                                <button class="split-btn stop-mode" id="stopCameraBtn" style="display: none; width: auto; padding: 0 15px;"><i class="fas fa-times"></i></button>
-                            </div>
-                        </div>
-
-                    </div>
-                    
-                    <div class="image-wrapper" id="imageWrapper" style="display: none;">
-                        <!-- The Split/Drag System -->
-                        <div class="before-container" id="beforeContainer">
-                            <span class="label-badge label-left" data-i18n="beforeBadge">Before</span>
-                            <img id="beforeImg" src="" alt="Before" draggable="false">
-                        </div>
-                        
-                        <div class="after-container" id="afterContainer">
-                            <span class="label-badge label-right" data-i18n="afterBadge">After</span>
-                            <img id="afterImg" src="" alt="After" draggable="false">
-                            
-                            <!-- SVG Landmarks will attach here -->
-                            <svg class="landmarks-svg" id="landmarksSvg" viewBox="0 0 512 512" preserveAspectRatio="xMidYMid meet" style="display: none;"></svg>
-                        </div>
-                        
-                        <div class="split-slider" id="splitSlider">
-                            <div class="slider-handle">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 7L4 12L8 17M16 7L20 12L16 17" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div id="loadingOverlay" class="loading-overlay" style="display: none;">
-                        <div class="spinner"></div>
-                        <p data-i18n="processing">Processing...</p>
-                    </div>
-                </div>
-
-                <!-- View Modes Toggle (Split/Side by Side) -->
-                <div class="view-mode-controls" id="viewModeControls" style="display: none;">
-                    <button class="view-mode-btn active" data-mode="split" id="btnSplitView">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-                        <span data-i18n="splitView">Split View</span>
-                    </button>
-                    <button class="view-mode-btn" data-mode="side" id="btnSideBySide">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="18" rx="2"/><rect x="13" y="3" width="8" height="18" rx="2"/></svg>
-                        <span data-i18n="sideBySide">Side by Side</span>
+                    <button class="theme-toggle" id="themeToggle" aria-label="Toggle Theme">
+                        <!-- Sun Icon (for Dark Mode to switch to Light) / Moon Icon (for Light Mode) will be set by JS -->
+                        <svg id="themeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
                     </button>
                 </div>
-            </div>
+            </header>
 
-            <!-- 2. FREQUENCY SPECTRUM VIEW -->
-            <div class="view-panel" id="view-frequency">
-                <div class="freq-grid">
-                    <!-- Original FFT -->
-                    <div class="freq-card">
-                        <p class="freq-title" data-i18n="origFFT">Original - FFT Magnitude</p>
-                        <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
-                        <div class="freq-visual freq-visual-orig">
-                            <img id="origSpectrumImg" src="" alt="Original Spectrum" style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
-                            <div class="freq-center-dot" style="z-index: 2;"></div>
-                        </div>
-                        <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
-                    </div>
-                    <!-- Processed FFT -->
-                    <div class="freq-card">
-                        <p class="freq-title" data-i18n="procFFT">Processed - FFT Magnitude</p>
-                        <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
-                        <div class="freq-visual freq-visual-proc">
-                            <img id="procSpectrumImg" src="" alt="Processed Spectrum" style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
-                            <div class="freq-center-dot" style="z-index: 2;"></div>
-                        </div>
-                        <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
+            <!-- Thumbnail Zone -->
+            <div class="upload-section"
+                style="border-bottom: 1px solid var(--border-color); padding: 15px; position: relative; min-height: 50px;">
+
+                <!-- Thumbnail View (Hidden initially) -->
+                <div class="thumbnail-view" id="thumbnailView" style="display: none;">
+                    <img id="thumbnailImg" src="" alt="Uploaded">
+                    <button class="remove-btn" id="removeImgBtn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                    <div class="thumbnail-overlay">
+                        <span data-i18n="imageUploaded">Image uploaded</span>
                     </div>
                 </div>
             </div>
 
-            <!-- 3. LANDMARKS ONLY VIEW -->
-            <div class="view-panel" id="view-landmarks">
-                <div class="landmarks-only-container">
-                    <img id="landmarksOnlyImg" src="" alt="Landmarks">
-                    <svg class="landmarks-svg" id="landmarksOnlySvg" viewBox="0 0 512 512" preserveAspectRatio="xMidYMid meet" style="display: none;"></svg>
-                    <div class="preview-placeholder" id="landmarksPlaceholder" data-i18n="uploadWait">
-                        Upload an image to begin
+            <div class="sidebar-scrollable">
+                <!-- Operation Types -->
+                <section class="control-section">
+                    <h3 data-i18n="opType">Operation Type</h3>
+                    <div class="operation-grid" id="operationGrid">
+                        <button class="op-btn active" data-op="smile" data-i18n="addSmile">Add Smile</button>
+                        <button class="op-btn" data-op="eyebrow" data-i18n="eyebrowRaise">Eyebrow Raise</button>
+                        <button class="op-btn" data-op="lip" data-i18n="lipWiden">Lip Widen</button>
+                        <button class="op-btn" data-op="slim" data-i18n="faceSlim">Face Slim</button>
+                        <button class="op-btn" data-op="aging" data-i18n="aging">Aging</button>
+                        <button class="op-btn" data-op="deaging" data-i18n="deaging">De-Aging</button>
+                        <button class="op-btn" data-op="fft" data-i18n="fftFilter">FFT Filter</button>
+                        <button class="op-btn" data-op="age_estimation" data-i18n="ageEstimation">Age
+                            Estimation</button>
+                    </div>
+                </section>
+
+                <!-- Emoji Presets -->
+                <section class="control-section">
+                    <h3 data-i18n="emojiPresets">Emoji Presets</h3>
+                    <div class="emoji-grid" id="emojiGrid">
+                        <button class="emoji-btn" data-op="smile" data-intensity="80" title="Happy">😀</button>
+                        <button class="emoji-btn" data-op="eyebrow" data-intensity="90" title="Surprised">😲</button>
+                        <button class="emoji-btn" data-op="lip" data-intensity="70" title="Wide">😬</button>
+                        <button class="emoji-btn" data-op="slim" data-intensity="60" title="Slim">👽</button>
+                        <button class="emoji-btn" data-op="aging" data-intensity="100" title="Old">👴</button>
+                        <button class="emoji-btn" data-op="deaging" data-intensity="100" title="Young">👶</button>
+                    </div>
+                </section>
+
+                <!-- Makeup Panel -->
+                <section class="control-section">
+                    <h3 data-i18n="makeupPanel">Makeup</h3>
+                    <div class="makeup-region-selector">
+                        <select id="makeupRegion" class="custom-select">
+                            <option value="lips" data-i18n="makeupLips">Lips</option>
+                            <option value="eyeshadow" data-i18n="makeupEyeshadow">Eyeshadow</option>
+                            <option value="blush" data-i18n="makeupBlush">Blush</option>
+                        </select>
+                    </div>
+                    <div class="makeup-controls">
+                        <input type="color" id="makeupColor" value="#ff0000" class="custom-color-picker">
+                        <input type="range" id="makeupOpacity" min="0" max="100" value="50" class="custom-range"
+                            style="margin: 0 10px; width: 60%;">
+                        <button class="op-btn" id="applyMakeupBtn" style="margin-top: 8px; width: 100%;"
+                            data-i18n="applyMakeup">Apply</button>
+                    </div>
+                </section>
+
+                <!-- Hair Color Panel -->
+                <section class="control-section">
+                    <h3 data-i18n="hairColor">Hair Color</h3>
+                    <div class="hair-swatches">
+                        <button class="hair-swatch" style="background-color: #FFD700;" data-color="blonde"
+                            title="Blonde"></button>
+                        <button class="hair-swatch" style="background-color: #FF4500;" data-color="red"
+                            title="Red"></button>
+                        <button class="hair-swatch" style="background-color: #1A1A1A;" data-color="black"
+                            title="Black"></button>
+                        <button class="hair-swatch" style="background-color: #0000FF;" data-color="blue"
+                            title="Blue"></button>
+                        <button class="hair-swatch" style="background-color: #8B4513;" data-color="brown"
+                            title="Brown"></button>
+                    </div>
+                </section>
+
+                <!-- Cartoon Filter -->
+                <section class="control-section">
+                    <h3 data-i18n="filters">Filters</h3>
+                    <button class="op-btn" id="cartoonBtn" style="width: 100%;" data-i18n="cartoonFilter">Cartoon
+                        Filter</button>
+                </section>
+
+                <!-- Eyewear / Gözlük Panel -->
+                <section class="control-section">
+                    <h3 data-i18n="eyewearPanel">Eyewear</h3>
+                    <div style="margin-bottom: 8px;">
+                        <div style="margin-bottom: 4px; font-size: 0.85rem;" data-i18n="glassesType">Glasses Type</div>
+                        <select id="glassesSelect" class="custom-select" style="width: 100%; margin-bottom: 8px;">
+                            <option value="sunglasses" data-i18n="sunglasses">Sunglasses</option>
+                            <option value="reading" data-i18n="readingGlasses">Reading Glasses</option>
+                        </select>
+                    </div>
+                    <button class="op-btn" id="applyGlassesBtn" style="width: 100%;" data-i18n="applyGlasses">Apply Glasses</button>
+                </section>
+
+                <!-- Yeni Özellikler: Göz, Sakal, Yaş Karşılaştırma -->
+                <section class="control-section">
+                    <h3 data-i18n="newFaceFeatures">New Face Features</h3>
+
+                    <!-- Göz Büyütme/Küçültme -->
+                    <div style="margin-bottom: 15px;">
+                        <div
+                            style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                            <span data-i18n="eyeScale">Eye Scale</span>
+                            <span id="eyeSizeVal">0%</span>
+                        </div>
+                        <input type="range" id="eyeSizeSlider" min="-100" max="100" value="0" class="custom-range">
+                        <button class="op-btn" id="eyeSizeBtn" style="width: 100%; margin-top: 8px;"
+                            data-i18n="applyEyeScale">Apply Eye Scale</button>
+                    </div>
+
+                    <!-- Sakal/Bıyık Ekleme -->
+                    <div style="margin-bottom: 15px;">
+                        <div style="margin-bottom: 4px; font-size: 0.85rem;" data-i18n="facialHairStyle">Facial Hair
+                            Style</div>
+                        <select id="beardSelect" class="custom-select" style="width: 100%; margin-bottom: 8px;">
+                            <option value="beard" data-i18n="fullBeard">Full Beard</option>
+                            <option value="mustache" data-i18n="mustache">Mustache</option>
+                        </select>
+
+                        <div
+                            style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                            <span data-i18n="beardDarkness">Beard Darkness</span>
+                            <span id="beardDarknessVal">60%</span>
+                        </div>
+                        <input type="range" id="beardDarknessSlider" min="0" max="100" value="60" class="custom-range">
+
+                        <button class="op-btn" id="beardBtn" style="width: 100%; margin-top: 8px;"
+                            data-i18n="addFacialHair">Add Facial Hair</button>
+                    </div>
+
+                    <!-- Before/After Yaş Karşılaştırması -->
+                    <div style="margin-bottom: 8px;">
+                        <div style="margin-bottom: 4px; font-size: 0.85rem;" data-i18n="ageComparison">Age Comparison
+                            (Before vs After)</div>
+                        <button class="op-btn" id="ageCompareBtn" style="width: 100%;" data-i18n="compareAges">Compare
+                            Ages</button>
+                    </div>
+                </section>
+
+
+
+                <!-- Sliders -->
+                <section class="control-section">
+                    <div class="slider-header">
+                        <div>
+                            <h3 data-i18n="intensity">Intensity</h3>
+                            <span class="slider-hint" data-i18n="transformStrength">Transform strength</span>
+                        </div>
+                        <span class="slider-value" id="intensityValue">50%</span>
+                    </div>
+                    <input type="range" id="intensitySlider" min="0" max="100" value="50" class="custom-range">
+                </section>
+
+                <section class="control-section">
+                    <div class="slider-header">
+                        <div>
+                            <h3 data-i18n="smoothing">Smoothing</h3>
+                            <span class="slider-hint" data-i18n="edgeBlending">Edge blending</span>
+                        </div>
+                        <span class="slider-value" id="smoothingValue">30%</span>
+                    </div>
+                    <input type="range" id="smoothingSlider" min="0" max="100" value="30" class="custom-range">
+                </section>
+
+                <!-- Toggles -->
+                <section class="control-section custom-toggles">
+                    <div class="toggle-row">
+                        <span data-i18n="showLandmarks">Show Landmarks</span>
+                        <label class="switch">
+                            <input type="checkbox" id="showLandmarks">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                    <div class="toggle-row">
+                        <span data-i18n="frequencyView">Frequency View</span>
+                        <label class="switch">
+                            <input type="checkbox" id="frequencyView">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                </section>
+
+                <!-- History -->
+                <section class="control-section" id="historySection" style="display: none;">
+                    <h3 data-i18n="opHistory">Operation History</h3>
+                    <div class="history-chips" id="historyContainer">
+                        <!-- History chips will be inserted here -->
+                    </div>
+                </section>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="sidebar-footer">
+
+                <button class="apply-btn" id="applyBtn" disabled><span data-i18n="applyTrans">Apply
+                        Transformation</span></button>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT -->
+        <main class="main-content">
+
+            <!-- Top Tabs -->
+            <nav class="top-tabs">
+                <button class="tab-btn active" data-target="visual" data-i18n="tabVisual">Visual</button>
+                <button class="tab-btn" data-target="frequency" data-i18n="tabFrequency">Frequency Spectrum</button>
+                <button class="tab-btn" data-target="landmarks" data-i18n="tabLandmarks">Landmarks</button>
+                <div class="download-actions">
+                    <button class="download-action-btn" id="downloadBtn" data-i18n="downloadPDF" disabled>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="12" y1="18" x2="12" y2="12"></line>
+                            <polyline points="9 15 12 18 15 15"></polyline>
+                        </svg>
+                        <span>PDF</span>
+                    </button>
+                    <button class="download-action-btn" id="downloadPngBtn" data-i18n="downloadPng" disabled>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                        <span>PNG</span>
+                    </button>
+                </div>
+            </nav>
+
+            <!-- Multi-View Container -->
+            <div class="views-container">
+
+                <!-- 1. VISUAL VIEW (Split View / Side by Side) -->
+                <div class="view-panel active-view" id="view-visual">
+
+                    <div class="preview-area" id="visualPreviewArea">
+                        <div class="preview-placeholder" id="previewPlaceholder"
+                            style="display: flex; align-items: stretch; justify-content: center; width: 100%; height: 100%; gap: 16px; padding: 16px;">
+
+                            <!-- LEFT COLUMN: UPLOAD -->
+                            <div class="split-col"
+                                style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: var(--radius-md); background: transparent; padding: 0;">
+                                <input type="file" id="imageUpload" accept="image/*" hidden>
+                                <label for="imageUpload" class="upload-zone" id="uploadZone"
+                                    style="display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; flex-grow: 1; width: 100%; border-radius: var(--radius-md);">
+                                    <div class="upload-icon">
+                                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                            stroke-linejoin="round">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                            <polyline points="17 8 12 3 7 8"></polyline>
+                                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                                        </svg>
+                                    </div>
+                                    <p><strong data-i18n="dropImage">Drop image here</strong></p>
+                                    <p class="upload-hint" data-i18n="clickBrowse">or click to browse</p>
+                                </label>
+                            </div>
+
+                            <!-- RIGHT COLUMN: CAMERA -->
+                            <div class="split-col"
+                                style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--primary-color); border-radius: var(--radius-md); background: transparent; padding: 20px; position: relative; overflow: hidden; transition: border-color 0.3s ease;">
+
+                                <!-- Camera Viewport -->
+                                <div
+                                    style="position: relative; width: 100%; flex-grow: 1; border-radius: calc(var(--radius-md) - 4px); overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--surface-color); border: 1px solid var(--border-color);">
+
+                                    <div id="cameraPlaceholder"
+                                        style="text-align: center; opacity: 0.6; padding: 20px;">
+                                        <i class="fas fa-camera" style="font-size: 3rem; margin-bottom: 10px;"></i>
+                                        <p style="margin: 0; font-weight: 500;" data-i18n="cameraOffline">Camera Offline
+                                        </p>
+                                    </div>
+
+                                    <video id="cameraVideo" autoplay playsinline
+                                        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 1; background: #000;"></video>
+                                    <canvas id="cameraCanvas" style="display:none;"></canvas>
+                                </div>
+
+                                <!-- Camera Controls -->
+                                <div
+                                    style="display: flex; gap: 10px; width: 100%; margin-top: 15px; justify-content: center; z-index: 2;">
+                                    <button class="split-btn" id="startCameraBtn"
+                                        style="flex: 1; background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); color: white; border: none;"><i
+                                            class="fas fa-video"></i> <span data-i18n="startCamera">Start
+                                            Camera</span></button>
+                                    <button class="split-btn capture-mode" id="captureBtn"
+                                        style="flex: 1; display: none;"><i class="fas fa-camera"></i> <span
+                                            data-i18n="capturePhoto">Capture</span></button>
+                                    <button class="split-btn stop-mode" id="stopCameraBtn"
+                                        style="display: none; width: auto; padding: 0 15px;"><i
+                                            class="fas fa-times"></i></button>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div class="image-wrapper" id="imageWrapper" style="display: none;">
+                            <!-- The Split/Drag System -->
+                            <div class="before-container" id="beforeContainer">
+                                <span class="label-badge label-left" data-i18n="beforeBadge">Before</span>
+                                <img id="beforeImg" src="" alt="Before" draggable="false">
+                            </div>
+
+                            <div class="after-container" id="afterContainer">
+                                <span class="label-badge label-right" data-i18n="afterBadge">After</span>
+                                <img id="afterImg" src="" alt="After" draggable="false">
+
+                                <!-- SVG Landmarks will attach here -->
+                                <svg class="landmarks-svg" id="landmarksSvg" viewBox="0 0 512 512"
+                                    preserveAspectRatio="xMidYMid meet" style="display: none;"></svg>
+                            </div>
+
+                            <div class="split-slider" id="splitSlider">
+                                <div class="slider-handle">
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <path d="M8 7L4 12L8 17M16 7L20 12L16 17" stroke-width="2"
+                                            stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+                            <div class="spinner"></div>
+                            <p data-i18n="processing">Processing...</p>
+                        </div>
+                    </div>
+
+                    <!-- View Modes Toggle (Split/Side by Side) -->
+                    <div class="view-mode-controls" id="viewModeControls" style="display: none;">
+                        <button class="view-mode-btn active" data-mode="split" id="btnSplitView">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                                <line x1="12" y1="3" x2="12" y2="21" />
+                            </svg>
+                            <span data-i18n="splitView">Split View</span>
+                        </button>
+                        <button class="view-mode-btn" data-mode="side" id="btnSideBySide">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <rect x="3" y="3" width="8" height="18" rx="2" />
+                                <rect x="13" y="3" width="8" height="18" rx="2" />
+                            </svg>
+                            <span data-i18n="sideBySide">Side by Side</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. FREQUENCY SPECTRUM VIEW -->
+                <div class="view-panel" id="view-frequency">
+                    <div class="freq-grid">
+                        <!-- Original FFT -->
+                        <div class="freq-card">
+                            <p class="freq-title" data-i18n="origFFT">Original - FFT Magnitude</p>
+                            <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
+                            <div class="freq-visual freq-visual-orig">
+                                <img id="origSpectrumImg" src="" alt="Original Spectrum"
+                                    style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
+                                <div class="freq-center-dot" style="z-index: 2;"></div>
+                            </div>
+                            <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
+                        </div>
+                        <!-- Processed FFT -->
+                        <div class="freq-card">
+                            <p class="freq-title" data-i18n="procFFT">Processed - FFT Magnitude</p>
+                            <p class="freq-subtitle" data-i18n="logScale">Log scale</p>
+                            <div class="freq-visual freq-visual-proc">
+                                <img id="procSpectrumImg" src="" alt="Processed Spectrum"
+                                    style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
+                                <div class="freq-center-dot" style="z-index: 2;"></div>
+                            </div>
+                            <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. LANDMARKS ONLY VIEW -->
+                <div class="view-panel" id="view-landmarks">
+                    <div class="landmarks-only-container">
+                        <img id="landmarksOnlyImg" src="" alt="Landmarks">
+                        <svg class="landmarks-svg" id="landmarksOnlySvg" viewBox="0 0 512 512"
+                            preserveAspectRatio="xMidYMid meet" style="display: none;"></svg>
+                        <div class="preview-placeholder" id="landmarksPlaceholder" data-i18n="uploadWait">
+                            Upload an image to begin
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Metrics Dashboard -->
-        <div class="metrics-dashboard">
-            <div class="metrics-header" id="metricsHeader" style="cursor: pointer;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <svg id="metricsChevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition: transform 0.3s;"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    <h2 data-i18n="qualityMetrics">Quality Metrics</h2>
+            <!-- Metrics Dashboard -->
+            <div class="metrics-dashboard">
+                <div class="metrics-header" id="metricsHeader" style="cursor: pointer;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <svg id="metricsChevron" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" style="transition: transform 0.3s;">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                        <h2 data-i18n="qualityMetrics">Quality Metrics</h2>
+                    </div>
+                    <div class="comparison-toggle" onclick="event.stopPropagation()">
+                        <span class="comparison-label" data-i18n="compMode">Comparison Mode</span>
+                        <label class="switch">
+                            <input type="checkbox" id="comparisonMode" checked>
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
                 </div>
-                <div class="comparison-toggle" onclick="event.stopPropagation()">
-                    <span class="comparison-label" data-i18n="compMode">Comparison Mode</span>
-                    <label class="switch">
-                        <input type="checkbox" id="comparisonMode" checked>
-                        <span class="slider round"></span>
-                    </label>
+
+                <div class="metrics-grid" id="metricsGrid">
+                    <!-- MSE Card -->
+                    <div class="metric-card">
+                        <div class="metric-title-row">
+                            <div class="metric-title">
+                                <h3>MSE</h3>
+                                <span data-i18n="mseDesc">Mean Squared Error</span>
+                            </div>
+                            <span class="metric-badge neutral" id="mseChange">~0%</span>
+                        </div>
+                        <div class="metric-value"><span id="mseValue">0.00</span></div>
+                    </div>
+
+                    <!-- PSNR Card -->
+                    <div class="metric-card">
+                        <div class="metric-title-row">
+                            <div class="metric-title">
+                                <h3>PSNR</h3>
+                                <span data-i18n="psnrDesc">Peak Signal-to-Noise Ratio</span>
+                            </div>
+                            <span class="metric-badge neutral" id="psnrChange">~0%</span>
+                        </div>
+                        <div class="metric-value"><span id="psnrValue">0.00</span> <span class="metric-unit">dB</span>
+                        </div>
+                    </div>
+
+                    <!-- SSIM Card -->
+                    <div class="metric-card">
+                        <div class="metric-title-row">
+                            <div class="metric-title">
+                                <h3>SSIM</h3>
+                                <span data-i18n="ssimDesc">Structural Similarity Index</span>
+                            </div>
+                            <span class="metric-badge neutral" id="ssimChange">~0%</span>
+                        </div>
+                        <div class="metric-value"><span id="ssimValue">1.000</span></div>
+                    </div>
+
+                    <!-- Analysis Summary -->
+                    <div class="summary-card">
+                        <h3 data-i18n="analysisSummary">Analysis Summary</h3>
+                        <p id="analysisSummary" data-i18n="waitingSummary">Waiting for image processing to generate
+                            summary analysis.</p>
+                    </div>
                 </div>
             </div>
 
-            <div class="metrics-grid" id="metricsGrid">
-                <!-- MSE Card -->
-                <div class="metric-card">
-                    <div class="metric-title-row">
-                        <div class="metric-title">
-                            <h3>MSE</h3>
-                            <span data-i18n="mseDesc">Mean Squared Error</span>
-                        </div>
-                        <span class="metric-badge neutral" id="mseChange">~0%</span>
-                    </div>
-                    <div class="metric-value"><span id="mseValue">0.00</span></div>
-                </div>
+        </main>
 
-                <!-- PSNR Card -->
-                <div class="metric-card">
-                    <div class="metric-title-row">
-                        <div class="metric-title">
-                            <h3>PSNR</h3>
-                            <span data-i18n="psnrDesc">Peak Signal-to-Noise Ratio</span>
-                        </div>
-                        <span class="metric-badge neutral" id="psnrChange">~0%</span>
-                    </div>
-                    <div class="metric-value"><span id="psnrValue">0.00</span> <span class="metric-unit">dB</span></div>
-                </div>
+    </div>
 
-                <!-- SSIM Card -->
-                <div class="metric-card">
-                    <div class="metric-title-row">
-                        <div class="metric-title">
-                            <h3>SSIM</h3>
-                            <span data-i18n="ssimDesc">Structural Similarity Index</span>
-                        </div>
-                        <span class="metric-badge neutral" id="ssimChange">~0%</span>
-                    </div>
-                    <div class="metric-value"><span id="ssimValue">1.000</span></div>
-                </div>
-
-                <!-- Analysis Summary -->
-                <div class="summary-card">
-                    <h3 data-i18n="analysisSummary">Analysis Summary</h3>
-                    <p id="analysisSummary" data-i18n="waitingSummary">Waiting for image processing to generate summary analysis.</p>
-                </div>
-            </div>
-        </div>
-
-    </main>
-
-</div>
-
-<script src="app.js"></script>
+    <script src="app.js"></script>
 </body>
+
 </html>

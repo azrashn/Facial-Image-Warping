@@ -468,3 +468,200 @@ async def process_landmarks(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/process/glasses")
+async def process_glasses(
+    image: UploadFile = File(...),
+    glasses_type: str = Form("sunglasses"),
+):
+    """
+    Overlay procedural glasses on the face using MediaPipe landmark positions.
+
+    Parameters
+    ----------
+    glasses_type : str
+        Either ``"sunglasses"`` or ``"reading"`` (numaralı gözlük).
+    """
+    try:
+        contents = await image.read()
+        original = _decode_upload(contents)
+
+        # Get landmarks for eye positioning
+        rgb_img = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
+        preprocessed = preprocess_image(rgb_img)
+        landmarks = get_landmarks(preprocessed)
+
+        # Map landmark coords back to original image dimensions
+        h, w = original.shape[:2]
+
+        def lm_to_px(lm):
+            return int(lm["x"] * w), int(lm["y"] * h)
+
+        # Key landmark indices (MediaPipe FaceMesh):
+        # Left eye outer: 33,  Left eye inner: 133
+        # Right eye inner: 362, Right eye outer: 263
+        # Nose bridge top: 6
+        left_outer = lm_to_px(landmarks[33])
+        left_inner = lm_to_px(landmarks[133])
+        right_inner = lm_to_px(landmarks[362])
+        right_outer = lm_to_px(landmarks[263])
+        nose_bridge = lm_to_px(landmarks[6])
+
+        # Compute eye centres & sizing
+        left_eye_cx = (left_outer[0] + left_inner[0]) // 2
+        left_eye_cy = (left_outer[1] + left_inner[1]) // 2
+        right_eye_cx = (right_inner[0] + right_outer[0]) // 2
+        right_eye_cy = (right_inner[1] + right_outer[1]) // 2
+
+        eye_distance = abs(right_eye_cx - left_eye_cx)
+        lens_w = int(eye_distance * 0.65)
+        lens_h = int(lens_w * 0.7)
+
+        # Compute tilt angle from eye positions
+        angle_rad = np.arctan2(right_eye_cy - left_eye_cy, right_eye_cx - left_eye_cx)
+        angle_deg = np.degrees(angle_rad)
+
+        processed = original.copy()
+        overlay = np.zeros_like(processed)
+        mask = np.zeros(processed.shape[:2], dtype=np.uint8)
+
+        gtype = (glasses_type or "").strip().lower()
+
+        if gtype == "reading":
+            # --- Reading glasses: thin wire frame + transparent lenses ---
+            frame_color = (50, 50, 50)       # dark grey frame
+            lens_tint = (200, 180, 160)       # very light blue-ish tint
+            frame_thickness = max(2, int(eye_distance * 0.025))
+
+            # Left lens ellipse
+            cv2.ellipse(overlay, (left_eye_cx, left_eye_cy), (lens_w // 2, lens_h // 2),
+                        angle_deg, 0, 360, lens_tint, -1)
+            cv2.ellipse(mask, (left_eye_cx, left_eye_cy), (lens_w // 2, lens_h // 2),
+                        angle_deg, 0, 360, 40, -1)
+            cv2.ellipse(overlay, (left_eye_cx, left_eye_cy), (lens_w // 2, lens_h // 2),
+                        angle_deg, 0, 360, frame_color, frame_thickness)
+            cv2.ellipse(mask, (left_eye_cx, left_eye_cy), (lens_w // 2, lens_h // 2),
+                        angle_deg, 0, 360, 255, frame_thickness)
+
+            # Right lens ellipse
+            cv2.ellipse(overlay, (right_eye_cx, right_eye_cy), (lens_w // 2, lens_h // 2),
+                        angle_deg, 0, 360, lens_tint, -1)
+            cv2.ellipse(mask, (right_eye_cx, right_eye_cy), (lens_w // 2, lens_h // 2),
+                        angle_deg, 0, 360, 40, -1)
+            cv2.ellipse(overlay, (right_eye_cx, right_eye_cy), (lens_w // 2, lens_h // 2),
+                        angle_deg, 0, 360, frame_color, frame_thickness)
+            cv2.ellipse(mask, (right_eye_cx, right_eye_cy), (lens_w // 2, lens_h // 2),
+                        angle_deg, 0, 360, 255, frame_thickness)
+
+            # Bridge between lenses
+            cv2.line(overlay, (left_inner[0], left_eye_cy), (right_inner[0], right_eye_cy),
+                     frame_color, frame_thickness)
+            cv2.line(mask, (left_inner[0], left_eye_cy), (right_inner[0], right_eye_cy),
+                     255, frame_thickness)
+
+            # Temple arms (from outer edges outward)
+            arm_len = int(eye_distance * 0.4)
+            cv2.line(overlay,
+                     (left_outer[0], left_eye_cy),
+                     (left_outer[0] - arm_len, left_eye_cy - int(lens_h * 0.15)),
+                     frame_color, frame_thickness)
+            cv2.line(mask,
+                     (left_outer[0], left_eye_cy),
+                     (left_outer[0] - arm_len, left_eye_cy - int(lens_h * 0.15)),
+                     255, frame_thickness)
+            cv2.line(overlay,
+                     (right_outer[0], right_eye_cy),
+                     (right_outer[0] + arm_len, right_eye_cy - int(lens_h * 0.15)),
+                     frame_color, frame_thickness)
+            cv2.line(mask,
+                     (right_outer[0], right_eye_cy),
+                     (right_outer[0] + arm_len, right_eye_cy - int(lens_h * 0.15)),
+                     255, frame_thickness)
+
+        else:
+            # --- Sunglasses: thick frames + dark tinted lenses ---
+            frame_color = (20, 20, 20)    # near-black
+            lens_color = (40, 35, 30)     # dark brown tint
+            frame_thickness = max(3, int(eye_distance * 0.04))
+
+            # Slightly larger lenses for sunglasses
+            sg_lens_w = int(lens_w * 1.15)
+            sg_lens_h = int(lens_h * 1.1)
+
+            # Left lens
+            cv2.ellipse(overlay, (left_eye_cx, left_eye_cy), (sg_lens_w // 2, sg_lens_h // 2),
+                        angle_deg, 0, 360, lens_color, -1)
+            cv2.ellipse(mask, (left_eye_cx, left_eye_cy), (sg_lens_w // 2, sg_lens_h // 2),
+                        angle_deg, 0, 360, 200, -1)
+            cv2.ellipse(overlay, (left_eye_cx, left_eye_cy), (sg_lens_w // 2, sg_lens_h // 2),
+                        angle_deg, 0, 360, frame_color, frame_thickness)
+            cv2.ellipse(mask, (left_eye_cx, left_eye_cy), (sg_lens_w // 2, sg_lens_h // 2),
+                        angle_deg, 0, 360, 255, frame_thickness)
+
+            # Right lens
+            cv2.ellipse(overlay, (right_eye_cx, right_eye_cy), (sg_lens_w // 2, sg_lens_h // 2),
+                        angle_deg, 0, 360, lens_color, -1)
+            cv2.ellipse(mask, (right_eye_cx, right_eye_cy), (sg_lens_w // 2, sg_lens_h // 2),
+                        angle_deg, 0, 360, 200, -1)
+            cv2.ellipse(overlay, (right_eye_cx, right_eye_cy), (sg_lens_w // 2, sg_lens_h // 2),
+                        angle_deg, 0, 360, frame_color, frame_thickness)
+            cv2.ellipse(mask, (right_eye_cx, right_eye_cy), (sg_lens_w // 2, sg_lens_h // 2),
+                        angle_deg, 0, 360, 255, frame_thickness)
+
+            # Thick bridge
+            bridge_thickness = max(4, int(eye_distance * 0.035))
+            cv2.line(overlay, (left_inner[0], left_eye_cy), (right_inner[0], right_eye_cy),
+                     frame_color, bridge_thickness)
+            cv2.line(mask, (left_inner[0], left_eye_cy), (right_inner[0], right_eye_cy),
+                     255, bridge_thickness)
+
+            # Temple arms
+            arm_len = int(eye_distance * 0.45)
+            arm_thickness = max(3, int(eye_distance * 0.03))
+            cv2.line(overlay,
+                     (left_outer[0], left_eye_cy),
+                     (left_outer[0] - arm_len, left_eye_cy - int(sg_lens_h * 0.1)),
+                     frame_color, arm_thickness)
+            cv2.line(mask,
+                     (left_outer[0], left_eye_cy),
+                     (left_outer[0] - arm_len, left_eye_cy - int(sg_lens_h * 0.1)),
+                     255, arm_thickness)
+            cv2.line(overlay,
+                     (right_outer[0], right_eye_cy),
+                     (right_outer[0] + arm_len, right_eye_cy - int(sg_lens_h * 0.1)),
+                     frame_color, arm_thickness)
+            cv2.line(mask,
+                     (right_outer[0], right_eye_cy),
+                     (right_outer[0] + arm_len, right_eye_cy - int(sg_lens_h * 0.1)),
+                     255, arm_thickness)
+
+        # Blend overlay onto the processed image using the mask
+        mask_f = mask.astype(np.float32) / 255.0
+        mask_3ch = np.stack([mask_f, mask_f, mask_f], axis=2)
+        processed = (processed.astype(np.float32) * (1.0 - mask_3ch)
+                     + overlay.astype(np.float32) * mask_3ch).astype(np.uint8)
+
+        metrics = _metrics_dict(original, processed)
+
+        orig_spectrum = compute_magnitude_spectrum(compute_fft(original)[2])
+        proc_spectrum = compute_magnitude_spectrum(compute_fft(processed)[2])
+
+        orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
+        proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
+
+        energy = compute_energy_analysis(processed, radius=30)
+
+        return _response_payload(
+            image_b64=_data_url_from_image(processed),
+            metrics=metrics,
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
+            energy=energy,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
