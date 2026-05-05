@@ -99,8 +99,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Emoji Presets
             presetAlien: "Uzaylı",
             presetRobot: "Robot",
-            presetAngry: "Kızgın",
-            presetCold: "Soğuk",
+            presetClown: "Joker / Palyaço",
+            presetStarEyes: "Yıldızlı Bakış",
             presetHeartEyes: "Aşık",
             presetCrying: "Ağlayan"
         },
@@ -186,8 +186,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Emoji Presets
             presetAlien: "Alien",
             presetRobot: "Robot",
-            presetAngry: "Angry",
-            presetCold: "Cold",
+            presetClown: "Joker",
+            presetStarEyes: "Starry Gaze",
             presetHeartEyes: "Heart-Eyes",
             presetCrying: "Crying"
         }
@@ -936,8 +936,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const emojiPresetNames = [
         { id: 'btnPresetAlien', preset: 'alien', labelKey: 'presetAlien' },
         { id: 'btnPresetRobot', preset: 'robot', labelKey: 'presetRobot' },
-        { id: 'btnPresetAngry', preset: 'angry', labelKey: 'presetAngry' },
-        { id: 'btnPresetCold', preset: 'cold', labelKey: 'presetCold' },
+        { id: 'btnPresetClown', preset: 'clown', labelKey: 'presetClown' },
+        { id: 'btnPresetStarEyes', preset: 'star_eyes', labelKey: 'presetStarEyes' },
         { id: 'btnPresetHeartEyes', preset: 'heart_eyes', labelKey: 'presetHeartEyes' },
         { id: 'btnPresetCrying', preset: 'crying', labelKey: 'presetCrying' },
     ];
@@ -1520,7 +1520,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     doc.setFontSize(11);
                     doc.setFont('helvetica', 'bold');
                     doc.setTextColor(30, 100, 180);
-                    doc.text(`Operation: ${opMatch[1].replace(/\.$/, '').trim()}`, 15, y);
+                    let opName = opMatch[1].replace(/\.$/, '').trim();
+                    let finalStr = (currentLang === 'tr' ? 'Uygulanan İşlem: ' : 'Operation: ') + opName;
+                    if (currentLang === 'tr' && opName === 'Joker / Palyaço') {
+                        finalStr = 'Joker Estetiği Uygulandı';
+                    }
+                    doc.text(finalStr, 15, y);
                     doc.setTextColor(0);
                     y += 7;
                 }
