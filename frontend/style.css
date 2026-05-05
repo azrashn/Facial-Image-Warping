@@ -1011,6 +1011,12 @@ input:checked + .slider.round:before { transform: translateX(20px); }
   border-color: var(--primary-color);
   transform: scale(1.05);
 }
+.emoji-btn.active {
+  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+  border-color: transparent;
+  box-shadow: 0 4px 12px rgba(168, 85, 247, 0.35);
+  transform: scale(1.08);
+}
 
 /* Makeup Panel */
 .makeup-region-selector {
