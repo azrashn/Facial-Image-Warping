@@ -92,8 +92,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // Eyewear
             eyewearPanel: "Gözlük",
             glassesType: "Gözlük Türü",
-            sunglasses: "Güneş Gözlüğü",
-            readingGlasses: "Numaralı Gözlük",
+            metalAviator: "Metal Aviator",
+            acetateWayfarer: "Asetat Wayfarer",
+            minimalistRound: "Minimalist Yuvarlak",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -178,8 +179,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // Eyewear
             eyewearPanel: "Eyewear",
             glassesType: "Glasses Type",
-            sunglasses: "Sunglasses",
-            readingGlasses: "Reading Glasses",
+            metalAviator: "Metal Aviator",
+            acetateWayfarer: "Acetate Wayfarer",
+            minimalistRound: "Minimalist Round",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -1386,11 +1388,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 landmarksOnlyImg.src = currentProcessedImage;
 
                 updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
-                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+                setSpectrumImages(
+                    payload.orig_spectrum_b64 || null,
+                    payload.proc_spectrum_b64 || null,
+                    payload.orig_phase_b64 || null,
+                    payload.proc_phase_b64 || null
+                );
 
-                const glassesLabel = glassesSelect.value === 'reading'
-                    ? (i18n[currentLang]?.readingGlasses || 'Reading Glasses')
-                    : (i18n[currentLang]?.sunglasses || 'Sunglasses');
+                const glassesLabelMap = {
+                    aviator: i18n[currentLang]?.metalAviator || 'Metal Aviator',
+                    wayfarer: i18n[currentLang]?.acetateWayfarer || 'Acetate Wayfarer',
+                    round: i18n[currentLang]?.minimalistRound || 'Minimalist Round',
+                };
+                const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);
                 analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied ${glassesLabel}.`;
 
