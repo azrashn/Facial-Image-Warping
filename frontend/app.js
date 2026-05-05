@@ -90,10 +90,11 @@ document.addEventListener('DOMContentLoaded', () => {
             startCamera: "Kamerayı Başlat",
             capturePhoto: "Fotoğraf Çek",
             // Eyewear
-            eyewearPanel: "Gözlük",
-            glassesType: "Gözlük Türü",
-            sunglasses: "Güneş Gözlüğü",
-            readingGlasses: "Numaralı Gözlük",
+            eyewearPanel: "Aksesuar",
+            glassesType: "Gözlük",
+            metalAviator: "Klasik Damla (Aviator)",
+            acetateWayfarer: "Kemik Çerçeve (Modern)",
+            minimalistRound: "İnce Yuvarlak (Retro)",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -176,10 +177,11 @@ document.addEventListener('DOMContentLoaded', () => {
             startCamera: "Start Camera",
             capturePhoto: "Capture",
             // Eyewear
-            eyewearPanel: "Eyewear",
-            glassesType: "Glasses Type",
-            sunglasses: "Sunglasses",
-            readingGlasses: "Reading Glasses",
+            eyewearPanel: "Accessory",
+            glassesType: "Glasses",
+            metalAviator: "Classic Teardrop (Aviator)",
+            acetateWayfarer: "Thick Frame (Modern)",
+            minimalistRound: "Thin Round (Retro)",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -586,9 +588,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!imgEl || !svgEl) return;
         const rect = getRenderedImageRect(imgEl);
         svgEl.style.position = 'absolute';
-        svgEl.style.left   = rect.x + 'px';
-        svgEl.style.top    = rect.y + 'px';
-        svgEl.style.width  = rect.w + 'px';
+        svgEl.style.left = rect.x + 'px';
+        svgEl.style.top = rect.y + 'px';
+        svgEl.style.width = rect.w + 'px';
         svgEl.style.height = rect.h + 'px';
     }
 
@@ -932,12 +934,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Emoji Preset Buttons (6 specific presets → /process/emoji-preset) ---
     const emojiPresetNames = [
-        { id: 'btnPresetAlien',    preset: 'alien',      labelKey: 'presetAlien' },
-        { id: 'btnPresetRobot',    preset: 'robot',      labelKey: 'presetRobot' },
-        { id: 'btnPresetAngry',    preset: 'angry',      labelKey: 'presetAngry' },
-        { id: 'btnPresetCold',     preset: 'cold',       labelKey: 'presetCold' },
-        { id: 'btnPresetHeartEyes',preset: 'heart_eyes',  labelKey: 'presetHeartEyes' },
-        { id: 'btnPresetCrying',   preset: 'crying',     labelKey: 'presetCrying' },
+        { id: 'btnPresetAlien', preset: 'alien', labelKey: 'presetAlien' },
+        { id: 'btnPresetRobot', preset: 'robot', labelKey: 'presetRobot' },
+        { id: 'btnPresetAngry', preset: 'angry', labelKey: 'presetAngry' },
+        { id: 'btnPresetCold', preset: 'cold', labelKey: 'presetCold' },
+        { id: 'btnPresetHeartEyes', preset: 'heart_eyes', labelKey: 'presetHeartEyes' },
+        { id: 'btnPresetCrying', preset: 'crying', labelKey: 'presetCrying' },
     ];
 
     async function applyEmojiPreset(presetName, labelKey) {
@@ -1245,7 +1247,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const formData = new FormData();
             formData.append('image', uploadedFile);
             formData.append('scale', eyeSizeSlider.value);
-            
+
             loadingOverlay.style.display = 'flex';
             try {
                 // Backend endpoint
@@ -1282,7 +1284,7 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('style', beardSelect.value);
             formData.append('intensity', intensitySlider.value); // Use global intensity
             formData.append('darkness', beardDarknessSlider.value / 100.0);
-            
+
             loadingOverlay.style.display = 'flex';
             try {
                 // Backend endpoint
@@ -1314,7 +1316,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ageCompareBtn) {
         ageCompareBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage || !currentProcessedImage) return;
-            
+
             loadingOverlay.style.display = 'flex';
             try {
                 // Convert currentProcessedImage (base64) to Blob
@@ -1325,7 +1327,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const formData = new FormData();
                 formData.append('before_image', uploadedFile);
                 formData.append('after_image', afterFile);
-                
+
                 const response = await fetch(`${API_BASE}/process/estimate-age-compare`, { method: 'POST', body: formData });
                 const payload = await response.json();
                 if (!response.ok) throw new Error(payload?.detail || 'Age comparison failed.');
@@ -1386,13 +1388,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 landmarksOnlyImg.src = currentProcessedImage;
 
                 updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
-                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+                setSpectrumImages(
+                    payload.orig_spectrum_b64 || null,
+                    payload.proc_spectrum_b64 || null,
+                    payload.orig_phase_b64 || null,
+                    payload.proc_phase_b64 || null
+                );
 
-                const glassesLabel = glassesSelect.value === 'reading'
-                    ? (i18n[currentLang]?.readingGlasses || 'Reading Glasses')
-                    : (i18n[currentLang]?.sunglasses || 'Sunglasses');
+                const glassesLabelMap = {
+                    aviator: i18n[currentLang]?.metalAviator || 'Classic Teardrop (Aviator)',
+                    wayfarer: i18n[currentLang]?.acetateWayfarer || 'Thick Frame (Modern)',
+                    round: i18n[currentLang]?.minimalistRound || 'Thin Round (Retro)',
+                };
+                const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);
-                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied ${glassesLabel}.`;
+                const appliedPrefix = currentLang === 'tr' ? 'Uygulanan Gözlük:' : 'Applied Glasses:';
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>${appliedPrefix} ${glassesLabel}.`;
 
                 if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
             } catch (e) {
@@ -1484,7 +1495,7 @@ document.addEventListener('DOMContentLoaded', () => {
             doc.setFontSize(11);
             doc.setFont('helvetica', 'normal');
             const metrics = [
-                { label: 'MSE',  value: mseValue.textContent },
+                { label: 'MSE', value: mseValue.textContent },
                 { label: 'PSNR', value: psnrValue.textContent + ' dB' },
                 { label: 'SSIM', value: ssimValue.textContent },
             ];
@@ -1503,8 +1514,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 y += 7;
 
                 // Extract and display the applied operation explicitly
-                const opMatch = summaryText.match(/Applied Emoji Preset:\s*(.+)/i)
-                             || summaryText.match(/Uygulanan .+?:\s*(.+)/i);
+                const opMatch = summaryText.match(/Applied (?:Emoji Preset|Glasses|Makeup|Hair|Beard|Filter):\s*(.+)/i)
+                    || summaryText.match(/Uygulanan .+?:\s*(.+)/i);
                 if (opMatch) {
                     doc.setFontSize(11);
                     doc.setFont('helvetica', 'bold');
