@@ -1047,9 +1047,9 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
     return tinted
 
 
-# ── 3. ANGRY PRESET ──────────────────────────────────────────────────────────
-def _apply_angry(image: np.ndarray) -> np.ndarray:
-    """😡 Angry: brow furrow + eye squint + red overlay."""
+# ── 3. CLOWN PRESET ──────────────────────────────────────────────────────────
+def _apply_clown(image: np.ndarray) -> np.ndarray:
+    """🤡 Clown: Joker face paint, panda eyes, messy red smile."""
     out = image.copy()
     h, w = out.shape[:2]
     lm = detect_face_landmarks(out)
@@ -1057,29 +1057,21 @@ def _apply_angry(image: np.ndarray) -> np.ndarray:
         return out
     face_sz = _face_scale(lm)
     deltas = np.zeros_like(lm)
-    nose_bridge = lm[168].copy()
 
-    # Brow furrow: inner brows strongly down+inward, outer brows down
-    inner_l = [107, 55]; inner_r = [336, 285]
-    outer_l = [70, 46]; outer_r = [300, 276]
-    for idx in inner_l:
-        deltas[idx,1] += face_sz * 0.12
-        deltas[idx,0] += (nose_bridge[0] - lm[idx,0]) * 0.30
-    for idx in inner_r:
-        deltas[idx,1] += face_sz * 0.12
-        deltas[idx,0] += (nose_bridge[0] - lm[idx,0]) * 0.30
-    for idx in outer_l + outer_r:
-        deltas[idx,1] += face_sz * 0.05
+    # Subtle smile warp
+    deltas[61,0] -= face_sz * 0.05
+    deltas[291,0] += face_sz * 0.05
+    deltas[61,1] -= face_sz * 0.02
+    deltas[291,1] -= face_sz * 0.02
+    
+    # Boundary Control
+    anchors_zero = [10, 338, 297, 332, 284, 251, 152, 168, 6, 197, 195, 5]
+    anchors_zero += [33, 133, 362, 263, 159, 145, 386, 374]
+    
+    for idx in anchors_zero:
+        if idx < len(lm):
+            deltas[idx] = 0.0
 
-    # Eye squint: pull upper+lower lids closer
-    upper_l = [159,160,158]; lower_l = [145,144,153]
-    upper_r = [386,387,385]; lower_r = [374,373,380]
-    squint = face_sz * 0.03
-    for idx in upper_l + upper_r: deltas[idx,1] += squint
-    for idx in lower_l + lower_r: deltas[idx,1] -= squint
-
-    anchors_zero = [10,338,297,332,284,251,168,6,197,195,5,4,152]
-    for idx in anchors_zero: deltas[idx] = 0.0
     deltas[np.abs(deltas) < 0.05] = 0.0
 
     dst = lm + deltas
@@ -1088,17 +1080,119 @@ def _apply_angry(image: np.ndarray) -> np.ndarray:
 
     try:
         prep = preprocess_image(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
-        mask = _create_extended_face_mask(warped, get_landmarks(prep), 0.35)
+        wlms = get_landmarks(prep)
     except Exception:
-        mask = np.ones((h,w), np.float32)*0.4
-    tinted = _apply_color_overlay(warped, mask, (0,0,255), 0.30)
+        wlms = None
+        
+    if wlms is not None:
+        # 1. Clown Face Paint Base (Reduced Whiteness)
+        try:
+            base_mask = _create_extended_face_mask(warped, wlms, 0.05)
+        except Exception:
+            base_mask = np.zeros((h, w), dtype=np.float32)
 
-    return tinted
+        # Subtle white tint instead of heavy messy noise
+        paint_alpha = base_mask * 0.25  # Lower opacity
+        paint_color = np.full((h, w, 3), (255, 255, 255), dtype=np.uint8)
+        paint_alpha_3d = paint_alpha[..., np.newaxis]
+        warped = (warped * (1 - paint_alpha_3d) + paint_color * paint_alpha_3d).astype(np.uint8)
+
+        # 2. Clown "Emoji" Eyes (Blue Triangles)
+        def draw_clown_triangle(img, pt, direction, size, color=(255, 50, 50)):
+            # direction: -1 (pointing up), 1 (pointing down)
+            pt_top = np.array([pt[0], pt[1] + direction * size])
+            width = size * 0.5
+            pt_left = np.array([pt[0] - width, pt[1] + direction * size * 0.2])
+            pt_right = np.array([pt[0] + width, pt[1] + direction * size * 0.2])
+            # To make it look like the emoji, the base of the triangle is near the eye, pointing outwards
+            # Actually, standard way: triangle base near eye, pointing away.
+            base_left = np.array([pt[0] - width*0.5, pt[1]])
+            base_right = np.array([pt[0] + width*0.5, pt[1]])
+            pts = np.array([pt_top, base_left, base_right], np.int32)
+            cv2.fillPoly(img, [pts], color)
+
+        if 159 < len(wlms) and 145 < len(wlms):
+            pt_top_l = (int(wlms[159]["x"]*w), int(wlms[159]["y"]*h))
+            pt_bot_l = (int(wlms[145]["x"]*w), int(wlms[145]["y"]*h))
+            draw_clown_triangle(warped, pt_top_l, -1, int(face_sz * 0.25))
+            draw_clown_triangle(warped, pt_bot_l, 1, int(face_sz * 0.25))
+            
+        if 386 < len(wlms) and 374 < len(wlms):
+            pt_top_r = (int(wlms[386]["x"]*w), int(wlms[386]["y"]*h))
+            pt_bot_r = (int(wlms[374]["x"]*w), int(wlms[374]["y"]*h))
+            draw_clown_triangle(warped, pt_top_r, -1, int(face_sz * 0.25))
+            draw_clown_triangle(warped, pt_bot_r, 1, int(face_sz * 0.25))
+
+        # 3. Exaggerated Clown Smile (Thick Rounded Lips)
+        outer_lip_indices = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146]
+        lip_pts = []
+        for idx in outer_lip_indices:
+            if idx < len(wlms):
+                lip_pts.append([int(wlms[idx]["x"] * w), int(wlms[idx]["y"] * h)])
+                
+        if len(lip_pts) == len(outer_lip_indices):
+            thickness = max(4, int(face_sz * 0.05))
+            lip_pts = np.array(lip_pts, np.int32).reshape((-1, 1, 2))
+            
+            # Draw thick polylines
+            cv2.polylines(warped, [lip_pts], isClosed=True, color=(0, 0, 255), thickness=thickness, lineType=cv2.LINE_AA)
+            
+            # Draw filled circles at every vertex to ensure perfectly rounded corners (dairesel dönüşler)
+            for pt in lip_pts:
+                cv2.circle(warped, (pt[0][0], pt[0][1]), thickness // 2, (0, 0, 255), -1, cv2.LINE_AA)
+
+        # 4. Large Solid Red Nose
+        if 4 < len(wlms):
+            nx, ny = int(wlms[4]["x"]*w), int(wlms[4]["y"]*h)
+            # Increase the diameter significantly
+            cv2.circle(warped, (nx, ny), int(face_sz * 0.28), (0, 0, 255), -1, cv2.LINE_AA)
+
+    return warped
 
 
-# ── 4. COLD PRESET ───────────────────────────────────────────────────────────
-def _apply_cold(image: np.ndarray) -> np.ndarray:
-    """🥶 Cold: arched brows + flat mouth + blue overlay + purple lips."""
+# ── 4. STAR EYES PRESET ──────────────────────────────────────────────────────
+def _draw_star(image: np.ndarray, cx: int, cy: int, size: int, color=(0, 255, 255)):
+    """Draw a filled 5-pointed star at (cx, cy) with given size."""
+    out = image.copy()
+    pts = []
+    for i in range(10):
+        angle = i * np.pi / 5 - np.pi / 2
+        r = size if i % 2 == 0 else size * 0.4
+        pts.append([int(cx + r * np.cos(angle)), int(cy + r * np.sin(angle))])
+    cv2.fillPoly(out, [np.array(pts, dtype=np.int32)], color)
+    return out
+
+
+def _place_star_masks(image: np.ndarray, landmarks) -> np.ndarray:
+    """Place yellow star shapes over both eyes."""
+    if landmarks is None:
+        return image
+    h, w = image.shape[:2]
+    out = image.copy()
+
+    left_eye = [33, 133, 160, 158, 153, 144, 159, 145]
+    right_eye = [362, 263, 387, 385, 380, 373, 386, 374]
+
+    def eye_center(indices):
+        xs = [int(landmarks[i]["x"]*w) for i in indices if i < len(landmarks)]
+        ys = [int(landmarks[i]["y"]*h) for i in indices if i < len(landmarks)]
+        return (sum(xs)//len(xs), sum(ys)//len(ys)) if xs else None
+
+    cl = eye_center(left_eye)
+    cr = eye_center(right_eye)
+    if cl is None or cr is None:
+        return image
+
+    eye_dist = abs(cr[0] - cl[0])
+    star_size = max(12, int(eye_dist * 0.45))
+
+    for (cx, cy) in [cl, cr]:
+        out = _draw_star(out, cx, cy, star_size, (0, 255, 255))
+    return out
+
+
+def _apply_star_eyes(image: np.ndarray) -> np.ndarray:
+    """🤩 Star Eyes: subtle smile + warm tint + procedural stars."""
     out = image.copy()
     h, w = out.shape[:2]
     lm = detect_face_landmarks(out)
@@ -1107,23 +1201,11 @@ def _apply_cold(image: np.ndarray) -> np.ndarray:
     face_sz = _face_scale(lm)
     deltas = np.zeros_like(lm)
 
-    # Sad/worried arched brows: inner UP, outer DOWN (strong)
-    for idx in [107, 55, 336, 285]:  # inner brows
-        deltas[idx,1] -= face_sz * 0.10
-    for idx in [70, 46, 300, 276]:   # outer brows
-        deltas[idx,1] += face_sz * 0.07
-
-    # Flatten mouth: move all lip points toward horizontal midline
-    corners = [61, 291]
-    if all(c < len(lm) for c in corners):
-        mouth_mid_y = (lm[61,1] + lm[291,1]) / 2.0
-        all_lip = [61,146,91,181,84,17,314,405,321,375,291,
-                   308,324,318,402,317,14,87,178,88,95,78,
-                   13,312,311,310,415,308,82,81,80,191,
-                   40,39,37,0,267,269,270,409]
-        for idx in all_lip:
-            if idx < len(lm):
-                deltas[idx,1] += (mouth_mid_y - lm[idx,1]) * 0.4
+    # Subtle wide smile
+    deltas[61,0] -= face_sz * 0.04
+    deltas[291,0] += face_sz * 0.04
+    deltas[61,1] -= face_sz * 0.02
+    deltas[291,1] -= face_sz * 0.02
 
     anchors_zero = [10,338,297,332,284,251,168,6,197,195,5,4,152]
     for idx in anchors_zero: deltas[idx] = 0.0
@@ -1140,11 +1222,13 @@ def _apply_cold(image: np.ndarray) -> np.ndarray:
     except Exception:
         mask = np.ones((h,w), np.float32)*0.4
         wlms = None
-    tinted = _apply_color_overlay(warped, mask, (255,200,150), 0.45)
+        
+    # Warm yellowish/golden color mask
+    tinted = _apply_color_overlay(warped, mask, (50, 200, 255), 0.20)
 
-    # Full lip color (upper + lower)
+    # Procedural drawing: stars over eyes
     if wlms:
-        tinted = _apply_lip_color(tinted, wlms, (180,50,100), 0.50)
+        tinted = _place_star_masks(tinted, wlms)
 
     return tinted
 
@@ -1321,8 +1405,8 @@ def _apply_crying(image: np.ndarray) -> np.ndarray:
 _EMOJI_PRESETS_MAP = {
     "alien": _apply_alien,
     "robot": _apply_robot,
-    "angry": _apply_angry,
-    "cold": _apply_cold,
+    "clown": _apply_clown,
+    "star_eyes": _apply_star_eyes,
     "heart_eyes": _apply_heart_eyes,
     "crying": _apply_crying,
 }
@@ -1334,7 +1418,7 @@ async def process_emoji_preset(body: EmojiPresetRequest):
     Apply one of the 6 emoji-themed facial presets to the uploaded image.
 
     Accepts a JSON body with ``image_b64`` (data-URL or raw base64) and
-    ``preset_name`` (alien | robot | angry | cold | heart_eyes | crying).
+    ``preset_name`` (alien | robot | clown | star_eyes | heart_eyes | crying).
     """
     preset_key = (body.preset_name or "").strip().lower()
     preset_fn = _EMOJI_PRESETS_MAP.get(preset_key)
