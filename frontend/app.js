@@ -951,13 +951,19 @@ document.addEventListener('DOMContentLoaded', () => {
         loadingOverlay.style.display = 'flex';
 
         try {
+            // Build payload – alien gets a detailed description for the backend
+            const payloadBody = {
+                image_b64: currentOriginalImage,
+                preset_name: presetName,
+            };
+            if (presetName === 'alien') {
+                payloadBody.description = 'Highly refined alien transformation. Procedurally refine face selection. Perform eye scaling (positive, extreme). Sculpt chin into a distinct triangular (alien-like) shape. Apply a smooth, realistic bright green color overlay to the refined face mask.';
+            }
+
             const response = await fetch(`${API_BASE}/process/emoji-preset`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    image_b64: currentOriginalImage,
-                    preset_name: presetName,
-                }),
+                body: JSON.stringify(payloadBody),
             });
 
             const payload = await response.json();
@@ -1495,6 +1501,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 doc.setFont('helvetica', 'bold');
                 doc.text(i18n[currentLang]?.analysisSummary || 'Analysis Summary', 15, y);
                 y += 7;
+
+                // Extract and display the applied operation explicitly
+                const opMatch = summaryText.match(/Applied Emoji Preset:\s*(.+)/i)
+                             || summaryText.match(/Uygulanan .+?:\s*(.+)/i);
+                if (opMatch) {
+                    doc.setFontSize(11);
+                    doc.setFont('helvetica', 'bold');
+                    doc.setTextColor(30, 100, 180);
+                    doc.text(`Operation: ${opMatch[1].replace(/\.$/, '').trim()}`, 15, y);
+                    doc.setTextColor(0);
+                    y += 7;
+                }
+
                 doc.setFontSize(10);
                 doc.setFont('helvetica', 'normal');
                 const lines = doc.splitTextToSize(summaryText, pageW - 30);
