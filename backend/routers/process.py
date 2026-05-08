@@ -1192,7 +1192,7 @@ def _place_star_masks(image: np.ndarray, landmarks) -> np.ndarray:
 
 
 def _apply_star_eyes(image: np.ndarray) -> np.ndarray:
-    """🤩 Star Eyes: subtle smile + warm tint + procedural stars."""
+    """🤩 Star Eyes: subtle smile + warm tint + EAR-reactive glowing stars."""
     out = image.copy()
     h, w = out.shape[:2]
     lm = detect_face_landmarks(out)
@@ -1226,9 +1226,90 @@ def _apply_star_eyes(image: np.ndarray) -> np.ndarray:
     # Warm yellowish/golden color mask
     tinted = _apply_color_overlay(warped, mask, (50, 200, 255), 0.20)
 
-    # Procedural drawing: stars over eyes
+    # Procedural drawing: EAR-tracked bloom + sharp stars over eyes
     if wlms:
-        tinted = _place_star_masks(tinted, wlms)
+        def _pt(idx):
+            if idx >= len(wlms):
+                return None
+            return np.array([wlms[idx]["x"] * w, wlms[idx]["y"] * h], dtype=np.float32)
+
+        def _eye_center(indices):
+            pts = [_pt(i) for i in indices]
+            pts = [p for p in pts if p is not None]
+            if not pts:
+                return None
+            return np.mean(np.vstack(pts), axis=0)
+
+        def _eye_ear(idxs):
+            p1, p2, p3, p4, p5, p6 = [_pt(i) for i in idxs]
+            if any(p is None for p in [p1, p2, p3, p4, p5, p6]):
+                return 0.30
+            v1 = np.linalg.norm(p2 - p6)
+            v2 = np.linalg.norm(p3 - p5)
+            hdist = max(np.linalg.norm(p1 - p4), 1e-6)
+            return float((v1 + v2) / (2.0 * hdist))
+
+        def _star_poly(cx, cy, size, y_scale=1.0):
+            pts = []
+            for i in range(10):
+                ang = i * np.pi / 5.0 - np.pi / 2.0
+                r = size if i % 2 == 0 else size * 0.42
+                x = cx + r * np.cos(ang)
+                y = cy + r * np.sin(ang) * y_scale
+                pts.append([int(round(x)), int(round(y))])
+            return np.array(pts, dtype=np.int32)
+
+        left_eye = [33, 133, 160, 158, 153, 144, 159, 145]
+        right_eye = [362, 263, 387, 385, 380, 373, 386, 374]
+        left_ear_idx = [33, 160, 158, 133, 153, 144]
+        right_ear_idx = [362, 385, 387, 263, 373, 380]
+
+        cl = _eye_center(left_eye)
+        cr = _eye_center(right_eye)
+        if cl is not None and cr is not None:
+            eye_dist = max(float(abs(cr[0] - cl[0])), 1.0)
+            base_size = max(12, int(eye_dist * 0.45))
+            ear_l = _eye_ear(left_ear_idx)
+            ear_r = _eye_ear(right_ear_idx)
+
+            # More squint -> flatter stars (smaller Y-scale)
+            def _ear_to_y_scale(ear_val):
+                return float(np.clip(ear_val / 0.30, 0.35, 1.15))
+
+            eyes = [
+                (int(round(cl[0])), int(round(cl[1])), _ear_to_y_scale(ear_l)),
+                (int(round(cr[0])), int(round(cr[1])), _ear_to_y_scale(ear_r)),
+            ]
+
+            glow_color = np.array([0, 150, 255], dtype=np.float32)    # warm orange in BGR
+            core_color = (0, 235, 255)                                 # sharp yellow in BGR
+            final = tinted.astype(np.float32)
+
+            for cx, cy, y_scale in eyes:
+                glow_size = int(base_size * 1.55)
+                core_size = int(base_size * 0.92)
+
+                # Bloom layer (large blurred semi-transparent star)
+                glow_mask = np.zeros((h, w), dtype=np.float32)
+                glow_pts = _star_poly(cx, cy, glow_size, y_scale)
+                cv2.fillPoly(glow_mask, [glow_pts], 1.0, lineType=cv2.LINE_AA)
+                k = max(7, int(glow_size * 0.9))
+                if k % 2 == 0:
+                    k += 1
+                glow_mask = cv2.GaussianBlur(glow_mask, (k, k), sigmaX=0, sigmaY=0)
+                glow_alpha = np.clip(glow_mask * 0.75, 0.0, 0.75)[..., None]
+                final = final * (1.0 - glow_alpha) + glow_color * glow_alpha
+
+                # Core star (sharp solid center)
+                core_mask = np.zeros((h, w), dtype=np.float32)
+                core_pts = _star_poly(cx, cy, core_size, y_scale)
+                cv2.fillPoly(core_mask, [core_pts], 1.0, lineType=cv2.LINE_AA)
+                core_alpha = np.clip(core_mask, 0.0, 1.0)[..., None]
+                core_arr = np.zeros((h, w, 3), dtype=np.float32)
+                core_arr[:] = np.array(core_color, dtype=np.float32)
+                final = final * (1.0 - core_alpha) + core_arr * core_alpha
+
+            tinted = np.clip(final, 0, 255).astype(np.uint8)
 
     return tinted
 
