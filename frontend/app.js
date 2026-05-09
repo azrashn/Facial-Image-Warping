@@ -102,7 +102,17 @@ document.addEventListener('DOMContentLoaded', () => {
             presetClown: "Joker / Palyaço",
             presetStarEyes: "Yıldızlı Bakış",
             presetHeartEyes: "Aşık",
-            presetCrying: "Ağlayan"
+            presetCrying: "Ağlayan",
+            // FFT Lab
+            tabFFTLab: "FFT Laboratuvarı",
+            fftMagnitude: "Büyüklük (Magnitude)",
+            fftPhase: "Faz (Phase)",
+            interactiveSelection: "Etkileşimli Bölge Seçimi: Bir alan seçmek için tıklayıp sürükleyin.",
+            selectionOutput: "Seçim Çıktısı",
+            noDataFft: "Veri yok (FFT Filtresi Çalıştırın)",
+            selectRegionOutput: "Çıktı oluşturmak için bir bölge seçin",
+            procFFTPhase: "İşlenmiş - FFT Fazı",
+            origFFTPhase: "Orijinal - FFT Fazı"
         },
         EN: {
             dropImage: "Drop image here",
@@ -189,7 +199,17 @@ document.addEventListener('DOMContentLoaded', () => {
             presetClown: "Joker",
             presetStarEyes: "Starry Gaze",
             presetHeartEyes: "Heart-Eyes",
-            presetCrying: "Crying"
+            presetCrying: "Crying",
+            // FFT Lab
+            tabFFTLab: "FFT Laboratory",
+            fftMagnitude: "Magnitude",
+            fftPhase: "Phase",
+            interactiveSelection: "Interactive Region Selection: Click and drag to select a patch.",
+            selectionOutput: "Selection Output",
+            noDataFft: "No data (Run FFT Filter)",
+            selectRegionOutput: "Select a region to generate output",
+            procFFTPhase: "Processed - FFT Phase",
+            origFFTPhase: "Original - FFT Phase"
         }
     };
 
@@ -244,6 +264,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const procSpectrumImg = document.getElementById('procSpectrumImg');
     const origPhaseImg = document.getElementById('origPhaseImg');
     const procPhaseImg = document.getElementById('procPhaseImg');
+    
+    // FFT Lab Elements
+    const fftLabProcSpectrumImg = document.getElementById('fftLabProcSpectrumImg');
+    const fftLabProcPhaseImg = document.getElementById('fftLabProcPhaseImg');
+    const fftLabProcSpectrumPlaceholder = document.getElementById('fftLabProcSpectrumPlaceholder');
+    const fftLabProcPhasePlaceholder = document.getElementById('fftLabProcPhasePlaceholder');
+    const fftOutputImg = document.getElementById('fftOutputImg');
+    const fftOutputPlaceholder = document.getElementById('fftOutputPlaceholder');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -735,9 +763,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (procSpectrumB64 && procSpectrumImg) {
             procSpectrumImg.src = procSpectrumB64;
             procSpectrumImg.style.display = 'block';
+            if (fftLabProcSpectrumImg) {
+                fftLabProcSpectrumImg.src = procSpectrumB64;
+                fftLabProcSpectrumImg.style.display = 'block';
+            }
+            if (fftLabProcSpectrumPlaceholder) fftLabProcSpectrumPlaceholder.style.display = 'none';
         } else if (procSpectrumImg) {
             procSpectrumImg.src = '';
             procSpectrumImg.style.display = 'none';
+            if (fftLabProcSpectrumImg) {
+                fftLabProcSpectrumImg.src = '';
+                fftLabProcSpectrumImg.style.display = 'none';
+            }
+            if (fftLabProcSpectrumPlaceholder) fftLabProcSpectrumPlaceholder.style.display = 'block';
         }
 
         if (origPhaseB64 && origPhaseImg) {
@@ -751,9 +789,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (procPhaseB64 && procPhaseImg) {
             procPhaseImg.src = procPhaseB64;
             procPhaseImg.style.display = 'block';
+            if (fftLabProcPhaseImg) {
+                fftLabProcPhaseImg.src = procPhaseB64;
+                fftLabProcPhaseImg.style.display = 'block';
+            }
+            if (fftLabProcPhasePlaceholder) fftLabProcPhasePlaceholder.style.display = 'none';
         } else if (procPhaseImg) {
             procPhaseImg.src = '';
             procPhaseImg.style.display = 'none';
+            if (fftLabProcPhaseImg) {
+                fftLabProcPhaseImg.src = '';
+                fftLabProcPhaseImg.style.display = 'none';
+            }
+            if (fftLabProcPhasePlaceholder) fftLabProcPhasePlaceholder.style.display = 'block';
         }
     }
 
@@ -1741,5 +1789,108 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // --- FFT LAB INTERACTIVE SELECTION ---
+    const fftSubBtns = document.querySelectorAll('.fft-sub-btn');
+    const fftMagView = document.getElementById('fft-mag-view');
+    const fftPhaseView = document.getElementById('fft-phase-view');
+
+    fftSubBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            fftSubBtns.forEach(b => {
+                b.classList.remove('active');
+                b.style.background = 'transparent';
+            });
+            btn.classList.add('active');
+            btn.style.background = 'var(--surface-color)';
+
+            if (btn.dataset.sub === 'magnitude') {
+                fftMagView.style.display = 'flex';
+                fftPhaseView.style.display = 'none';
+            } else {
+                fftMagView.style.display = 'none';
+                fftPhaseView.style.display = 'flex';
+            }
+        });
+    });
+
+    function setupInteractiveCanvas(canvasId, name) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        let isDrawing = false;
+        let startX = 0;
+        let startY = 0;
+        let currentX = 0;
+        let currentY = 0;
+
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        canvas.addEventListener('mousedown', (e) => {
+            resizeCanvas();
+            const rect = canvas.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+            isDrawing = true;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const rect = canvas.getBoundingClientRect();
+            currentX = e.clientX - rect.left;
+            currentY = e.clientY - rect.top;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const x = Math.min(startX, currentX);
+            const y = Math.min(startY, currentY);
+            const w = Math.abs(currentX - startX);
+            const h = Math.abs(currentY - startY);
+
+            ctx.clearRect(x, y, w, h);
+
+            ctx.strokeStyle = '#00ffcc';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(x, y, w, h);
+        });
+
+        const finishSelection = (e) => {
+            if (!isDrawing) return;
+            isDrawing = false;
+            
+            const rect = canvas.getBoundingClientRect();
+            currentX = e.clientX - rect.left;
+            currentY = e.clientY - rect.top;
+
+            const x = Math.min(startX, currentX);
+            const y = Math.min(startY, currentY);
+            const w = Math.abs(currentX - startX);
+            const h = Math.abs(currentY - startY);
+
+            if (w > 5 && h > 5) {
+                console.log(`[FFT Lab - ${name}] Region Selected - X: ${Math.round(x)}, Y: ${Math.round(y)}, Width: ${Math.round(w)}, Height: ${Math.round(h)}`);
+                // Backend'den veri alinacak
+            } else {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        };
+
+        canvas.addEventListener('mouseup', finishSelection);
+        canvas.addEventListener('mouseleave', finishSelection);
+    }
+
+    setupInteractiveCanvas('fftSelectionCanvas', 'Magnitude');
+    setupInteractiveCanvas('fftPhaseCanvas', 'Phase');
 
 });

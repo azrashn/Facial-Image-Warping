@@ -83,31 +83,30 @@ def apply_hair_color(
         parts = [int(x.strip()) for x in target_color.split(",")]
         r, g, b = parts[0], parts[1], parts[2]
 
-        # 2. RGB → BGR tek piksel — OpenCV HSV'ye çevirerek Hue, S-scale, V-scale üret
-        pixel_bgr = np.array([[[b, g, r]]], dtype=np.uint8)
-        pixel_hsv = cv2.cvtColor(pixel_bgr, cv2.COLOR_BGR2HSV)[0, 0]
-        target_h  = int(pixel_hsv[0])                       # 0-179 (OpenCV)
-        s_scale   = float(pixel_hsv[1]) / 128.0 + 0.5       # saturation boost
-        v_scale   = float(pixel_hsv[2]) / 200.0 + 0.4       # value boost, clamp korunuyor
-
-        # 3. Saç maskesini üret
+        # 2. Saç maskesini üret
         hair_mask = _get_hair_mask(image_bgr)
 
         if cv2.countNonZero(hair_mask) == 0:
             logger.warning("apply_hair_color: boş maske — orijinal döndürülüyor")
             return image_bgr.copy()
 
-        # 4. HSV renk dönüşümü (mevcut mantık korunuyor)
-        hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
-        mask_bool = hair_mask > 0
+        # 3. Overlay Blend Mode ile gerçekçi saç boyama
+        # Hedef rengi temsil eden katman
+        color_layer = np.full_like(image_bgr, (b, g, r), dtype=np.float32) / 255.0
+        base = image_bgr.astype(np.float32) / 255.0
 
-        hsv[mask_bool, 0] = float(target_h)
-        hsv[mask_bool, 1] = np.clip(hsv[mask_bool, 1] * s_scale, 0, 255)
-        hsv[mask_bool, 2] = np.clip(hsv[mask_bool, 2] * v_scale, 0, 255)
+        # Overlay formülü:
+        # base < 0.5 => 2 * base * color
+        # base >= 0.5 => 1 - 2 * (1 - base) * (1 - color)
+        overlay = np.where(
+            base < 0.5,
+            2.0 * base * color_layer,
+            1.0 - 2.0 * (1.0 - base) * (1.0 - color_layer)
+        )
 
-        colored = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        colored = np.clip(overlay * 255.0, 0, 255).astype(np.uint8)
 
-        # 5. Yumuşak maske ile blend (mevcut mantık korunuyor)
+        # 4. Yumuşak maske ile blend
         soft_mask = cv2.GaussianBlur(hair_mask, (31, 31), 0).astype(np.float32) / 255.0
         soft_mask_3ch = np.stack([soft_mask] * 3, axis=-1)
 
