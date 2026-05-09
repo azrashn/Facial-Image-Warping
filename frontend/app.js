@@ -95,6 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
             metalAviator: "Klasik Damla (Aviator)",
             acetateWayfarer: "Kemik Çerçeve (Modern)",
             minimalistRound: "İnce Yuvarlak (Retro)",
+            catEyeStyle: "Kedi Gözü (Cat-Eye)",
+            futuristicStyle: "Fütüristik (Kalkan)",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -182,6 +184,8 @@ document.addEventListener('DOMContentLoaded', () => {
             metalAviator: "Classic Teardrop (Aviator)",
             acetateWayfarer: "Thick Frame (Modern)",
             minimalistRound: "Thin Round (Retro)",
+            catEyeStyle: "Cat-Eye",
+            futuristicStyle: "Futuristic (Shield)",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -1399,6 +1403,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     aviator: i18n[currentLang]?.metalAviator || 'Classic Teardrop (Aviator)',
                     wayfarer: i18n[currentLang]?.acetateWayfarer || 'Thick Frame (Modern)',
                     round: i18n[currentLang]?.minimalistRound || 'Thin Round (Retro)',
+                    cat_eye: i18n[currentLang]?.catEyeStyle || 'Cat-Eye',
+                    futuristic: i18n[currentLang]?.futuristicStyle || 'Futuristic (Shield)',
                 };
                 const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);
