@@ -1005,6 +1005,60 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // --- CLOWN: dedicated high-quality endpoint override ---
+    const clownBtn = document.getElementById('btnPresetClown');
+    if (clownBtn) {
+        // Remove the generic emoji-preset listener by replacing with a dedicated handler
+        clownBtn.replaceWith(clownBtn.cloneNode(true));   // strip old listeners
+        const freshClownBtn = document.getElementById('btnPresetClown');
+
+        freshClownBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
+            freshClownBtn.classList.add('active');
+            loadingOverlay.style.display = 'flex';
+
+            try {
+                const formData = new FormData();
+                formData.append('image', uploadedFile);
+
+                console.log('[Clown] → POST /process/clown_transformation');
+
+                const response = await fetch(`${API_BASE}/process/clown_transformation`, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const payload = await response.json();
+                console.log('[Clown] response:', payload);
+
+                if (!response.ok) throw new Error(payload?.detail || 'Clown transformation failed.');
+
+                const base64 = payload.proc_image_b64 || payload.image_b64 || payload.image || null;
+                if (!base64) throw new Error('No image data in clown response.');
+
+                const src = base64.startsWith('data:') ? base64 : `data:image/jpeg;base64,${base64}`;
+                currentProcessedImage = src;
+                afterImg.src = src;
+                landmarksOnlyImg.src = src;
+
+                if (payload.metrics) updateMetricsFromApi(payload.metrics);
+
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Clown Transformation applied.`;
+                addHistory('Emoji: Clown');
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+
+            } catch (err) {
+                console.error('[Clown] Error:', err);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
     // Makeup
     const applyMakeupBtn = document.getElementById('applyMakeupBtn');
     const makeupRegion = document.getElementById('makeupRegion');
@@ -1599,5 +1653,93 @@ document.addEventListener('DOMContentLoaded', () => {
             downloadBtn.textContent = i18n[currentLang]?.downloadPDF || 'Download Results as PDF';
         }
     });
+    // --- HAIR COLOR LOGIC ---
+    function hexToRgb(hex) {
+        let h = hex.replace('#', '');
+        if (h.length === 3) h = [...h].map(x => x + x).join('');
+        return `${parseInt(h.substring(0,2), 16)},${parseInt(h.substring(2,4), 16)},${parseInt(h.substring(4,6), 16)}`;
+    }
+
+    const applyHairColorBtn = document.getElementById('applyHairColorBtn');
+    const hairColorPicker  = document.getElementById('hairColorPicker');
+    const hairOpacity      = document.getElementById('hairOpacity');
+
+    if (applyHairColorBtn) {
+        applyHairColorBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) {
+                alert(i18n[currentLang]?.uploadWait || 'Please upload an image first.');
+                return;
+            }
+
+            const rgbColor      = hexToRgb(hairColorPicker.value);
+            const intensityFloat = parseInt(hairOpacity.value) / 100.0;
+
+            // Debug — verify values before request
+            console.log('[Hair Color] target_color (RGB):', rgbColor);
+            console.log('[Hair Color] intensity:', intensityFloat);
+            console.log('[Hair Color] endpoint:', `${API_BASE}/process/hair-color`);
+
+            const formData = new FormData();
+            formData.append('image',        uploadedFile);
+            formData.append('target_color', rgbColor);
+            formData.append('intensity',    intensityFloat.toString());
+
+            loadingOverlay.style.display = 'flex';
+
+            try {
+                const response = await fetch(`${API_BASE}/process/hair-color`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const payload = await response.json();
+
+                // 1. Tam payload'ı konsolda göster
+                console.log('[Hair Color] Backend tam yanıtı (payload):', payload);
+
+                if (!response.ok) {
+                    throw new Error(payload?.detail || 'Hair color processing failed.');
+                }
+
+                // 2. Esnek key yakalama — tüm olası isimleri dene
+                const base64Data = payload.proc_image_b64
+                    || payload.image_b64
+                    || payload.image
+                    || payload.result
+                    || null;
+
+                if (base64Data) {
+                    // 3. Görseli güncelle ve başarı logu
+                    const resultSrc = base64Data.startsWith('data:')
+                        ? base64Data
+                        : `data:image/jpeg;base64,${base64Data}`;
+                    currentProcessedImage = resultSrc;
+                    afterImg.src = resultSrc;
+                    console.log('[Hair Color] Görsel başarıyla ekrana basıldı.');
+
+                    if (payload.metrics) {
+                        updateMetricsFromApi(payload.metrics);
+                    }
+
+                    analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Hair color applied.`;
+
+                    if (isSplitMode) {
+                        sliderPos = 25;
+                        updateSplitSlider();
+                    }
+                } else {
+                    // 4. 200 OK ama görsel verisi yok
+                    console.warn('[Hair Color] Uyarı: Backend yanıt verdi ancak içinde base64 görsel verisi bulunamadı. Mevcut anahtarlar:', Object.keys(payload));
+                    analysisSummary.innerHTML = `<strong>Status: Warning</strong><br/>Backend yanıt verdi ancak görsel verisi bulunamadı.`;
+                }
+
+            } catch (err) {
+                console.error('[Hair Color] Error:', err);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
 
 });

@@ -116,17 +116,12 @@
                 <!-- Hair Color Panel -->
                 <section class="control-section">
                     <h3 data-i18n="hairColor">Hair Color</h3>
-                    <div class="hair-swatches">
-                        <button class="hair-swatch" style="background-color: #FFD700;" data-color="blonde"
-                            title="Blonde"></button>
-                        <button class="hair-swatch" style="background-color: #FF4500;" data-color="red"
-                            title="Red"></button>
-                        <button class="hair-swatch" style="background-color: #1A1A1A;" data-color="black"
-                            title="Black"></button>
-                        <button class="hair-swatch" style="background-color: #0000FF;" data-color="blue"
-                            title="Blue"></button>
-                        <button class="hair-swatch" style="background-color: #8B4513;" data-color="brown"
-                            title="Brown"></button>
+                    <div class="makeup-controls" style="margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 15px;">
+                        <div style="display: flex; align-items: center; width: 100%; gap: 15px;">
+                            <input type="color" id="hairColorPicker" value="#ff0000" class="custom-color-picker hair-color-circle" title="Saç Rengi Seç">
+                            <input type="range" id="hairOpacity" min="0" max="100" value="60" class="custom-range" style="flex-grow: 1;" title="Boya Yoğunluğu">
+                        </div>
+                        <button class="op-btn" id="applyHairColorBtn" style="margin-top: 12px; width: 100%;">Apply Hair Color</button>
                     </div>
                 </section>
 
