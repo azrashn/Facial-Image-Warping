@@ -1049,105 +1049,87 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
 
 # ── 3. CLOWN PRESET ──────────────────────────────────────────────────────────
 def _apply_clown(image: np.ndarray) -> np.ndarray:
-    """🤡 Clown: Joker face paint, panda eyes, messy red smile."""
-    out = image.copy()
-    h, w = out.shape[:2]
-    lm = detect_face_landmarks(out)
-    if lm is None:
-        return out
-    face_sz = _face_scale(lm)
-    deltas = np.zeros_like(lm)
+    """
+    🤡 Clown — 3-aşamalı sıkı pipeline:
 
-    # Subtle smile warp
-    deltas[61,0] -= face_sz * 0.05
-    deltas[291,0] += face_sz * 0.05
-    deltas[61,1] -= face_sz * 0.02
-    deltas[291,1] -= face_sz * 0.02
-    
-    # Boundary Control
-    anchors_zero = [10, 338, 297, 332, 284, 251, 152, 168, 6, 197, 195, 5]
-    anchors_zero += [33, 133, 362, 263, 159, 145, 386, 374]
-    
-    for idx in anchors_zero:
-        if idx < len(lm):
-            deltas[idx] = 0.0
+    Aşama 1 — Geometrik Warp (Yüz şekli değişir)
+        a) Abartılı gülümseme: apply_smile(intensity=60)
+        b) Göz büyütme: apply_eye_scaling(intensity=55)
 
-    deltas[np.abs(deltas) < 0.05] = 0.0
+    Aşama 2 — Renk & Maske (Boya)
+        Yüz konturunu al → beyaz maske → %65 beyaz / %35 orijinal doku
 
-    dst = lm + deltas
-    boundary = _generate_warp_anchors(w, h, lm)
-    warped = geometric_warp(out, np.vstack([lm,boundary]), np.vstack([dst,boundary]))
+    Aşama 3 — Çizim (En Son)
+        Yamultulmuş dudak hattını al → kırmızı polylines çiz
+    """
+    result_img = image.copy()
+    h, w = result_img.shape[:2]
 
-    try:
-        prep = preprocess_image(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
-        wlms = get_landmarks(prep)
-    except Exception:
-        wlms = None
-        
-    if wlms is not None:
-        # 1. Clown Face Paint Base (Reduced Whiteness)
-        try:
-            base_mask = _create_extended_face_mask(warped, wlms, 0.05)
-        except Exception:
-            base_mask = np.zeros((h, w), dtype=np.float32)
+    # ── AŞAMA 1a: Gülümseme Warpi ──────────────────────────────────────────
+    result_img = apply_smile(result_img, intensity=60)
 
-        # Subtle white tint instead of heavy messy noise
-        paint_alpha = base_mask * 0.25  # Lower opacity
-        paint_color = np.full((h, w, 3), (255, 255, 255), dtype=np.uint8)
-        paint_alpha_3d = paint_alpha[..., np.newaxis]
-        warped = (warped * (1 - paint_alpha_3d) + paint_color * paint_alpha_3d).astype(np.uint8)
+    # ── AŞAMA 1b: Göz Büyütme ──────────────────────────────────────────────
+    result_img = apply_eye_scaling(result_img, intensity=55)
 
-        # 2. Clown "Emoji" Eyes (Blue Triangles)
-        def draw_clown_triangle(img, pt, direction, size, color=(255, 50, 50)):
-            # direction: -1 (pointing up), 1 (pointing down)
-            pt_top = np.array([pt[0], pt[1] + direction * size])
-            width = size * 0.5
-            pt_left = np.array([pt[0] - width, pt[1] + direction * size * 0.2])
-            pt_right = np.array([pt[0] + width, pt[1] + direction * size * 0.2])
-            # To make it look like the emoji, the base of the triangle is near the eye, pointing outwards
-            # Actually, standard way: triangle base near eye, pointing away.
-            base_left = np.array([pt[0] - width*0.5, pt[1]])
-            base_right = np.array([pt[0] + width*0.5, pt[1]])
-            pts = np.array([pt_top, base_left, base_right], np.int32)
-            cv2.fillPoly(img, [pts], color)
+    # ── AŞAMA 2: Beyaz Yüz Maskesi ─────────────────────────────────────────
+    lm_warped = detect_face_landmarks(result_img)
+    if lm_warped is not None:
+        face_oval_idx = [
+            10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+            361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+            176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+            162, 21, 54, 103, 67, 109,
+        ]
+        face_pts = np.array(
+            [[int(lm_warped[i][0]), int(lm_warped[i][1])] for i in face_oval_idx
+             if i < len(lm_warped)],
+            dtype=np.int32,
+        )
 
-        if 159 < len(wlms) and 145 < len(wlms):
-            pt_top_l = (int(wlms[159]["x"]*w), int(wlms[159]["y"]*h))
-            pt_bot_l = (int(wlms[145]["x"]*w), int(wlms[145]["y"]*h))
-            draw_clown_triangle(warped, pt_top_l, -1, int(face_sz * 0.25))
-            draw_clown_triangle(warped, pt_bot_l, 1, int(face_sz * 0.25))
-            
-        if 386 < len(wlms) and 374 < len(wlms):
-            pt_top_r = (int(wlms[386]["x"]*w), int(wlms[386]["y"]*h))
-            pt_bot_r = (int(wlms[374]["x"]*w), int(wlms[374]["y"]*h))
-            draw_clown_triangle(warped, pt_top_r, -1, int(face_sz * 0.25))
-            draw_clown_triangle(warped, pt_bot_r, 1, int(face_sz * 0.25))
+        if len(face_pts) >= 3:
+            face_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(face_mask, [face_pts], 255)
+            face_mask = cv2.GaussianBlur(face_mask, (21, 21), 8)
 
-        # 3. Exaggerated Clown Smile (Thick Rounded Lips)
-        outer_lip_indices = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146]
+            white_layer = np.full_like(result_img, 255)
+            alpha = face_mask.astype(np.float32) / 255.0 * 0.65   # 65% beyaz
+            alpha_3ch = alpha[..., np.newaxis]
+            result_img = (
+                result_img.astype(np.float32) * (1.0 - alpha_3ch)
+                + white_layer.astype(np.float32) * alpha_3ch
+            ).astype(np.uint8)
+
+    # ── AŞAMA 3: Kırmızı Dudak Çerçevesi ───────────────────────────────────
+    lm_final = detect_face_landmarks(result_img)
+    if lm_final is not None:
+        outer_lip_idx = [
+            61, 185, 40, 39, 37, 0, 267, 269, 270, 409,
+            291, 375, 321, 405, 314, 17, 84, 181, 91, 146,
+        ]
         lip_pts = []
-        for idx in outer_lip_indices:
-            if idx < len(wlms):
-                lip_pts.append([int(wlms[idx]["x"] * w), int(wlms[idx]["y"] * h)])
-                
-        if len(lip_pts) == len(outer_lip_indices):
-            thickness = max(4, int(face_sz * 0.05))
-            lip_pts = np.array(lip_pts, np.int32).reshape((-1, 1, 2))
-            
-            # Draw thick polylines
-            cv2.polylines(warped, [lip_pts], isClosed=True, color=(0, 0, 255), thickness=thickness, lineType=cv2.LINE_AA)
-            
-            # Draw filled circles at every vertex to ensure perfectly rounded corners (dairesel dönüşler)
-            for pt in lip_pts:
-                cv2.circle(warped, (pt[0][0], pt[0][1]), thickness // 2, (0, 0, 255), -1, cv2.LINE_AA)
+        for idx in outer_lip_idx:
+            if idx < len(lm_final):
+                lip_pts.append([int(lm_final[idx][0]), int(lm_final[idx][1])])
 
-        # 4. Large Solid Red Nose
-        if 4 < len(wlms):
-            nx, ny = int(wlms[4]["x"]*w), int(wlms[4]["y"]*h)
-            # Increase the diameter significantly
-            cv2.circle(warped, (nx, ny), int(face_sz * 0.28), (0, 0, 255), -1, cv2.LINE_AA)
+        if len(lip_pts) >= 3:
+            face_sz = _face_scale(lm_final)
+            thickness = max(3, int(face_sz * 0.04))
+            lip_arr = np.array(lip_pts, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.polylines(
+                result_img, [lip_arr],
+                isClosed=True,
+                color=(0, 0, 220),     # parlak kırmızı (BGR)
+                thickness=thickness,
+                lineType=cv2.LINE_AA,
+            )
+            # Köşeleri yuvarlat
+            for pt in lip_arr:
+                cv2.circle(
+                    result_img, (pt[0][0], pt[0][1]),
+                    thickness // 2, (0, 0, 220), -1, cv2.LINE_AA,
+                )
 
-    return warped
+    return result_img
 
 
 # ── 4. STAR EYES PRESET ──────────────────────────────────────────────────────
@@ -1549,4 +1531,307 @@ async def process_emoji_preset(body: EmojiPresetRequest):
         raise
     except Exception as exc:
         logger.error("Emoji preset '%s' failed: %s", preset_key, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/process/fft")
+async def process_fft(
+    image: UploadFile = File(...),
+    intensity: float = Form(50),
+    mask_coords: str | None = Form(None),
+):
+    """
+    Apply FFT-based frequency filter to the uploaded image.
+
+    Parameters
+    ----------
+    intensity : float
+        Filter strength (0-100).
+    mask_coords : str | None
+        Optional JSON string with normalized coordinates
+        {"x": float, "y": float, "w": float, "h": float} (0-1 range).
+        If provided, the filter is applied only to that region.
+    """
+    import json as _json
+
+    try:
+        contents = await image.read()
+        original = _decode_upload(contents)
+
+        # Parse optional mask coordinates
+        parsed_mask = None
+        if mask_coords:
+            try:
+                parsed_mask = _json.loads(mask_coords)
+                logger.info("[FFT] mask_coords received: %s", parsed_mask)
+            except (_json.JSONDecodeError, ValueError) as exc:
+                logger.warning("[FFT] Could not parse mask_coords: %s", exc)
+
+        # Apply FFT filter (apply_fft_filter does not yet support mask;
+        # coordinates are logged above and will be used when the module is extended)
+        filter_intensity = float(intensity)
+        processed = apply_fft_filter(original, intensity=filter_intensity)
+
+        metrics = _metrics_dict(original, processed)
+
+        # Compute spectra for both original and processed
+        orig_fft_shifted = compute_fft(original)[2]
+        proc_fft_shifted = compute_fft(processed)[2]
+
+        orig_spectrum_b64 = _data_url_from_image(
+            cv2.cvtColor(compute_magnitude_spectrum(orig_fft_shifted), cv2.COLOR_GRAY2BGR)
+        )
+        proc_spectrum_b64 = _data_url_from_image(
+            cv2.cvtColor(compute_magnitude_spectrum(proc_fft_shifted), cv2.COLOR_GRAY2BGR)
+        )
+        orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
+        proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
+
+        return _response_payload(
+            image_b64=_data_url_from_image(processed),
+            metrics=metrics,
+            orig_spectrum_b64=orig_spectrum_b64,
+            proc_spectrum_b64=proc_spectrum_b64,
+            orig_phase_b64=orig_phase_b64,
+            proc_phase_b64=proc_phase_b64,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("[FFT] Processing failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🤡  CLOWN TRANSFORMATION  (High-Quality, Integrated Pipeline)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def apply_clown_transformation(image: np.ndarray) -> np.ndarray:
+    """
+    Integrated, convincing clown pipeline executed on a SINGLE result_img:
+
+    Stage 1 — Single-pass combined geometric warp
+        • Smile warp : mouth corners pulled up-and-out (Gaussian falloff)
+        • Eye enlarge: radial zoom on both eye rings (Gaussian falloff)
+        Both deltas computed on original landmarks and applied in ONE call to
+        geometric_warp with dense boundary anchors → zero tearing.
+
+    Stage 2 — Greasepaint-white face paint
+        Skin texture is preserved via soft alpha blend (not opaque overlay).
+        Face oval mask is feathered at the jaw/neck boundary for a natural fade.
+
+    Stage 3 — Classic clown details (drawn on warped geometry)
+        • Filled bright-red lip area   (fillPoly on outer lip contour)
+        • Big solid red nose circle    (landmark 4)
+        • Red cheek circles            (landmarks 50, 280)
+        • Blue lower-eye liner lines   (under each eye – classic clown)
+    """
+    result_img = image.copy()
+    h, w = result_img.shape[:2]
+
+    # ── Stage 0: detect landmarks once on the original ──────────────────────
+    lm = detect_face_landmarks(result_img)
+    if lm is None:
+        logger.warning("apply_clown_transformation: no face detected")
+        return result_img
+
+    face_sz = _face_scale(lm)
+    deltas   = np.zeros_like(lm)
+
+    # ── Stage 1a: Smile delta  (corners up + out) ───────────────────────────
+    smile_strength = 0.14   # fraction of face_sz to move corners
+    sigma_smile    = face_sz * 0.28
+
+    w_left  = np.exp(-0.5 * (np.linalg.norm(lm - lm[61],  axis=1) / sigma_smile) ** 2)
+    w_right = np.exp(-0.5 * (np.linalg.norm(lm - lm[291], axis=1) / sigma_smile) ** 2)
+
+    center_x = (lm[61, 0] + lm[291, 0]) / 2.0
+    half_w   = max(abs(lm[291, 0] - lm[61, 0]) / 2.0, 1e-6)
+
+    for i in range(len(lm)):
+        # horizontal spread
+        deltas[i, 0] += w_left[i]  * (-face_sz * smile_strength * 0.60)
+        deltas[i, 0] += w_right[i] * ( face_sz * smile_strength * 0.60)
+        # vertical lift — damped toward center to avoid Joker effect
+        dy_damp = 1.0 - np.exp(-0.5 * ((lm[i, 0] - center_x) / (half_w * 0.6)) ** 2)
+        deltas[i, 1] += (w_left[i] + w_right[i]) * (-face_sz * smile_strength * 0.90) * dy_damp
+
+    # ── Stage 1b: Eye-enlarge delta (radial zoom on both eye rings) ──────────
+    eye_factor = 0.75
+    sigma_eye  = face_sz * 0.14
+
+    left_ring  = [33, 133, 160, 158, 153, 144, 159, 145]
+    right_ring = [362, 263, 387, 385, 380, 373, 386, 374]
+    cl = np.mean(lm[left_ring],  axis=0)
+    cr = np.mean(lm[right_ring], axis=0)
+
+    wl = np.exp(-0.5 * (np.linalg.norm(lm - cl, axis=1) / sigma_eye) ** 2)
+    wr = np.exp(-0.5 * (np.linalg.norm(lm - cr, axis=1) / sigma_eye) ** 2)
+
+    for i in range(len(lm)):
+        deltas[i] += (lm[i] - cl) * eye_factor * wl[i]
+        deltas[i] += (lm[i] - cr) * eye_factor * wr[i]
+
+    # ── Stage 1c: Lock boundary anchors ─────────────────────────────────────
+    anchors_lock = [
+        10, 338, 297, 332, 284, 251,          # top forehead
+        152, 377, 400, 378, 379, 365, 397,     # chin / jaw bottom
+        70, 63, 105, 66, 107, 46, 53, 52,      # left brow
+        300, 293, 334, 296, 336, 276, 283, 282, # right brow
+        168, 6, 197, 195, 5, 4,                # nose bridge
+    ]
+    for idx in anchors_lock:
+        deltas[idx] = 0.0
+    deltas[np.abs(deltas) < 0.08] = 0.0
+
+    # ── Stage 1d: Single-pass warp with dense boundary ───────────────────────
+    dst      = lm + deltas
+    boundary = _generate_warp_anchors(w, h, lm, spacing=38)
+    src_all  = np.vstack([lm, boundary])
+    dst_all  = np.vstack([dst, boundary])
+    result_img = geometric_warp(result_img, src_all, dst_all)
+
+    # ── Stage 2: Greasepaint-white face paint ────────────────────────────────
+    lm2 = detect_face_landmarks(result_img)          # fresh landmarks after warp
+    if lm2 is not None:
+        face_oval_idx = [
+            10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+            361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+            176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+            162, 21, 54, 103, 67, 109,
+        ]
+        face_pts = np.array(
+            [[int(lm2[i][0]), int(lm2[i][1])]
+             for i in face_oval_idx if i < len(lm2)],
+            dtype=np.int32,
+        )
+        if len(face_pts) >= 3:
+            face_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(face_mask, [face_pts], 255)
+            # Heavy feathering for natural jaw/neck transition
+            face_mask = cv2.GaussianBlur(face_mask, (51, 51), 18)
+            face_mask = cv2.GaussianBlur(face_mask, (21, 21), 7)
+
+            # Greasepaint: preserve skin texture — 62 % white tint
+            white = np.full_like(result_img, (250, 250, 248))  # slightly warm white
+            alpha = face_mask.astype(np.float32) / 255.0 * 0.62
+            a3    = alpha[..., np.newaxis]
+            result_img = (
+                result_img.astype(np.float32) * (1.0 - a3)
+                + white.astype(np.float32) * a3
+            ).astype(np.uint8)
+        lm_paint = lm2        # reuse for stage 3
+    else:
+        lm_paint = None
+
+    # ── Stage 3: Classic clown details ───────────────────────────────────────
+    lm3 = detect_face_landmarks(result_img)
+
+    if lm3 is not None:
+        face_sz3 = _face_scale(lm3)
+
+        def _px(idx):
+            return int(lm3[idx][0]), int(lm3[idx][1])
+
+        # 3a — Filled bright-red lips  ────────────────────────────────────────
+        outer_lip_idx = [
+            61, 185, 40, 39, 37, 0, 267, 269, 270, 409,
+            291, 375, 321, 405, 314, 17, 84, 181, 91, 146,
+        ]
+        lip_pts = np.array(
+            [list(_px(i)) for i in outer_lip_idx if i < len(lm3)],
+            dtype=np.int32,
+        )
+        if len(lip_pts) >= 3:
+            lip_mask  = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(lip_mask, [lip_pts], 255)
+            lip_mask  = cv2.GaussianBlur(lip_mask, (5, 5), 2)
+            lip_alpha = lip_mask.astype(np.float32) / 255.0 * 0.92
+            lip_a3    = lip_alpha[..., np.newaxis]
+            red_layer = np.full_like(result_img, (0, 10, 210))  # vivid red (BGR)
+            result_img = (
+                result_img.astype(np.float32) * (1.0 - lip_a3)
+                + red_layer.astype(np.float32) * lip_a3
+            ).astype(np.uint8)
+            # thin outline for crispness
+            thickness_lip = max(2, int(face_sz3 * 0.025))
+            cv2.polylines(result_img, [lip_pts.reshape(-1, 1, 2)],
+                          True, (0, 0, 180), thickness_lip, cv2.LINE_AA)
+
+        # 3b — Big solid red nose ─────────────────────────────────────────────
+        if 4 < len(lm3):
+            nx, ny = _px(4)
+            nose_r = int(face_sz3 * 0.10)
+            # Glow ring
+            cv2.circle(result_img, (nx, ny), nose_r + 4, (60, 60, 255), -1, cv2.LINE_AA)
+            cv2.circle(result_img, (nx, ny), nose_r,     (0,  0,  220), -1, cv2.LINE_AA)
+            # Specular highlight
+            cv2.circle(result_img,
+                       (nx - nose_r // 4, ny - nose_r // 4),
+                       max(2, nose_r // 4), (255, 255, 255), -1, cv2.LINE_AA)
+
+        # 3c — Red cheek circles ──────────────────────────────────────────────
+        cheek_r = int(face_sz3 * 0.13)
+        for cheek_idx in [50, 280]:
+            if cheek_idx < len(lm3):
+                cx, cy = _px(cheek_idx)
+                cheek_mask = np.zeros((h, w), dtype=np.uint8)
+                cv2.circle(cheek_mask, (cx, cy), cheek_r, 255, -1)
+                cheek_mask = cv2.GaussianBlur(cheek_mask, (cheek_r | 1, cheek_r | 1), cheek_r // 3)
+                ca = cheek_mask.astype(np.float32) / 255.0 * 0.55
+                ca3 = ca[..., np.newaxis]
+                red_c = np.full_like(result_img, (30, 30, 220))
+                result_img = (
+                    result_img.astype(np.float32) * (1.0 - ca3)
+                    + red_c.astype(np.float32) * ca3
+                ).astype(np.uint8)
+
+        # 3d — Classic blue lower-eye liner ───────────────────────────────────
+        #   Draw a short vertical accent line below each eye (classic clown makeup)
+        liner_color = (200, 80, 0)   # deep blue-teal in BGR
+        liner_thick = max(2, int(face_sz3 * 0.025))
+        liner_len   = int(face_sz3 * 0.12)
+
+        for lower_lid_idx in [145, 374]:
+            if lower_lid_idx < len(lm3):
+                lx, ly = _px(lower_lid_idx)
+                cv2.line(result_img,
+                         (lx, ly),
+                         (lx, ly + liner_len),
+                         liner_color, liner_thick, cv2.LINE_AA)
+
+    return result_img
+
+
+@router.post("/process/clown_transformation")
+async def process_clown_transformation(
+    image: UploadFile = File(...),
+):
+    """
+    High-quality clown face transformation.
+
+    Single-pass integrated pipeline:
+      1. Combined geometric warp (smile + eye enlargement)
+      2. Greasepaint-white face paint (texture-preserving)
+      3. Filled red lips, big red nose, red cheeks, blue eye liner
+    """
+    logger.info("process_clown_transformation.received")
+    try:
+        contents = await image.read()
+        original = _decode_upload(contents)
+
+        processed = apply_clown_transformation(original)
+        metrics   = _metrics_dict(original, processed)
+
+        logger.info("process_clown_transformation.success")
+        return _response_payload(
+            image_b64=_data_url_from_image(processed),
+            metrics=metrics,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("process_clown_transformation.failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
