@@ -735,9 +735,45 @@ document.addEventListener('DOMContentLoaded', () => {
         if (procSpectrumB64 && procSpectrumImg) {
             procSpectrumImg.src = procSpectrumB64;
             procSpectrumImg.style.display = 'block';
+            if (fftLabProcSpectrumImg) {
+                fftLabProcSpectrumImg.src = procSpectrumB64;
+                fftLabProcSpectrumImg.style.display = 'block';
+            }
+            if (fftLabProcSpectrumPlaceholder) fftLabProcSpectrumPlaceholder.style.display = 'none';
         } else if (procSpectrumImg) {
             procSpectrumImg.src = '';
             procSpectrumImg.style.display = 'none';
+            if (fftLabProcSpectrumImg) {
+                fftLabProcSpectrumImg.src = '';
+                fftLabProcSpectrumImg.style.display = 'none';
+            }
+            if (fftLabProcSpectrumPlaceholder) fftLabProcSpectrumPlaceholder.style.display = 'block';
+        }
+
+        if (origPhaseB64 && origPhaseImg) {
+            origPhaseImg.src = origPhaseB64;
+            origPhaseImg.style.display = 'block';
+        } else if (origPhaseImg) {
+            origPhaseImg.src = '';
+            origPhaseImg.style.display = 'none';
+        }
+
+        if (procPhaseB64 && procPhaseImg) {
+            procPhaseImg.src = procPhaseB64;
+            procPhaseImg.style.display = 'block';
+            if (fftLabProcPhaseImg) {
+                fftLabProcPhaseImg.src = procPhaseB64;
+                fftLabProcPhaseImg.style.display = 'block';
+            }
+            if (fftLabProcPhasePlaceholder) fftLabProcPhasePlaceholder.style.display = 'none';
+        } else if (procPhaseImg) {
+            procPhaseImg.src = '';
+            procPhaseImg.style.display = 'none';
+            if (fftLabProcPhaseImg) {
+                fftLabProcPhaseImg.src = '';
+                fftLabProcPhaseImg.style.display = 'none';
+            }
+            if (fftLabProcPhasePlaceholder) fftLabProcPhasePlaceholder.style.display = 'block';
         }
 
         if (origPhaseB64 && origPhaseImg) {

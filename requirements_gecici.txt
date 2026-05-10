@@ -4,7 +4,7 @@ opencv-python==4.9.0.80
 scipy==1.13.0
 
 # Yüz Tespiti ve Landmark
-mediapipe==0.10.15
+mediapipe==0.10.18pip install -r requirements_gecici.txt
 
 # Metrikler ve Kalite Kontrol
 scikit-image==0.22.0

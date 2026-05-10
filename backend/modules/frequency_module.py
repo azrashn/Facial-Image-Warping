@@ -125,8 +125,7 @@ def _build_face_hair_mask(image: np.ndarray) -> np.ndarray:
 
     lm = detect_face_landmarks(image)
     if lm is None:
-        # Fallback: treat the whole image as face (old behaviour)
-        logger.warning("_build_face_hair_mask: no landmarks – full image mask")
+        logger.warning("_build_face_hair_mask: no landmarks; using full image mask")
         return np.ones((h, w), dtype=np.float32)
 
     # ── Face oval convex hull ────────────────────────────────────────
@@ -435,6 +434,121 @@ def apply_fft_filter(image: np.ndarray, intensity: float) -> tuple[np.ndarray, n
     return filtered_bgr, spectrum
 
 
+def _coords_to_fft_rect(coords: dict, rows: int, cols: int) -> tuple[int, int, int, int]:
+    """
+    Convert normalized frontend selection coordinates into FFT pixel bounds.
+    """
+    try:
+        x = float(coords.get("x", 0.0))
+        y = float(coords.get("y", 0.0))
+        width = float(coords.get("w", coords.get("width", 0.0)))
+        height = float(coords.get("h", coords.get("height", 0.0)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("mask_coords must include numeric x, y, w, h values.") from exc
+
+    x0 = int(round(clamp(x) * cols))
+    y0 = int(round(clamp(y) * rows))
+    x1 = int(round(clamp(x + width) * cols))
+    y1 = int(round(clamp(y + height) * rows))
+
+    x0, x1 = sorted((max(0, x0), min(cols, x1)))
+    y0, y1 = sorted((max(0, y0), min(rows, y1)))
+
+    if x1 - x0 < 3 or y1 - y0 < 3:
+        raise ValueError("Selected FFT region is too small.")
+
+    return x0, y0, x1, y1
+
+
+def _build_symmetric_fft_patch_mask(
+    shape: tuple[int, int],
+    coords: dict,
+    feather: float = 3.0,
+) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """
+    Build a shifted-FFT mask for the selected patch plus its conjugate mirror.
+
+    Keeping the mirrored region makes the inverse transform a stable real-valued
+    artifact instead of a one-sided complex component.
+    """
+    rows, cols = shape
+    x0, y0, x1, y1 = _coords_to_fft_rect(coords, rows, cols)
+
+    mask = np.zeros((rows, cols), dtype=np.float32)
+    mask[y0:y1, x0:x1] = 1.0
+
+    mirror_x0 = max(0, cols - x1)
+    mirror_x1 = min(cols, cols - x0)
+    mirror_y0 = max(0, rows - y1)
+    mirror_y1 = min(rows, rows - y0)
+    if mirror_x1 > mirror_x0 and mirror_y1 > mirror_y0:
+        mask[mirror_y0:mirror_y1, mirror_x0:mirror_x1] = 1.0
+
+    if feather > 0:
+        mask = cv2.GaussianBlur(mask, (0, 0), feather)
+        max_value = float(mask.max())
+        if max_value > 0:
+            mask /= max_value
+
+    return np.clip(mask, 0.0, 1.0), (x0, y0, x1, y1)
+
+
+def apply_fft_partial_region_artifact(
+    image: np.ndarray,
+    mask_coords: dict,
+    intensity: float = 50,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Isolate an off-center FFT magnitude patch, run IFFT only from that patch,
+    and add the resulting spatial artifact back onto the original image.
+    """
+    if image is None:
+        raise ValueError("Input image is None.")
+
+    strength = normalize_strength(intensity)
+    rows, cols = image.shape[:2]
+    patch_mask, (x0, y0, x1, y1) = _build_symmetric_fft_patch_mask((rows, cols), mask_coords)
+
+    working = image.astype(np.float32)
+    artifact = np.zeros_like(working, dtype=np.float32)
+
+    for ch in range(3):
+        channel = working[:, :, ch]
+        fft_shifted = np.fft.fftshift(np.fft.fft2(channel))
+        isolated = fft_shifted * patch_mask
+        component = np.real(np.fft.ifft2(np.fft.ifftshift(isolated))).astype(np.float32)
+
+        scale = float(np.percentile(np.abs(component), 98))
+        if scale < 1e-6:
+            continue
+        artifact[:, :, ch] = np.clip(component / scale, -1.0, 1.0)
+
+    patch_cx = ((x0 + x1) * 0.5) - cols * 0.5
+    patch_cy = ((y0 + y1) * 0.5) - rows * 0.5
+    off_y = abs(((y0 + y1) * 0.5) - rows * 0.5) / max(rows * 0.5, 1.0)
+    off_x = abs(((x0 + x1) * 0.5) - cols * 0.5) / max(cols * 0.5, 1.0)
+    distance_boost = 0.75 + max(off_x, off_y) * 0.65
+    artifact_gain = (34.0 + 116.0 * strength) * distance_boost
+
+    processed = working + artifact * artifact_gain
+
+    # A faint directional carrier makes different off-center patches easier to compare.
+    yy, xx = np.mgrid[0:rows, 0:cols].astype(np.float32)
+    carrier_phase = (
+        (patch_cx / max(cols, 1)) * xx
+        + (patch_cy / max(rows, 1)) * yy
+    ) * np.pi * 2.0
+    carrier = np.sin(carrier_phase)
+    carrier *= (2.0 + 5.0 * strength) * np.clip(patch_mask.max(), 0.0, 1.0)
+    processed += carrier[..., None]
+
+    processed = np.clip(processed, 0, 255).astype(np.uint8)
+
+    artifact_vis = cv2.normalize(artifact, None, 0, 255, cv2.NORM_MINMAX)
+    artifact_vis = np.clip(artifact_vis, 0, 255).astype(np.uint8)
+    return processed, artifact_vis
+
+
 def compute_energy_analysis(image: np.ndarray, radius: int = 30) -> dict:
     """
     Compute total, low-frequency, and high-frequency energy ratios.
@@ -509,16 +623,22 @@ def _normalized_landmarks_to_points(
     points = []
 
     for idx in indices:
+        if idx >= len(landmarks):
+            continue
+
         lm = landmarks[idx]
 
         if isinstance(lm, dict):
-            x = int(lm["x"] * width)
-            y = int(lm["y"] * height)
+            x = int(float(lm["x"]) * width)
+            y = int(float(lm["y"]) * height)
         else:
-            x = int(lm[0] * width)
-            y = int(lm[1] * height)
+            x = int(float(lm[0]) * width)
+            y = int(float(lm[1]) * height)
 
-        points.append([x, y])
+        points.append([
+            int(np.clip(x, 0, max(width - 1, 0))),
+            int(np.clip(y, 0, max(height - 1, 0))),
+        ])
 
     return np.array(points, dtype=np.int32)
 

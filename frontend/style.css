@@ -702,7 +702,7 @@ body {
 .label-right { right: 10px; }
 .image-wrapper.side-mode .after-container .label-right { left: 10px; right: auto; } /* fix for side by side */
 
-/* SVG Landmarks overlay – position & size set dynamically by JS */
+/* SVG Landmarks overlay â position & size set dynamically by JS */
 .landmarks-svg {
   position: absolute;
   pointer-events: none;
@@ -1098,14 +1098,14 @@ input:checked + .slider.round:before { transform: translateX(20px); }
 }
 
 
-/* --- FFT MASKE SE��C� KUTUSU --- */
+/* --- FFT MASKE SEï¿½ï¿½Cï¿½ KUTUSU --- */
 #fftSelectionBox {
   display: none;
   position: absolute;
   border: 2px dashed #FFFF00;
   background-color: rgba(255, 255, 0, 0.2);
-  pointer-events: none; /* Mouse hareketlerinin alt�ndaki resme sorunsuz ge�mesi i�in �ok �nemli */
-  z-index: 10; /* Orijinal resmin �zerinde durmas� i�in */
+  pointer-events: none; /* Mouse hareketlerinin altï¿½ndaki resme sorunsuz geï¿½mesi iï¿½in ï¿½ok ï¿½nemli */
+  z-index: 10; /* Orijinal resmin ï¿½zerinde durmasï¿½ iï¿½in */
 }
 
 
