@@ -36,10 +36,47 @@ async def export_csv() -> Response:
     )
 
 
-@router.get("/pdf")
-async def export_pdf() -> Response:
-    """Export a simple image processing report as a PDF attachment."""
-    rows = _sample_metrics()
+import base64
+import os
+import tempfile
+from typing import Optional
+
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+
+class PDFRequest(BaseModel):
+    """Schema matching the JSON payload the frontend may send."""
+    before_image: str              # base64 data-URL or raw base64
+    after_image: str               # base64 data-URL or raw base64
+    mse: float = 0.0
+    psnr: float = 0.0
+    ssim: float = 0.0
+    summary: Optional[str] = ""
+    history: Optional[list] = []
+    orig_spectrum: Optional[str] = None
+    proc_spectrum: Optional[str] = None
+    orig_phase: Optional[str] = None
+    proc_phase: Optional[str] = None
+
+
+def _decode_b64_to_file(b64_str: str, filepath: str) -> None:
+    """Strip an optional data-URL header and write decoded bytes to *filepath*."""
+    if "," in b64_str:
+        b64_str = b64_str.split(",", 1)[1]
+    raw = base64.b64decode(b64_str)
+    with open(filepath, "wb") as fh:
+        fh.write(raw)
+
+
+@router.post("/pdf")
+async def export_pdf(payload: PDFRequest) -> StreamingResponse:
+    """Export an image-processing report with before/after images as a PDF.
+
+    Accepts a JSON body whose fields are defined by :class:`PDFRequest`.
+    Images arrive as base64 strings; they are decoded to temporary PNG files
+    before being handed to *fpdf2* (which requires file paths, not raw b64).
+    """
     try:
         from fpdf import FPDF
     except ImportError as exc:
@@ -48,36 +85,115 @@ async def export_pdf() -> Response:
             detail="fpdf2 is required for PDF export. Install with: pip install fpdf2",
         ) from exc
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, "Image Processing Report", ln=True)
-    pdf.ln(4)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # ── Decode images to temp files ──
+        before_path = os.path.join(tmpdir, "before.png")
+        after_path = os.path.join(tmpdir, "after.png")
+        _decode_b64_to_file(payload.before_image, before_path)
+        _decode_b64_to_file(payload.after_image, after_path)
 
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(50, 8, "MSE", border=1, align="C")
-    pdf.cell(50, 8, "PSNR", border=1, align="C")
-    pdf.cell(50, 8, "SSIM", border=1, align="C", ln=True)
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
 
-    pdf.set_font("Helvetica", size=11)
-    for mse, psnr, ssim in rows:
-        pdf.cell(50, 8, f"{mse:.2f}", border=1, align="C")
-        pdf.cell(50, 8, f"{psnr:.2f}", border=1, align="C")
-        pdf.cell(50, 8, f"{ssim:.2f}", border=1, align="C", ln=True)
+        # ── Title ──
+        pdf.set_font("Helvetica", "B", 18)
+        pdf.cell(0, 10, "FaceDSP - Analysis Report", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.ln(2)
+        pdf.set_font("Helvetica", size=9)
+        pdf.cell(0, 6, f"Generated on {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.ln(6)
 
-    pdf.ln(8)
-    pdf.set_font("Helvetica", size=11)
-    pdf.multi_cell(
-        0,
-        8,
-        "Placeholder for input/output visual examples.\n"
-        "Image previews can be added here in a later integration step.",
-    )
+        # ── Metrics table ──
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Quality Metrics", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
 
-    pdf_bytes = bytes(pdf.output(dest="S"))
-    return Response(
-        content=pdf_bytes,
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(50, 8, "MSE", border=1, align="C")
+        pdf.cell(50, 8, "PSNR", border=1, align="C")
+        pdf.cell(50, 8, "SSIM", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+
+        pdf.set_font("Helvetica", size=11)
+        pdf.cell(50, 8, f"{payload.mse:.2f}", border=1, align="C")
+        pdf.cell(50, 8, f"{payload.psnr:.2f} dB", border=1, align="C")
+        pdf.cell(50, 8, f"{payload.ssim:.3f}", border=1, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(6)
+
+        # ── Before / After images side by side ──
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(90, 10, "Before", align="C")
+        pdf.cell(90, 10, "After", align="C", new_x="LMARGIN", new_y="NEXT")
+
+        y_pos = pdf.get_y()
+        pdf.image(before_path, x=15, y=y_pos, w=80)
+        pdf.image(after_path, x=105, y=y_pos, w=80)
+        pdf.ln(85)
+
+        # ── Analysis Summary ──
+        if payload.summary:
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.cell(0, 8, "Analysis Summary", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", size=10)
+            pdf.multi_cell(0, 5, payload.summary)
+            pdf.ln(4)
+
+        # ── Operation History ──
+        if payload.history:
+            if pdf.get_y() > 250:
+                pdf.add_page()
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.cell(0, 8, "Operation History", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", size=10)
+            for idx, op in enumerate(payload.history, 1):
+                pdf.cell(0, 5, f"  {idx}. {op}", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(4)
+
+        # ── Spectrum images (optional) ──
+        if payload.orig_spectrum or payload.proc_spectrum:
+            if pdf.get_y() > 180:
+                pdf.add_page()
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.cell(0, 8, "FFT Magnitude Spectrum", new_x="LMARGIN", new_y="NEXT")
+            spec_y = pdf.get_y()
+
+            if payload.orig_spectrum:
+                orig_spec_path = os.path.join(tmpdir, "orig_spectrum.png")
+                _decode_b64_to_file(payload.orig_spectrum, orig_spec_path)
+                pdf.image(orig_spec_path, x=15, y=spec_y, w=80)
+
+            if payload.proc_spectrum:
+                proc_spec_path = os.path.join(tmpdir, "proc_spectrum.png")
+                _decode_b64_to_file(payload.proc_spectrum, proc_spec_path)
+                pdf.image(proc_spec_path, x=105, y=spec_y, w=80)
+                
+            pdf.ln(85)
+            
+        # ── Phase images (optional) ──
+        if payload.orig_phase or payload.proc_phase:
+            if pdf.get_y() > 180:
+                pdf.add_page()
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.cell(0, 8, "FFT Phase Spectrum", new_x="LMARGIN", new_y="NEXT")
+            phase_y = pdf.get_y()
+
+            if payload.orig_phase:
+                orig_phase_path = os.path.join(tmpdir, "orig_phase.png")
+                _decode_b64_to_file(payload.orig_phase, orig_phase_path)
+                pdf.image(orig_phase_path, x=15, y=phase_y, w=80)
+
+            if payload.proc_phase:
+                proc_phase_path = os.path.join(tmpdir, "proc_phase.png")
+                _decode_b64_to_file(payload.proc_phase, proc_phase_path)
+                pdf.image(proc_phase_path, x=105, y=phase_y, w=80)
+
+        # ── Output ──
+        pdf_bytes = bytes(pdf.output())
+
+    buf = io.BytesIO(pdf_bytes)
+    return StreamingResponse(
+        buf,
         media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=image_processing_report.pdf"},
+        headers={"Content-Disposition": "attachment; filename=FaceDSP_Report.pdf"},
     )
+
