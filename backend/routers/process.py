@@ -541,19 +541,9 @@ async def process_age(
             if op in ["aging", "age"]:
                 processed = apply_aging(original, intensity)
             else:
-                effected = apply_deaging(original, intensity)
-                try:
-                    rgb_for_landmarks = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
-                    landmarks = get_landmarks(rgb_for_landmarks)
-                    face_mask = create_face_region_mask(original, landmarks)
-                    processed = blend_effect_with_mask(
-                        original=original,
-                        effected=effected,
-                        mask=face_mask,
-                    )
-                except Exception as exc:
-                    logger.warning("Face mask unavailable for deaging; using full image: %s", exc)
-                    processed = effected
+                # apply_deaging already includes internal face-mask-based blending
+                # via _build_face_hair_mask — do NOT double-blend with blend_effect_with_mask
+                processed = apply_deaging(original, intensity)
 
             original_for_metrics = original
 

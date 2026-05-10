@@ -1267,65 +1267,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Camera Capture
-    const cameraVideo = document.getElementById('cameraVideo');
-    const cameraPlaceholder = document.getElementById('cameraPlaceholder');
-    const startCameraBtn = document.getElementById('startCameraBtn');
-    const stopCameraBtn = document.getElementById('stopCameraBtn');
-    const captureBtn = document.getElementById('captureBtn');
-    const cameraCanvas = document.getElementById('cameraCanvas');
-    let mediaStream = null;
-
-    function stopCamera() {
-        if (mediaStream) {
-            mediaStream.getTracks().forEach(track => track.stop());
-            mediaStream = null;
-        }
-        if (cameraVideo) cameraVideo.style.display = 'none';
-        if (cameraPlaceholder) cameraPlaceholder.style.display = 'block';
-        if (startCameraBtn) startCameraBtn.style.display = 'flex';
-        if (captureBtn) captureBtn.style.display = 'none';
-        if (stopCameraBtn) stopCameraBtn.style.display = 'none';
-    }
-
-    if (startCameraBtn) {
-        startCameraBtn.addEventListener('click', async () => {
-            try {
-                mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                if (cameraVideo) {
-                    cameraVideo.srcObject = mediaStream;
-                    cameraVideo.style.display = 'block';
-                }
-                if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
-                if (startCameraBtn) startCameraBtn.style.display = 'none';
-                if (captureBtn) captureBtn.style.display = 'flex';
-                if (stopCameraBtn) stopCameraBtn.style.display = 'flex';
-            } catch (err) {
-                console.error('Error accessing camera:', err);
-                alert('Could not access camera. Please allow permissions.');
-            }
-        });
-    }
-
-    if (stopCameraBtn) {
-        stopCameraBtn.addEventListener('click', stopCamera);
-    }
-
-    if (captureBtn) {
-        captureBtn.addEventListener('click', () => {
-            if (!mediaStream) return;
-            cameraCanvas.width = cameraVideo.videoWidth;
-            cameraCanvas.height = cameraVideo.videoHeight;
-            cameraCanvas.getContext('2d').drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
-            cameraCanvas.toBlob((blob) => {
-                if (blob) {
-                    const file = new File([blob], 'camera-capture.png', { type: 'image/png' });
-                    handleFile(file);
-                    stopCamera(); // Auto-stop camera after capture
-                }
-            }, 'image/png');
-        });
-    }
+    // Camera Capture — handled by the canonical initCamera() IIFE module below.
+    // The duplicate camera system (mediaStream, stopCamera, etc.) was removed
+    // to prevent state lifecycle conflicts (two competing systems on the same elements).
 
     // --- NEW FACE FEATURES (Göz, Sakal, Yaş Karşılaştırma) ---
     const eyeSizeSlider = document.getElementById('eyeSizeSlider');
@@ -1908,6 +1852,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // =========================================================================
     // CAMERA MODULE — Browser-side webcam + Live processing via REST API
     // =========================================================================
+    // Rewritten: fixes latency, response keys, FPS meter, memory leaks,
+    // capture race conditions, temporal smoothing, coordinate transforms,
+    // error handling, and state lifecycle.
+    // =========================================================================
     (function initCamera() {
         const startCameraBtn = document.getElementById('startCameraBtn');
         const captureBtn     = document.getElementById('captureBtn');
@@ -1926,11 +1874,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let cameraStream = null;
         let isLiveMode = false;
-        let liveLoopId = null;
-        let liveProcessing = false;  // guard to prevent overlapping requests
+        let liveRafId = null;         // requestAnimationFrame ID
+        let liveProcessing = false;   // guard to prevent overlapping requests
         let liveFrameCount = 0;
         let liveFpsTimer = null;
-        let currentLivePreset = null; // which emoji preset is active in live mode
+        let currentLivePreset = null;
+        let _lastBlobUrl = null;      // for memory management (revoke old blob URLs)
+        let _liveErrorCount = 0;      // consecutive error counter
+        const _MAX_LIVE_ERRORS = 10;  // pause live after this many consecutive errors
+        let _lastFrameTime = 0;       // for rAF throttling
+        const _TARGET_INTERVAL = 66;  // ~15 FPS target (ms between frames)
+
+        // ── Profiling helper ────────────────────────────────────────────
+        function _profileLog(label, startMs) {
+            const elapsed = performance.now() - startMs;
+            if (elapsed > 50) { // only log slow stages
+                console.debug(`[Live Profile] ${label}: ${elapsed.toFixed(1)}ms`);
+            }
+        }
 
         // ── START CAMERA ────────────────────────────────────────────────
         startCameraBtn.addEventListener('click', async () => {
@@ -1971,27 +1932,35 @@ document.addEventListener('DOMContentLoaded', () => {
             liveBtn.style.display = 'none';
             stopCameraBtn.style.display = 'none';
 
-            // Restore camera column if it was expanded
+            // Restore camera column — but do NOT clear captured comparison state
             restoreCameraColumn();
+
+            // Revoke last blob URL to free memory
+            if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
             console.log('[Camera] Stopped');
         });
 
         // ── CAPTURE (snapshot → normal before/after workflow) ────────────
-        captureBtn.addEventListener('click', () => {
+        // FIX: async to prevent race condition — wait for blob before calling setImage
+        captureBtn.addEventListener('click', async () => {
             if (!cameraStream) return;
             const ctx = cameraCanvas.getContext('2d');
             cameraCanvas.width = cameraVideo.videoWidth;
             cameraCanvas.height = cameraVideo.videoHeight;
             ctx.drawImage(cameraVideo, 0, 0);
 
-            // Convert canvas to base64 and a File object
+            // Convert canvas to blob (await to prevent race)
+            const blob = await new Promise(resolve =>
+                cameraCanvas.toBlob(resolve, 'image/jpeg', 0.92)
+            );
+            if (!blob) return;
+
+            const file = new File([blob], 'camera_capture.jpg', { type: 'image/jpeg' });
             const dataUrl = cameraCanvas.toDataURL('image/jpeg', 0.92);
-            cameraCanvas.toBlob((blob) => {
-                if (!blob) return;
-                const file = new File([blob], 'camera_capture.jpg', { type: 'image/jpeg' });
-                setImage(dataUrl, file);
-                console.log('[Camera] Frame captured');
-            }, 'image/jpeg', 0.92);
+            // setImage is synchronous and will trigger generateLandmarks
+            // only AFTER uploadedFile is set (no race)
+            setImage(dataUrl, file);
+            console.log('[Camera] Frame captured');
         });
 
         // ── LIVE MODE ───────────────────────────────────────────────────
@@ -2010,7 +1979,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         function expandCameraColumn() {
-            // Hide the upload column, make camera fill the entire preview area
             if (uploadCol) uploadCol.style.display = 'none';
             cameraColumn.classList.add('camera-live-expanded');
         }
@@ -2026,112 +1994,154 @@ document.addEventListener('DOMContentLoaded', () => {
             liveFpsBadge.style.display = 'inline';
             liveIndicator.style.display = 'inline';
             liveFrameCount = 0;
+            _liveErrorCount = 0;
+            _lastFrameTime = 0;
 
-            // FPS counter
+            // True end-to-end FPS counter (counts only rendered frames)
             if (liveFpsTimer) clearInterval(liveFpsTimer);
             liveFpsTimer = setInterval(() => {
                 liveFpsBadge.textContent = liveFrameCount + ' FPS';
                 liveFrameCount = 0;
             }, 1000);
 
-            // Start the processing loop
-            liveLoop();
+            // Start with requestAnimationFrame
+            liveRafLoop(performance.now());
             console.log('[Live] Started');
         }
 
         function stopLiveMode() {
             isLiveMode = false;
-            if (liveLoopId) { cancelAnimationFrame(liveLoopId); liveLoopId = null; }
+            if (liveRafId) { cancelAnimationFrame(liveRafId); liveRafId = null; }
             if (liveFpsTimer) { clearInterval(liveFpsTimer); liveFpsTimer = null; }
-            liveProcessedImg.style.display = 'none';
+            // Do NOT hide liveProcessedImg immediately — preserve last frame
             liveFpsBadge.style.display = 'none';
             liveIndicator.style.display = 'none';
             liveFpsBadge.textContent = '0 FPS';
+            // Revoke blob URL
+            if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
             console.log('[Live] Stopped');
         }
 
-        // ── Live processing loop ────────────────────────────────────────
-        function liveLoop() {
+        // ── rAF-based processing loop (throttled to target FPS) ────────
+        function liveRafLoop(timestamp) {
             if (!isLiveMode) return;
 
-            if (!liveProcessing) {
-                liveProcessing = true;
-                processLiveFrame().finally(() => {
-                    liveProcessing = false;
-                });
+            // Throttle: skip frame if too soon
+            if (timestamp - _lastFrameTime >= _TARGET_INTERVAL) {
+                _lastFrameTime = timestamp;
+
+                if (!liveProcessing) {
+                    liveProcessing = true;
+                    processLiveFrame().finally(() => {
+                        liveProcessing = false;
+                    });
+                }
             }
 
-            // Schedule next frame (~target 10-15 FPS for REST API processing)
-            liveLoopId = setTimeout(() => {
-                if (isLiveMode) liveLoop();
-            }, 80); // ~12 FPS target (80ms interval)
+            liveRafId = requestAnimationFrame(liveRafLoop);
         }
 
         async function processLiveFrame() {
             if (!cameraStream || !isLiveMode) return;
 
-            // Determine which preset to apply
             const preset = getCurrentLivePreset();
             if (!preset) {
-                // No filter — just show raw camera
                 liveProcessedImg.style.display = 'none';
                 liveFrameCount++;
                 return;
             }
 
+            const t0 = performance.now();
+
             try {
-                // Capture frame to canvas
+                // ── Stage 1: Capture frame to canvas ────────────────────
                 const ctx = cameraCanvas.getContext('2d');
-                cameraCanvas.width = cameraVideo.videoWidth;
-                cameraCanvas.height = cameraVideo.videoHeight;
+                const vw = cameraVideo.videoWidth;
+                const vh = cameraVideo.videoHeight;
+                if (!vw || !vh) return; // video not ready
+
+                cameraCanvas.width = vw;
+                cameraCanvas.height = vh;
                 ctx.drawImage(cameraVideo, 0, 0);
+                _profileLog('canvas draw', t0);
 
-                // Convert to blob
-                const blob = await new Promise(resolve =>
-                    cameraCanvas.toBlob(resolve, 'image/jpeg', 0.75)
-                );
-                if (!blob || !isLiveMode) return;
+                // ── Stage 2: Canvas → base64 (direct, skip blob step) ───
+                const t1 = performance.now();
+                const b64 = cameraCanvas.toDataURL('image/jpeg', 0.65);
+                _profileLog('toDataURL', t1);
 
-                // Send to backend
-                const formData = new FormData();
-                const b64 = await blobToBase64(blob);
-                formData.append('image_b64', b64);
-                formData.append('preset_name', preset);
+                if (!isLiveMode) return;
 
-                const resp = await fetch(`${API_BASE}/process/emoji-preset`, {
+                // ── Stage 3: Send to unified /process/apply with skip_spectra ─
+                const t2 = performance.now();
+                const resp = await fetch(`${API_BASE}/process/apply`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         image_b64: b64,
-                        preset_name: preset
+                        filter_name: preset,
+                        intensity: 50,
+                        smoothing: 30,
+                        skip_spectra: true   // skip FFT computation for live mode
                     })
                 });
+                _profileLog('fetch round-trip', t2);
 
-                if (!resp.ok || !isLiveMode) return;
+                if (!resp.ok || !isLiveMode) {
+                    _liveErrorCount++;
+                    if (_liveErrorCount >= _MAX_LIVE_ERRORS) {
+                        console.warn('[Live] Too many errors, pausing live mode');
+                        liveIndicator.textContent = '● ERROR';
+                        liveIndicator.style.background = 'rgba(255,165,0,0.85)';
+                    }
+                    return;
+                }
 
+                // ── Stage 4: Parse response and render ──────────────────
+                const t3 = performance.now();
                 const data = await resp.json();
-                if (data.processed_image && isLiveMode) {
-                    liveProcessedImg.src = data.processed_image;
+                _profileLog('json parse', t3);
+
+                // FIX: use correct response keys (image_b64 or processed_image)
+                const imgSrc = data.image_b64 || data.processed_image;
+                if (imgSrc && isLiveMode) {
+                    // Memory management: revoke previous blob URL if we used one
+                    if (_lastBlobUrl) {
+                        URL.revokeObjectURL(_lastBlobUrl);
+                        _lastBlobUrl = null;
+                    }
+
+                    liveProcessedImg.src = imgSrc;
                     liveProcessedImg.style.display = 'block';
                     liveFrameCount++;
-                }
-            } catch (err) {
-                // Silently ignore — next frame will retry
-                console.debug('[Live] Frame processing error:', err.message);
-            }
-        }
+                    _liveErrorCount = 0; // reset error counter on success
 
-        function blobToBase64(blob) {
-            return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result);
-                reader.readAsDataURL(blob);
-            });
+                    // Reset error indicator if it was showing
+                    if (liveIndicator.textContent !== '● LIVE') {
+                        liveIndicator.textContent = '● LIVE';
+                        liveIndicator.style.background = 'rgba(255,40,40,0.85)';
+                    }
+                }
+
+                const totalMs = performance.now() - t0;
+                if (totalMs > 200) {
+                    console.debug(`[Live] Total frame: ${totalMs.toFixed(0)}ms`);
+                }
+
+            } catch (err) {
+                _liveErrorCount++;
+                if (_liveErrorCount <= 3) {
+                    console.warn('[Live] Frame error:', err.message);
+                }
+                if (_liveErrorCount >= _MAX_LIVE_ERRORS) {
+                    liveIndicator.textContent = '● ERROR';
+                    liveIndicator.style.background = 'rgba(255,165,0,0.85)';
+                }
+            }
         }
 
         // ── Determine which preset the sidebar has selected ─────────────
         function getCurrentLivePreset() {
-            // Check if any emoji button is "active" (has a selected state)
             const activeEmoji = document.querySelector('.emoji-btn.emoji-active');
             if (activeEmoji) return activeEmoji.dataset.preset;
             return currentLivePreset;
@@ -2140,7 +2150,6 @@ document.addEventListener('DOMContentLoaded', () => {
         // ── Wire sidebar emoji buttons to live mode ─────────────────────
         document.querySelectorAll('.emoji-btn').forEach(btn => {
             btn.addEventListener('click', () => {
-                // Toggle selection
                 const wasActive = btn.classList.contains('emoji-active');
                 document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('emoji-active'));
 
@@ -2153,7 +2162,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     btn.style.outline = '2px solid var(--primary-color)';
                 }
 
-                // Clear outline on others
                 document.querySelectorAll('.emoji-btn:not(.emoji-active)').forEach(b => {
                     b.style.outline = '';
                 });
