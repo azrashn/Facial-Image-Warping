@@ -116,7 +116,8 @@ async def websocket_stream(ws: WebSocket, filter: str = "none", src: int = 0):
     logger.info("WebSocket stream started (filter=%s, src=%s)", filter, src)
 
     stream = _get_or_create_stream(src)
-    pipeline = DownsamplePipeline(process_size=(480, 360))
+    # Lower geometry branch resolution for stable real-time throughput.
+    pipeline = DownsamplePipeline(process_size=(360, 270))
     meter = FPSMeter()
     filter_fn = _get_filter_fn(filter)
 
@@ -207,10 +208,9 @@ async def stream_status():
 @router.post("/stop")
 async def stream_stop():
     """Gracefully stop the capture thread."""
-    global _active_stream, _latest_processed_frame, _latest_raw_frame
+    global _active_stream
     if _active_stream is not None:
         _active_stream.stop()
         _active_stream = None
-    _latest_processed_frame = None
-    _latest_raw_frame = None
-    return {"status": "stopped"}
+    # Keep latest frame snapshots for capture/export continuity.
+    return {"status": "stopped", "preserved_last_frame": True}

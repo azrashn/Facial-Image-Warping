@@ -1,5 +1,7 @@
 import base64
 import logging
+import time
+import threading
 
 import cv2
 import numpy as np
@@ -67,9 +69,12 @@ except ModuleNotFoundError:
 
 router = APIRouter()
 logger = logging.getLogger("facial_pipeline.process")
+_LIVE_STABLE_LOCK = threading.Lock()
+_LIVE_STABLE_LANDMARKS: dict[str, np.ndarray] = {}
 
 WARP_OPS = {"smile", "eyebrow", "lip", "slim"}
 AGE_OPS = {"aging", "deaging", "age", "deage", "fft"}
+MAKEUP_OPS = {"makeup_lips", "makeup_eyeshadow", "makeup_blush"}
 
 
 def _hex_color_to_hue(color: str | None, fallback: int = 0) -> int:
@@ -291,8 +296,13 @@ class UnifiedApplyRequest(BaseModel):
     # Hair dye specific
     hair_color: str | None = None       # "R,G,B"  e.g. "255,165,0"
     hair_intensity: float = 0.6
+    makeup_hue: int = 0
+    makeup_opacity: float = 0.5
     # Bypass FFT spectra computation for faster live mode
     skip_spectra: bool = False
+    # Optional client-side timing probes for end-to-end profiling
+    client_capture_ts: float | None = None
+    client_send_ts: float | None = None
 
 
 def _build_warp_fn(op: str, intensity: float, smoothing: float):
@@ -306,6 +316,8 @@ def _build_warp_fn(op: str, intensity: float, smoothing: float):
             result = apply_lip_widen(image, intensity)
         elif op == "slim":
             result = apply_face_slim(image, intensity)
+        elif op == "eye_scale":
+            result = apply_eye_scaling(image, intensity)
         else:
             return image
         # Apply smoothing
@@ -361,8 +373,34 @@ def _build_hair_fn(color_str: str, hair_intensity: float):
     return _fn
 
 
+def _build_makeup_fn(region: str, hue: int, opacity: float):
+    """Return callable(image) -> image for landmark-based virtual makeup."""
+    def _fn(image):
+        rgb_for_landmarks = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        landmarks = get_landmarks(preprocess_image(rgb_for_landmarks))
+        return apply_virtual_makeup(
+            image=image,
+            landmarks=landmarks,
+            region=region,
+            hue=int(hue),
+            opacity=float(opacity),
+        )
+    return _fn
+
+
+def _get_stable_landmarks(tag: str, image: np.ndarray) -> np.ndarray | None:
+    """Landmark fetch with fallback to previous stable mesh."""
+    lm = detect_face_landmarks(image)
+    with _LIVE_STABLE_LOCK:
+        if lm is not None:
+            _LIVE_STABLE_LANDMARKS[tag] = lm.copy()
+            return lm
+        prev = _LIVE_STABLE_LANDMARKS.get(tag)
+        return prev.copy() if prev is not None else None
+
+
 # Categories that benefit from downsample processing
-_GEOMETRY_HEAVY = {"smile", "eyebrow", "lip", "slim",
+_GEOMETRY_HEAVY = {"smile", "eyebrow", "lip", "slim", "eye_scale",
                    "alien", "robot", "clown", "star_eyes",
                    "heart_eyes", "crying"}
 
@@ -383,21 +421,29 @@ async def process_unified_apply(body: UnifiedApplyRequest):
     fname = (body.filter_name or "").strip().lower()
     logger.info("process_unified_apply: filter=%s intensity=%.1f", fname, body.intensity)
 
+    t_start = time.perf_counter()
+    t_decode_done = t_start
+    t_process_done = t_start
+
     # Decode image
     try:
         original = _decode_base64_image(body.image_b64)
+        t_decode_done = time.perf_counter()
     except Exception as exc:
         raise HTTPException(status_code=400,
                             detail=f"Image decode failed: {exc}") from exc
 
     try:
         # ── Route to the correct filter function ─────────────────────────
-        if fname in WARP_OPS:
+        if fname in WARP_OPS or fname == "eye_scale":
             apply_fn = _build_warp_fn(fname, body.intensity, body.smoothing)
         elif fname in _EMOJI_PRESETS_MAP:
             apply_fn = _EMOJI_PRESETS_MAP[fname]
         elif fname in AGE_OPS:
             apply_fn = _build_age_fn(fname, body.intensity)
+        elif fname in MAKEUP_OPS:
+            region = fname.split("_", 1)[1]
+            apply_fn = _build_makeup_fn(region, body.makeup_hue, body.makeup_opacity)
         elif fname == "hair_color" and body.hair_color:
             apply_fn = _build_hair_fn(body.hair_color, body.hair_intensity)
         elif fname == "cartoon":
@@ -406,7 +452,7 @@ async def process_unified_apply(body: UnifiedApplyRequest):
             raise HTTPException(
                 status_code=400,
                 detail=f"Unknown filter '{fname}'. Valid: "
-                       f"{', '.join(sorted(set(WARP_OPS) | set(_EMOJI_PRESETS_MAP) | AGE_OPS | {'hair_color', 'cartoon'}))}"
+                       f"{', '.join(sorted(set(WARP_OPS) | {'eye_scale'} | set(_EMOJI_PRESETS_MAP) | AGE_OPS | MAKEUP_OPS | {'hair_color', 'cartoon'}))}"
             )
 
         # ── Apply with optional downsampling for geometry-heavy ops ──────
@@ -415,9 +461,33 @@ async def process_unified_apply(body: UnifiedApplyRequest):
                                                needs_mask=True)
         else:
             processed = apply_fn(original)
+        t_process_done = time.perf_counter()
 
         # ── Build response ───────────────────────────────────────────────
         metrics = _metrics_dict(original, processed)
+
+        profile = {
+            "capture_ms": None,
+            "transport_ms": None,
+            "infer_ms": round((t_process_done - t_decode_done) * 1000.0, 2),
+            "overlay_ms": 0.0,
+            "render_ms": round((time.perf_counter() - t_process_done) * 1000.0, 2),
+            "total_ms": round((time.perf_counter() - t_start) * 1000.0, 2),
+        }
+        if body.client_capture_ts is not None and body.client_send_ts is not None:
+            try:
+                profile["capture_ms"] = round(
+                    max(0.0, (body.client_send_ts - body.client_capture_ts) * 1000.0), 2
+                )
+            except Exception:
+                profile["capture_ms"] = None
+        if body.client_send_ts is not None:
+            try:
+                profile["transport_ms"] = round(
+                    max(0.0, (time.time() - float(body.client_send_ts)) * 1000.0), 2
+                )
+            except Exception:
+                profile["transport_ms"] = None
 
         # Skip expensive FFT spectra in live mode
         if body.skip_spectra:
@@ -425,12 +495,13 @@ async def process_unified_apply(body: UnifiedApplyRequest):
                 "processed_image": _data_url_from_image(processed),
                 "image_b64": _data_url_from_image(processed),
                 "metrics": metrics,
+                "profile": profile,
             }
 
         orig_fft_shifted = compute_fft(original)[2]
         proc_fft_shifted = compute_fft(processed)[2]
 
-        return _response_payload(
+        payload = _response_payload(
             image_b64=_data_url_from_image(processed),
             metrics=metrics,
             orig_spectrum_b64=_data_url_from_image(
@@ -441,7 +512,10 @@ async def process_unified_apply(body: UnifiedApplyRequest):
                              cv2.COLOR_GRAY2BGR)),
             orig_phase_b64=_compute_phase_b64(orig_fft_shifted),
             proc_phase_b64=_compute_phase_b64(proc_fft_shifted),
+            energy=None,
         )
+        payload["profile"] = profile
+        return payload
 
     except HTTPException:
         raise
@@ -1899,7 +1973,7 @@ def _apply_crying(image: np.ndarray) -> np.ndarray:
     """
     out = image.copy()
     h, w = out.shape[:2]
-    lm = detect_face_landmarks(out)
+    lm = _get_stable_landmarks("crying", out)
     if lm is None:
         return out
     face_sz = _face_scale(lm)

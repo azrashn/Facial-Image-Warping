@@ -142,6 +142,7 @@ class DownsamplePipeline:
 
     def __init__(self, process_size: Tuple[int, int] = (480, 360)):
         self._pw, self._ph = process_size
+        self._last_processed: Optional[np.ndarray] = None
 
     def downscale(self, frame: np.ndarray) -> Tuple[np.ndarray, float, float]:
         """Resize *frame* to processing resolution.
@@ -197,8 +198,16 @@ class DownsamplePipeline:
         """
         h, w = hi_res.shape[:2]
         low, sx, sy = self.downscale(hi_res)
-        filtered_low = filter_fn(low)
-        return cv2.resize(filtered_low, (w, h), interpolation=cv2.INTER_LINEAR)
+        try:
+            filtered_low = filter_fn(low)
+            processed = cv2.resize(filtered_low, (w, h), interpolation=cv2.INTER_LINEAR)
+            self._last_processed = processed.copy()
+            return processed
+        except Exception as exc:
+            logger.warning("DownsamplePipeline.process_frame fallback: %s", exc)
+            if self._last_processed is not None and self._last_processed.shape[:2] == (h, w):
+                return self._last_processed.copy()
+            return hi_res
 
 
 # ──────────────────────────────────────────────────────────────────────────────

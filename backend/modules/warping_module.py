@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+import time
 import urllib.request
 from typing import Optional
 
@@ -52,6 +54,51 @@ def _has_duplicate_vertices(tri: np.ndarray, eps: float = 1e-4) -> bool:
 
 
 _TASK_LANDMARKER = None
+_LM_STATE_LOCK = threading.Lock()
+_LM_PREV_POINTS: Optional[np.ndarray] = None
+_LM_PREV_TIME = 0.0
+_LM_PREV_SHAPE: tuple[int, int] | None = None
+
+
+def _estimate_head_pose(lm: np.ndarray, w: int, h: int) -> tuple[float, float, float]:
+    """Approximate (yaw, pitch, roll) in degrees using solvePnP."""
+    if lm.shape[0] < 468:
+        return 0.0, 0.0, 0.0
+    # Stable canonical 3D-ish template for core points.
+    model_points = np.array(
+        [
+            [0.0, 0.0, 0.0],        # nose tip (1)
+            [0.0, -63.0, -12.0],    # chin (152)
+            [-45.0, 32.0, -24.0],   # left eye corner (33)
+            [45.0, 32.0, -24.0],    # right eye corner (263)
+            [-34.0, -28.0, -20.0],  # left mouth corner (61)
+            [34.0, -28.0, -20.0],   # right mouth corner (291)
+        ],
+        dtype=np.float32,
+    )
+    image_points = np.array(
+        [lm[1], lm[152], lm[33], lm[263], lm[61], lm[291]], dtype=np.float32
+    )
+    focal = float(max(w, h))
+    cam = np.array([[focal, 0, w / 2.0], [0, focal, h / 2.0], [0, 0, 1]], dtype=np.float32)
+    dist = np.zeros((4, 1), dtype=np.float32)
+    ok, rvec, _tvec = cv2.solvePnP(
+        model_points, image_points, cam, dist, flags=cv2.SOLVEPNP_ITERATIVE
+    )
+    if not ok:
+        return 0.0, 0.0, 0.0
+    rot, _ = cv2.Rodrigues(rvec)
+    sy = np.sqrt(rot[0, 0] * rot[0, 0] + rot[1, 0] * rot[1, 0])
+    singular = sy < 1e-6
+    if not singular:
+        pitch = np.degrees(np.arctan2(rot[2, 1], rot[2, 2]))
+        yaw = np.degrees(np.arctan2(-rot[2, 0], sy))
+        roll = np.degrees(np.arctan2(rot[1, 0], rot[0, 0]))
+    else:
+        pitch = np.degrees(np.arctan2(-rot[1, 2], rot[1, 1]))
+        yaw = np.degrees(np.arctan2(-rot[2, 0], sy))
+        roll = 0.0
+    return float(yaw), float(pitch), float(roll)
 _TASK_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/latest/face_landmarker.task"
@@ -96,6 +143,53 @@ def _landmarks_via_tasks(image_bgr: np.ndarray, h: int, w: int) -> Optional[np.n
     return pts
 
 
+def _stable_ema_landmarks(raw_pts: Optional[np.ndarray], h: int, w: int) -> Optional[np.ndarray]:
+    """Temporal smoothing + confidence gating for live tracking stability."""
+    global _LM_PREV_POINTS, _LM_PREV_TIME, _LM_PREV_SHAPE
+    if raw_pts is None or raw_pts.shape[0] < 100:
+        with _LM_STATE_LOCK:
+            if _LM_PREV_POINTS is not None and _LM_PREV_SHAPE == (h, w):
+                return _LM_PREV_POINTS.copy()
+        return None
+
+    now = time.perf_counter()
+    face_scale = float(np.linalg.norm(raw_pts[133] - raw_pts[362])) if raw_pts.shape[0] > 362 else 0.0
+    min_face_scale = max(min(h, w) * 0.06, 12.0)
+    if face_scale < min_face_scale:
+        # Confidence gating: likely unstable / no true face lock.
+        with _LM_STATE_LOCK:
+            if _LM_PREV_POINTS is not None and _LM_PREV_SHAPE == (h, w):
+                return _LM_PREV_POINTS.copy()
+        return None
+
+    alpha = float(np.clip(float(os.environ.get("LIVE_LANDMARK_EMA_ALPHA", 0.72)), 0.65, 0.80))
+    with _LM_STATE_LOCK:
+        stale_state = (
+            _LM_PREV_POINTS is None
+            or _LM_PREV_SHAPE != (h, w)
+            or (now - _LM_PREV_TIME) > 1.0
+        )
+        if stale_state:
+            _LM_PREV_POINTS = raw_pts.copy()
+            _LM_PREV_TIME = now
+            _LM_PREV_SHAPE = (h, w)
+            return _LM_PREV_POINTS.copy()
+
+        prev = _LM_PREV_POINTS
+        mean_motion = float(np.mean(np.linalg.norm(raw_pts - prev, axis=1)))
+        max_allowed_jump = max(face_scale * 0.35, 8.0)
+        if mean_motion > max_allowed_jump:
+            # Reject unstable frame and keep previous stable landmarks.
+            _LM_PREV_TIME = now
+            return prev.copy()
+
+        smoothed = alpha * raw_pts + (1.0 - alpha) * prev
+        _LM_PREV_POINTS = smoothed
+        _LM_PREV_TIME = now
+        _LM_PREV_SHAPE = (h, w)
+        return smoothed.copy()
+
+
 def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
     if image_bgr is None or image_bgr.size == 0:
         return None
@@ -114,9 +208,10 @@ def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
         if not res.multi_face_landmarks:
             return None
         lm = res.multi_face_landmarks[0].landmark
-        return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+        raw_pts = np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+        return _stable_ema_landmarks(raw_pts, h, w)
 
-    return _landmarks_via_tasks(image_bgr, h, w)
+    return _stable_ema_landmarks(_landmarks_via_tasks(image_bgr, h, w), h, w)
 
 
 def _corners(width: int, height: int) -> np.ndarray:
@@ -282,6 +377,7 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         px = float(intensity)
         deltas = np.zeros_like(lm)
         face_sz = _face_scale(lm)
+        yaw, _pitch, _roll = _estimate_head_pose(lm, image_bgr.shape[1], image_bgr.shape[0])
         
         # Etki Alanını Genişlet: Yanak kasları ve çevresinin harekete dahil olması için sigma büyütüldü
         sigma = face_sz * 0.25
@@ -311,7 +407,11 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
             dy_damp = 1.0 - np.exp(-0.5 * (dist_to_center_x / (half_width * 0.6)) ** 2)
             
             # Displacement uygulaması (Hem X hem Y ekseni)
-            deltas[i, 0] += (dx_left + dx_right)
+            # Head-turn compensation: reduce far-side horizontal pull for large yaw.
+            # yaw > 0 => face turned right, left side is farther and attenuated more.
+            far_left = 1.0 - 0.35 * np.clip(max(0.0, yaw) / 35.0, 0.0, 1.0)
+            far_right = 1.0 - 0.35 * np.clip(max(0.0, -yaw) / 35.0, 0.0, 1.0)
+            deltas[i, 0] += (dx_left * far_left + dx_right * far_right)
             deltas[i, 1] += (dy_left + dy_right) * dy_damp
             
         # Sabitlenecek Sınır Noktaları (Anchor Points) - Keskin bükülmeleri engeller
@@ -440,6 +540,7 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
             return image_bgr
         strength = _clamp_intensity(intensity)
         deltas = np.zeros_like(lm)
+        yaw, _pitch, _roll = _estimate_head_pose(lm, image_bgr.shape[1], image_bgr.shape[0])
 
         face_sz = _face_scale(lm)
         nose_tip = lm[1].copy()  # landmark 1 = nose tip
@@ -479,6 +580,12 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
             pull_x = direction[0] * weight * max_pull
             pull_y = direction[1] * weight * max_pull * 0.3  # dampen vertical
 
+            # Pose-aware attenuation: preserve perspective on far side.
+            is_left = lm[idx, 0] < nose_tip[0]
+            if yaw > 0 and is_left:
+                pull_x *= (1.0 - 0.35 * np.clip(yaw / 35.0, 0.0, 1.0))
+            if yaw < 0 and not is_left:
+                pull_x *= (1.0 - 0.35 * np.clip((-yaw) / 35.0, 0.0, 1.0))
             deltas[idx, 0] += pull_x
             deltas[idx, 1] += pull_y
 

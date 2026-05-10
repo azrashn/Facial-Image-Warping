@@ -653,14 +653,14 @@ document.addEventListener('DOMContentLoaded', () => {
      * by 512 (the preprocessed image size) to get pixel positions inside
      * the SVG whose viewBox is "0 0 512 512".
      */
-    async function generateLandmarks() {
-        if (!uploadedFile) return;
+    async function generateLandmarks(targetFile = uploadedFile, retries = 2) {
+        if (!targetFile) return;
 
         const CANVAS = 512; // matches SVG viewBox and backend preprocess size
 
         try {
             const formData = new FormData();
-            formData.append('image', uploadedFile);
+            formData.append('image', targetFile);
 
             const response = await fetch(`${API_BASE}/process/landmarks`, {
                 method: 'POST',
@@ -722,6 +722,10 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(`[Landmarks] Rendered ${landmarks.length} points.`);
         } catch (err) {
             console.error('[Landmarks] Error:', err);
+            if (retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 140));
+                return generateLandmarks(targetFile, retries - 1);
+            }
             analysisSummary.innerHTML =
                 `<strong>Landmarks:</strong> ${err.message || 'Failed to fetch landmarks.'}`;
 
@@ -1144,6 +1148,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (applyMakeupBtn) {
         applyMakeupBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage) return;
+            currentLivePreset = `makeup_${makeupRegion.value}`;
+            selectedOperation = currentLivePreset;
 
             const hueValue = hexToOpenCVHue(makeupColor.value);
 
@@ -1237,6 +1243,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cartoonBtn) {
         cartoonBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage) return;
+            selectedOperation = 'cartoon';
+            currentLivePreset = 'cartoon';
 
             const formData = new FormData();
             formData.append('image', uploadedFile);
@@ -1300,6 +1308,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (eyeSizeBtn) {
         eyeSizeBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage) return;
+            selectedOperation = 'eye_scale';
+            currentLivePreset = 'eye_scale';
             const formData = new FormData();
             formData.append('image', uploadedFile);
             formData.append('scale', eyeSizeSlider.value);
@@ -1872,18 +1882,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!startCameraBtn) return;
 
+        const liveStreamState = {
+            cameraStream: null,
+            isLiveMode: false,
+            liveRafId: null,
+            liveProcessing: false,
+            liveFrameCount: 0,
+            liveFpsTimer: null,
+            currentLivePreset: null,
+            frameSeq: 0,
+            lastRenderLatencyMs: 0,
+            lastProfile: null,
+        };
+        const captureState = { lastCapturedAtMs: 0 };
+        const analysisState = { lastError: null };
+        const uiState = { isLiveIndicatorError: false };
         let cameraStream = null;
         let isLiveMode = false;
-        let liveRafId = null;         // requestAnimationFrame ID
-        let liveProcessing = false;   // guard to prevent overlapping requests
+        let liveRafId = null;
+        let liveProcessing = false;
         let liveFrameCount = 0;
         let liveFpsTimer = null;
         let currentLivePreset = null;
+
         let _lastBlobUrl = null;      // for memory management (revoke old blob URLs)
         let _liveErrorCount = 0;      // consecutive error counter
         const _MAX_LIVE_ERRORS = 10;  // pause live after this many consecutive errors
         let _lastFrameTime = 0;       // for rAF throttling
         const _TARGET_INTERVAL = 66;  // ~15 FPS target (ms between frames)
+        let _liveHasPendingTick = false;
+        let liveWorker = null;
+        let liveWorkerReady = false;
 
         // ── Profiling helper ────────────────────────────────────────────
         function _profileLog(label, startMs) {
@@ -1891,6 +1920,51 @@ document.addEventListener('DOMContentLoaded', () => {
             if (elapsed > 50) { // only log slow stages
                 console.debug(`[Live Profile] ${label}: ${elapsed.toFixed(1)}ms`);
             }
+        }
+
+        function ensureLiveWorker() {
+            if (liveWorker) return;
+            try {
+                liveWorker = new Worker('live-worker.js');
+                liveWorkerReady = true;
+            } catch (err) {
+                console.warn('[Live] Worker unavailable, fallback to main thread encoding:', err?.message);
+                liveWorker = null;
+                liveWorkerReady = false;
+            }
+        }
+
+        function encodeFrameMainThread() {
+            return Promise.resolve(cameraCanvas.toDataURL('image/jpeg', 0.65));
+        }
+
+        function encodeFrameOffThread() {
+            if (!liveWorkerReady || !liveWorker) return encodeFrameMainThread();
+            return new Promise(async (resolve, reject) => {
+                try {
+                    const bitmap = await createImageBitmap(cameraCanvas);
+                    const onMessage = (ev) => {
+                        const msg = ev.data || {};
+                        if (msg.type === 'encodedFrame') {
+                            liveWorker.removeEventListener('message', onMessage);
+                            resolve(msg.dataUrl);
+                        } else if (msg.type === 'workerError') {
+                            liveWorker.removeEventListener('message', onMessage);
+                            reject(new Error(msg.error || 'Worker encoding failed'));
+                        }
+                    };
+                    liveWorker.addEventListener('message', onMessage);
+                    liveWorker.postMessage({
+                        type: 'encodeFrame',
+                        bitmap,
+                        width: cameraCanvas.width,
+                        height: cameraCanvas.height,
+                        quality: 0.65,
+                    }, [bitmap]);
+                } catch (err) {
+                    reject(err);
+                }
+            });
         }
 
         // ── START CAMERA ────────────────────────────────────────────────
@@ -1937,6 +2011,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Revoke last blob URL to free memory
             if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
+            if (liveWorker) {
+                liveWorker.terminate();
+                liveWorker = null;
+                liveWorkerReady = false;
+            }
             console.log('[Camera] Stopped');
         });
 
@@ -1960,6 +2039,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // setImage is synchronous and will trigger generateLandmarks
             // only AFTER uploadedFile is set (no race)
             setImage(dataUrl, file);
+            if (toggleLandmarks.checked) {
+                await generateLandmarks(file, 2);
+            }
             console.log('[Camera] Frame captured');
         });
 
@@ -1989,6 +2071,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function startLiveMode() {
+            ensureLiveWorker();
             isLiveMode = true;
             liveProcessedImg.style.display = 'none';
             liveFpsBadge.style.display = 'inline';
@@ -1996,11 +2079,13 @@ document.addEventListener('DOMContentLoaded', () => {
             liveFrameCount = 0;
             _liveErrorCount = 0;
             _lastFrameTime = 0;
+            _liveHasPendingTick = false;
 
             // True end-to-end FPS counter (counts only rendered frames)
             if (liveFpsTimer) clearInterval(liveFpsTimer);
             liveFpsTimer = setInterval(() => {
-                liveFpsBadge.textContent = liveFrameCount + ' FPS';
+                const latency = Math.round(liveStreamState.lastRenderLatencyMs || 0);
+                liveFpsBadge.textContent = `${liveFrameCount} FPS | ${latency}ms`;
                 liveFrameCount = 0;
             }, 1000);
 
@@ -2034,7 +2119,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     liveProcessing = true;
                     processLiveFrame().finally(() => {
                         liveProcessing = false;
+                        if (isLiveMode && _liveHasPendingTick) {
+                            _liveHasPendingTick = false;
+                            liveProcessing = true;
+                            processLiveFrame().finally(() => { liveProcessing = false; });
+                        }
                     });
+                } else {
+                    _liveHasPendingTick = true;
                 }
             }
 
@@ -2067,24 +2159,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // ── Stage 2: Canvas → base64 (direct, skip blob step) ───
                 const t1 = performance.now();
-                const b64 = cameraCanvas.toDataURL('image/jpeg', 0.65);
+                const b64 = await encodeFrameOffThread();
                 _profileLog('toDataURL', t1);
 
                 if (!isLiveMode) return;
 
                 // ── Stage 3: Send to unified /process/apply with skip_spectra ─
                 const t2 = performance.now();
-                const resp = await fetch(`${API_BASE}/process/apply`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        image_b64: b64,
-                        filter_name: preset,
-                        intensity: 50,
-                        smoothing: 30,
-                        skip_spectra: true   // skip FFT computation for live mode
-                    })
-                });
+                let resp = null;
+                let attempts = 0;
+                const captureTs = t0 / 1000.0;
+                while (attempts < 3) {
+                    attempts += 1;
+                    try {
+                        const isMakeupLive = String(preset).startsWith('makeup_');
+                        const payload = {
+                            image_b64: b64,
+                            filter_name: preset,
+                            intensity: Number(intensitySlider?.value || 50),
+                            smoothing: Number(smoothingSlider?.value || 30),
+                            skip_spectra: true,
+                            client_capture_ts: captureTs,
+                            client_send_ts: Date.now() / 1000.0,
+                        };
+                        if (isMakeupLive) {
+                            payload.makeup_hue = hexToOpenCVHue(makeupColor?.value || '#ff0000');
+                            payload.makeup_opacity = Number(makeupOpacity?.value || 50) / 100.0;
+                        }
+                        resp = await fetch(`${API_BASE}/process/apply`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (resp.ok) break;
+                    } catch (_) {}
+                    await new Promise(resolve => setTimeout(resolve, 60 * attempts));
+                }
                 _profileLog('fetch round-trip', t2);
 
                 if (!resp.ok || !isLiveMode) {
@@ -2114,6 +2224,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     liveProcessedImg.src = imgSrc;
                     liveProcessedImg.style.display = 'block';
                     liveFrameCount++;
+                    liveStreamState.lastProfile = data.profile || null;
+                    liveStreamState.lastRenderLatencyMs = Number(data?.profile?.total_ms || (performance.now() - t0));
                     _liveErrorCount = 0; // reset error counter on success
 
                     // Reset error indicator if it was showing
@@ -2124,6 +2236,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 const totalMs = performance.now() - t0;
+                const p = data.profile || {};
+                analysisSummary.innerHTML = `<strong>Live Profile:</strong> capture ${Math.round(p.capture_ms || 0)}ms | transport ${Math.round(p.transport_ms || 0)}ms | infer ${Math.round(p.infer_ms || 0)}ms | render ${Math.round(p.render_ms || 0)}ms | total ${Math.round(p.total_ms || liveStreamState.lastRenderLatencyMs)}ms`;
                 if (totalMs > 200) {
                     console.debug(`[Live] Total frame: ${totalMs.toFixed(0)}ms`);
                 }
@@ -2144,6 +2258,14 @@ document.addEventListener('DOMContentLoaded', () => {
         function getCurrentLivePreset() {
             const activeEmoji = document.querySelector('.emoji-btn.emoji-active');
             if (activeEmoji) return activeEmoji.dataset.preset;
+            if (selectedOperation) {
+                const allowedLiveOps = new Set([
+                    'smile', 'eyebrow', 'lip', 'slim',
+                    'aging', 'deaging', 'fft', 'cartoon',
+                    'eye_scale', 'makeup_lips', 'makeup_eyeshadow', 'makeup_blush'
+                ]);
+                if (allowedLiveOps.has(selectedOperation)) return selectedOperation;
+            }
             return currentLivePreset;
         }
 
@@ -2166,6 +2288,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     b.style.outline = '';
                 });
             });
+        });
+
+        window.addEventListener('beforeunload', () => {
+            stopLiveMode();
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+            if (liveWorker) {
+                liveWorker.terminate();
+                liveWorker = null;
+                liveWorkerReady = false;
+            }
         });
 
     })();
