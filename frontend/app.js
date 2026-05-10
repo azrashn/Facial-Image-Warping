@@ -59,7 +59,50 @@ document.addEventListener('DOMContentLoaded', () => {
             psnrDesc: "Tepe Sinyal Gürültü Oranı",
             ssimDesc: "Yapısal Benzerlik İndeksi",
             analysisSummary: "Analiz Özeti",
-            waitingSummary: "Özet analiz için görüntü işlemenin tamamlanması bekleniyor."
+            waitingSummary: "Özet analiz için görüntü işlemenin tamamlanması bekleniyor.",
+            // New Face Features
+            newFaceFeatures: "Yeni Yüz Özellikleri",
+            eyeScale: "Göz Ölçeği",
+            applyEyeScale: "Göz Ölçeği Uygula",
+            facialHairStyle: "Yüz Kılı Stili",
+            fullBeard: "Tam Sakal",
+            mustache: "Bıyık",
+            beardDarkness: "Sakal Koyuluğu",
+            addFacialHair: "Yüz Kılı Ekle",
+            ageComparison: "Yaş Karşılaştırması (Önce ve Sonra)",
+            compareAges: "Yaşları Karşılaştır",
+            // Panels
+            emojiPresets: "Emoji Kalıpları",
+            makeupPanel: "Makyaj",
+            hairColor: "Saç Rengi",
+            filters: "Filtreler",
+            cameraCapture: "Kamera",
+            uploadPrompt: "Başlamak için resim yükleyin",
+            downloadPng: "Sonucu PNG Olarak İndir",
+            // Makeup
+            makeupLips: "Dudaklar",
+            makeupEyeshadow: "Göz Farı",
+            makeupBlush: "Allık",
+            applyMakeup: "Uygula",
+            // Filters & Camera
+            cartoonFilter: "Karikatür Filtresi",
+            cameraOffline: "Kamera Kapalı",
+            startCamera: "Kamerayı Başlat",
+            capturePhoto: "Fotoğraf Çek",
+            // Eyewear
+            eyewearPanel: "Aksesuar",
+            glassesType: "Gözlük",
+            metalAviator: "Klasik Damla (Aviator)",
+            acetateWayfarer: "Kemik Çerçeve (Modern)",
+            minimalistRound: "İnce Yuvarlak (Retro)",
+            applyGlasses: "Gözlük Uygula",
+            // Emoji Presets
+            presetAlien: "Uzaylı",
+            presetRobot: "Robot",
+            presetClown: "Joker / Palyaço",
+            presetStarEyes: "Yıldızlı Bakış",
+            presetHeartEyes: "Aşık",
+            presetCrying: "Ağlayan"
         },
         EN: {
             dropImage: "Drop image here",
@@ -103,7 +146,50 @@ document.addEventListener('DOMContentLoaded', () => {
             psnrDesc: "Peak Signal-to-Noise Ratio",
             ssimDesc: "Structural Similarity Index",
             analysisSummary: "Analysis Summary",
-            waitingSummary: "Waiting for image processing to generate summary analysis."
+            waitingSummary: "Waiting for image processing to generate summary analysis.",
+            // New Face Features
+            newFaceFeatures: "New Face Features",
+            eyeScale: "Eye Scale",
+            applyEyeScale: "Apply Eye Scale",
+            facialHairStyle: "Facial Hair Style",
+            fullBeard: "Full Beard",
+            mustache: "Mustache",
+            beardDarkness: "Beard Darkness",
+            addFacialHair: "Add Facial Hair",
+            ageComparison: "Age Comparison (Before vs After)",
+            compareAges: "Compare Ages",
+            // Panels
+            emojiPresets: "Emoji Presets",
+            makeupPanel: "Makeup",
+            hairColor: "Hair Color",
+            filters: "Filters",
+            cameraCapture: "Camera",
+            uploadPrompt: "Upload an image to begin",
+            downloadPng: "Download Result as PNG",
+            // Makeup
+            makeupLips: "Lips",
+            makeupEyeshadow: "Eyeshadow",
+            makeupBlush: "Blush",
+            applyMakeup: "Apply",
+            // Filters & Camera
+            cartoonFilter: "Cartoon Filter",
+            cameraOffline: "Camera Offline",
+            startCamera: "Start Camera",
+            capturePhoto: "Capture",
+            // Eyewear
+            eyewearPanel: "Accessory",
+            glassesType: "Glasses",
+            metalAviator: "Classic Teardrop (Aviator)",
+            acetateWayfarer: "Thick Frame (Modern)",
+            minimalistRound: "Thin Round (Retro)",
+            applyGlasses: "Apply Glasses",
+            // Emoji Presets
+            presetAlien: "Alien",
+            presetRobot: "Robot",
+            presetClown: "Joker",
+            presetStarEyes: "Starry Gaze",
+            presetHeartEyes: "Heart-Eyes",
+            presetCrying: "Crying"
         }
     };
 
@@ -134,6 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const applyBtn = document.getElementById('applyBtn');
     const downloadBtn = document.getElementById('downloadBtn');
+    const downloadPngBtn = document.getElementById('downloadPngBtn');
 
     // Tabs & views
     const tabButtons = document.querySelectorAll('.tab-btn');
@@ -155,6 +242,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const landmarksSvg = document.getElementById('landmarksSvg');
     const origSpectrumImg = document.getElementById('origSpectrumImg');
     const procSpectrumImg = document.getElementById('procSpectrumImg');
+    const origPhaseImg = document.getElementById('origPhaseImg');
+    const procPhaseImg = document.getElementById('procPhaseImg');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -232,22 +321,36 @@ document.addEventListener('DOMContentLoaded', () => {
         thumbnailView.style.display = 'none';
         uploadZone.style.display = 'flex';
 
-        previewPlaceholder.style.display = 'block';
+        // Restore the split-layout placeholder (flex, not block!)
+        previewPlaceholder.style.display = 'flex';
         imageWrapper.style.display = 'none';
         viewModeControls.style.display = 'none';
 
         applyBtn.disabled = true;
         downloadBtn.disabled = true;
+        if (downloadPngBtn) downloadPngBtn.disabled = true;
 
         sliderPos = 50;
         updateSplitSlider();
+
+        // Clear SVG landmarks
+        if (landmarksSvg) landmarksSvg.innerHTML = '';
+        if (landmarksOnlySvg) landmarksOnlySvg.innerHTML = '';
 
         // Clear Landmarks only view
         landmarksOnlyImg.src = '';
         landmarksOnlyImg.style.display = 'none';
         landmarksOnlySvg.style.display = 'none';
         landmarksPlaceholder.style.display = 'block';
-        setSpectrumImages(null, null);
+        setSpectrumImages(null, null, null, null);
+
+        // Reset analysis summary
+        analysisSummary.innerHTML = '';
+
+        // Reset metrics display
+        if (mseValue) mseValue.textContent = '—';
+        if (psnrValue) psnrValue.textContent = '—';
+        if (ssimValue) ssimValue.textContent = '—';
     }
 
     function setImage(base64Str, fileObj) {
@@ -266,26 +369,30 @@ document.addEventListener('DOMContentLoaded', () => {
         landmarksOnlyImg.style.display = 'block';
         landmarksPlaceholder.style.display = 'none';
 
+        // Hide the split-layout placeholder, show the image workspace
         previewPlaceholder.style.display = 'none';
-        imageWrapper.style.display = isSplitMode ? 'block' : 'flex';
+
+        // Always clean-apply the current view mode
+        imageWrapper.classList.remove('split-mode', 'side-mode');
         if (isSplitMode) {
             imageWrapper.classList.add('split-mode');
-            imageWrapper.classList.remove('side-mode');
+            imageWrapper.style.display = 'block';
             sliderPos = 50;
             updateSplitSlider();
         } else {
             imageWrapper.classList.add('side-mode');
-            imageWrapper.classList.remove('split-mode');
+            imageWrapper.style.display = 'flex';
             afterContainer.style.clipPath = 'none';
         }
         viewModeControls.style.display = 'flex';
 
         applyBtn.disabled = false;
         downloadBtn.disabled = false;
+        if (downloadPngBtn) downloadPngBtn.disabled = false;
 
         // Auto draw landmarks if toggled
         if (toggleLandmarks.checked) generateLandmarks();
-        setSpectrumImages(null, null);
+        setSpectrumImages(null, null, null, null);
     }
 
     function handleFile(file) {
@@ -294,6 +401,10 @@ document.addEventListener('DOMContentLoaded', () => {
         reader.onload = (e) => setImage(e.target.result, file);
         reader.readAsDataURL(file);
     }
+
+    imageUpload.addEventListener('click', function () {
+        this.value = "";
+    });
 
     imageUpload.addEventListener('change', (e) => {
         if (e.target.files.length > 0) handleFile(e.target.files[0]);
@@ -477,9 +588,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!imgEl || !svgEl) return;
         const rect = getRenderedImageRect(imgEl);
         svgEl.style.position = 'absolute';
-        svgEl.style.left   = rect.x + 'px';
-        svgEl.style.top    = rect.y + 'px';
-        svgEl.style.width  = rect.w + 'px';
+        svgEl.style.left = rect.x + 'px';
+        svgEl.style.top = rect.y + 'px';
+        svgEl.style.width = rect.w + 'px';
         svgEl.style.height = rect.h + 'px';
     }
 
@@ -612,7 +723,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- 8. APPLY TRANSFORMATION & REAL API ---
 
-    function setSpectrumImages(origSpectrumB64, procSpectrumB64) {
+    function setSpectrumImages(origSpectrumB64, procSpectrumB64, origPhaseB64, procPhaseB64) {
         if (origSpectrumB64 && origSpectrumImg) {
             origSpectrumImg.src = origSpectrumB64;
             origSpectrumImg.style.display = 'block';
@@ -627,6 +738,22 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (procSpectrumImg) {
             procSpectrumImg.src = '';
             procSpectrumImg.style.display = 'none';
+        }
+
+        if (origPhaseB64 && origPhaseImg) {
+            origPhaseImg.src = origPhaseB64;
+            origPhaseImg.style.display = 'block';
+        } else if (origPhaseImg) {
+            origPhaseImg.src = '';
+            origPhaseImg.style.display = 'none';
+        }
+
+        if (procPhaseB64 && procPhaseImg) {
+            procPhaseImg.src = procPhaseB64;
+            procPhaseImg.style.display = 'block';
+        } else if (procPhaseImg) {
+            procPhaseImg.src = '';
+            procPhaseImg.style.display = 'none';
         }
     }
 
@@ -669,7 +796,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isAgeEstimation = selectedOperation === 'age_estimation';
         const isWarpOperation = ['smile', 'eyebrow', 'lip', 'slim'].includes(selectedOperation);
         const endpoint = isAgeEstimation
-            ? `${API_BASE}/process/estimate_age`
+            ? `${API_BASE}/process/estimate-age`
             : isWarpOperation ? `${API_BASE}/process/warp` : `${API_BASE}/process/age`;
         const formData = new FormData();
         formData.append('image', uploadedFile);
@@ -719,7 +846,12 @@ document.addEventListener('DOMContentLoaded', () => {
             landmarksOnlyImg.src = currentProcessedImage;
 
             updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
-            setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+            setSpectrumImages(
+                payload.orig_spectrum_b64 || null,
+                payload.proc_spectrum_b64 || null,
+                payload.orig_phase_b64 || null,
+                payload.proc_phase_b64 || null
+            );
 
             const opButton = document.querySelector(`.op-btn[data-op="${selectedOperation}"]`);
             const opTitle = opButton
@@ -770,7 +902,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const metricsGrid = document.getElementById('metricsGrid');
     const metricsChevron = document.getElementById('metricsChevron');
     const comparisonModeInput = document.getElementById('comparisonMode');
-    
+
     if (metricsHeader && metricsGrid && metricsChevron) {
         metricsHeader.addEventListener('click', () => {
             metricsGrid.classList.toggle('collapsed');
@@ -789,7 +921,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 badge.style.display = isChecked ? 'inline-block' : 'none';
             });
         });
-        
+
         // Initialize comparison mode state
         if (!comparisonModeInput.checked) {
             document.querySelectorAll('.metric-badge').forEach(badge => {
@@ -798,36 +930,559 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- 10. PDF REPORT EXPORT ---
+    // --- 9.5. NEW UI INTEGRATIONS ---
 
-    /**
-     * Dynamically loads jsPDF from CDN (if not already loaded) and generates
-     * a styled PDF report containing:
-     *  - Before / After images
-     *  - Quality metrics (MSE, PSNR, SSIM)
-     *  - Analysis summary text
-     *  - Operation history
-     *  - Spectrum images (if available)
-     */
-    function loadJsPdf() {
-        return new Promise((resolve, reject) => {
-            if (window.jspdf && window.jspdf.jsPDF) {
-                resolve(window.jspdf.jsPDF);
-                return;
-            }
-            const script = document.createElement('script');
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js';
-            script.onload = () => {
-                if (window.jspdf && window.jspdf.jsPDF) {
-                    resolve(window.jspdf.jsPDF);
-                } else {
-                    reject(new Error('jsPDF failed to initialise after loading.'));
-                }
+    // --- Emoji Preset Buttons (6 specific presets → /process/emoji-preset) ---
+    const emojiPresetNames = [
+        { id: 'btnPresetAlien', preset: 'alien', labelKey: 'presetAlien' },
+        { id: 'btnPresetRobot', preset: 'robot', labelKey: 'presetRobot' },
+        { id: 'btnPresetClown', preset: 'clown', labelKey: 'presetClown' },
+        { id: 'btnPresetStarEyes', preset: 'star_eyes', labelKey: 'presetStarEyes' },
+        { id: 'btnPresetHeartEyes', preset: 'heart_eyes', labelKey: 'presetHeartEyes' },
+        { id: 'btnPresetCrying', preset: 'crying', labelKey: 'presetCrying' },
+    ];
+
+    async function applyEmojiPreset(presetName, labelKey) {
+        if (!currentOriginalImage) return;
+
+        // Highlight the clicked button
+        document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
+        const clickedBtn = document.querySelector(`[data-preset="${presetName}"]`);
+        if (clickedBtn) clickedBtn.classList.add('active');
+
+        loadingOverlay.style.display = 'flex';
+
+        try {
+            // Build payload – alien gets a detailed description for the backend
+            const payloadBody = {
+                image_b64: currentOriginalImage,
+                preset_name: presetName,
             };
-            script.onerror = () => reject(new Error('Failed to load jsPDF from CDN.'));
-            document.head.appendChild(script);
+            if (presetName === 'alien') {
+                payloadBody.description = 'Highly refined alien transformation. Procedurally refine face selection. Perform eye scaling (positive, extreme). Sculpt chin into a distinct triangular (alien-like) shape. Apply a smooth, realistic bright green color overlay to the refined face mask.';
+            }
+
+            const response = await fetch(`${API_BASE}/process/emoji-preset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payloadBody),
+            });
+
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload?.detail || 'Emoji preset failed.');
+
+            if (!payload?.image_b64) throw new Error('Missing image_b64 in response.');
+
+            currentProcessedImage = payload.image_b64;
+            afterImg.src = currentProcessedImage;
+            landmarksOnlyImg.src = currentProcessedImage;
+
+            updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+            setSpectrumImages(
+                payload.orig_spectrum_b64 || null,
+                payload.proc_spectrum_b64 || null,
+                payload.orig_phase_b64 || null,
+                payload.proc_phase_b64 || null
+            );
+
+            const label = i18n[currentLang]?.[labelKey] || presetName;
+            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Emoji Preset: ${label}.`;
+            addHistory(`Emoji: ${label}`);
+
+            if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+        } catch (e) {
+            console.error(`[Emoji Preset: ${presetName}] Error:`, e);
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Emoji preset failed.'}`;
+        } finally {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+
+    emojiPresetNames.forEach(({ id, preset, labelKey }) => {
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.addEventListener('click', () => applyEmojiPreset(preset, labelKey));
+        }
+    });
+
+    // --- CLOWN: dedicated high-quality endpoint override ---
+    const clownBtn = document.getElementById('btnPresetClown');
+    if (clownBtn) {
+        // Remove the generic emoji-preset listener by replacing with a dedicated handler
+        clownBtn.replaceWith(clownBtn.cloneNode(true));   // strip old listeners
+        const freshClownBtn = document.getElementById('btnPresetClown');
+
+        freshClownBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
+            freshClownBtn.classList.add('active');
+            loadingOverlay.style.display = 'flex';
+
+            try {
+                const formData = new FormData();
+                formData.append('image', uploadedFile);
+
+                console.log('[Clown] → POST /process/clown_transformation');
+
+                const response = await fetch(`${API_BASE}/process/clown_transformation`, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const payload = await response.json();
+                console.log('[Clown] response:', payload);
+
+                if (!response.ok) throw new Error(payload?.detail || 'Clown transformation failed.');
+
+                const base64 = payload.proc_image_b64 || payload.image_b64 || payload.image || null;
+                if (!base64) throw new Error('No image data in clown response.');
+
+                const src = base64.startsWith('data:') ? base64 : `data:image/jpeg;base64,${base64}`;
+                currentProcessedImage = src;
+                afterImg.src = src;
+                landmarksOnlyImg.src = src;
+
+                if (payload.metrics) updateMetricsFromApi(payload.metrics);
+
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Clown Transformation applied.`;
+                addHistory('Emoji: Clown');
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+
+            } catch (err) {
+                console.error('[Clown] Error:', err);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
         });
     }
+
+    // Makeup
+    const applyMakeupBtn = document.getElementById('applyMakeupBtn');
+    const makeupRegion = document.getElementById('makeupRegion');
+    const makeupColor = document.getElementById('makeupColor');
+    const makeupOpacity = document.getElementById('makeupOpacity');
+
+    function hexToOpenCVHue(hex) {
+        hex = hex.replace('#', '');
+        let r = parseInt(hex.substring(0, 2), 16) / 255;
+        let g = parseInt(hex.substring(2, 4), 16) / 255;
+        let b = parseInt(hex.substring(4, 6), 16) / 255;
+        let max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h = 0, d = max - min;
+        if (max !== min) {
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+        return Math.round(h * 179);
+    }
+
+    if (applyMakeupBtn) {
+        applyMakeupBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const hueValue = hexToOpenCVHue(makeupColor.value);
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('region', makeupRegion.value);
+            formData.append('opacity', makeupOpacity.value / 100.0);
+
+            // Convert Hex to Hue (0-179 for OpenCV)
+            const hex = makeupColor.value;
+            let r = parseInt(hex.slice(1, 3), 16) / 255;
+            let g = parseInt(hex.slice(3, 5), 16) / 255;
+            let b = parseInt(hex.slice(5, 7), 16) / 255;
+            let max = Math.max(r, g, b), min = Math.min(r, g, b);
+            let h = 0;
+            if (max != min) {
+                let d = max - min;
+                if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+                else if (max === g) h = (b - r) / d + 2;
+                else if (max === b) h = (r - g) / d + 4;
+                h /= 6;
+            }
+            formData.append('hue', Math.round(h * 179));
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/makeup`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Makeup failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
+                addHistory(`Makeup: ${makeupRegion.value}`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied makeup to ${makeupRegion.value}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Makeup] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Makeup failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // Hair Color
+    const hairSwatches = document.querySelectorAll('.hair-swatch');
+    hairSwatches.forEach(swatch => {
+        swatch.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+            const color = swatch.dataset.color;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('target_color', color);
+            formData.append('blend_strength', intensitySlider.value / 100.0 || 0.6);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/hair-color`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Hair color failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
+                addHistory(`Hair Color: ${color}`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied hair color ${color}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Hair Color] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Hair color failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    });
+
+    // Cartoon Filter
+    const cartoonBtn = document.getElementById('cartoonBtn');
+    if (cartoonBtn) {
+        cartoonBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/cartoon`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Cartoon filter failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
+                addHistory('Cartoon Filter');
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Cartoon Filter.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Cartoon Filter] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Cartoon filter failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // Camera Capture
+    const cameraVideo = document.getElementById('cameraVideo');
+    const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+    const startCameraBtn = document.getElementById('startCameraBtn');
+    const stopCameraBtn = document.getElementById('stopCameraBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const cameraCanvas = document.getElementById('cameraCanvas');
+    let mediaStream = null;
+
+    function stopCamera() {
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+            mediaStream = null;
+        }
+        if (cameraVideo) cameraVideo.style.display = 'none';
+        if (cameraPlaceholder) cameraPlaceholder.style.display = 'block';
+        if (startCameraBtn) startCameraBtn.style.display = 'flex';
+        if (captureBtn) captureBtn.style.display = 'none';
+        if (stopCameraBtn) stopCameraBtn.style.display = 'none';
+    }
+
+    if (startCameraBtn) {
+        startCameraBtn.addEventListener('click', async () => {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                if (cameraVideo) {
+                    cameraVideo.srcObject = mediaStream;
+                    cameraVideo.style.display = 'block';
+                }
+                if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
+                if (startCameraBtn) startCameraBtn.style.display = 'none';
+                if (captureBtn) captureBtn.style.display = 'flex';
+                if (stopCameraBtn) stopCameraBtn.style.display = 'flex';
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                alert('Could not access camera. Please allow permissions.');
+            }
+        });
+    }
+
+    if (stopCameraBtn) {
+        stopCameraBtn.addEventListener('click', stopCamera);
+    }
+
+    if (captureBtn) {
+        captureBtn.addEventListener('click', () => {
+            if (!mediaStream) return;
+            cameraCanvas.width = cameraVideo.videoWidth;
+            cameraCanvas.height = cameraVideo.videoHeight;
+            cameraCanvas.getContext('2d').drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
+            cameraCanvas.toBlob((blob) => {
+                if (blob) {
+                    const file = new File([blob], 'camera-capture.png', { type: 'image/png' });
+                    handleFile(file);
+                    stopCamera(); // Auto-stop camera after capture
+                }
+            }, 'image/png');
+        });
+    }
+
+    // --- NEW FACE FEATURES (Göz, Sakal, Yaş Karşılaştırma) ---
+    const eyeSizeSlider = document.getElementById('eyeSizeSlider');
+    const eyeSizeVal = document.getElementById('eyeSizeVal');
+    const eyeSizeBtn = document.getElementById('eyeSizeBtn');
+
+    const beardSelect = document.getElementById('beardSelect');
+    const beardDarknessSlider = document.getElementById('beardDarknessSlider');
+    const beardDarknessVal = document.getElementById('beardDarknessVal');
+    const beardBtn = document.getElementById('beardBtn');
+
+    const ageCompareBtn = document.getElementById('ageCompareBtn');
+
+    // Update slider text values
+    if (eyeSizeSlider) {
+        eyeSizeSlider.addEventListener('input', (e) => {
+            eyeSizeVal.textContent = e.target.value + '%';
+        });
+    }
+
+    if (beardDarknessSlider) {
+        beardDarknessSlider.addEventListener('input', (e) => {
+            beardDarknessVal.textContent = e.target.value + '%';
+        });
+    }
+
+    // Göz Büyütme/Küçültme Event
+    if (eyeSizeBtn) {
+        eyeSizeBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('scale', eyeSizeSlider.value);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                // Backend endpoint
+                const response = await fetch(`${API_BASE}/process/eye-size`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Eye scale processing failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
+                addHistory(`Eye Scale: ${eyeSizeSlider.value}%`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Eye Scale.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Eye Scale] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Eye scale failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // Sakal/Bıyık Event
+    if (beardBtn) {
+        beardBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('style', beardSelect.value);
+            formData.append('intensity', intensitySlider.value); // Use global intensity
+            formData.append('darkness', beardDarknessSlider.value / 100.0);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                // Backend endpoint
+                const response = await fetch(`${API_BASE}/process/beard`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Facial hair processing failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(payload.orig_spectrum_b64 || null, payload.proc_spectrum_b64 || null);
+
+                addHistory(`Facial Hair: ${beardSelect.value}`);
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Applied Facial Hair (${beardSelect.value}).`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Facial Hair] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Facial hair failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // Yaş Karşılaştırma Event
+    if (ageCompareBtn) {
+        ageCompareBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage || !currentProcessedImage) return;
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                // Convert currentProcessedImage (base64) to Blob
+                const res = await fetch(currentProcessedImage);
+                const afterBlob = await res.blob();
+                const afterFile = new File([afterBlob], 'after.png', { type: 'image/png' });
+
+                const formData = new FormData();
+                formData.append('before_image', uploadedFile);
+                formData.append('after_image', afterFile);
+
+                const response = await fetch(`${API_BASE}/process/estimate-age-compare`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Age comparison failed.');
+
+                const beforeAge = payload.before?.estimated_age || '—';
+                const afterAge = payload.after?.estimated_age || '—';
+                const diff = payload.age_difference || 0;
+                const diffStr = diff > 0 ? `+${diff}` : `${diff}`;
+
+                analysisSummary.innerHTML = `
+                    <div style="display:flex; justify-content:space-evenly; align-items:center; text-align:center; padding:10px 0;">
+                        <div>
+                            <div style="font-size:0.85rem;opacity:0.8;">Before</div>
+                            <div style="font-size:1.8rem;font-weight:800;color:#00e5ff;">${beforeAge}</div>
+                        </div>
+                        <div style="font-size:1.5rem;opacity:0.5;">→</div>
+                        <div>
+                            <div style="font-size:0.85rem;opacity:0.8;">After</div>
+                            <div style="font-size:1.8rem;font-weight:800;color:#00e5ff;">${afterAge}</div>
+                        </div>
+                        <div style="width:1px; height:40px; background:rgba(255,255,255,0.2);"></div>
+                        <div>
+                            <div style="font-size:0.85rem;opacity:0.8;">Diff</div>
+                            <div style="font-size:1.5rem;font-weight:700;color:#ffeb3b;">${diffStr}</div>
+                        </div>
+                    </div>
+                `;
+                addHistory('Age Comparison');
+            } catch (e) {
+                console.error('[Age Compare] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Age comparison failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // Glasses / Gözlük Event
+    const applyGlassesBtn = document.getElementById('applyGlassesBtn');
+    const glassesSelect = document.getElementById('glassesSelect');
+
+    if (applyGlassesBtn) {
+        applyGlassesBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('glasses_type', glassesSelect.value);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/glasses`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Glasses processing failed.');
+
+                currentProcessedImage = payload.image_b64;
+                afterImg.src = currentProcessedImage;
+                landmarksOnlyImg.src = currentProcessedImage;
+
+                updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                setSpectrumImages(
+                    payload.orig_spectrum_b64 || null,
+                    payload.proc_spectrum_b64 || null,
+                    payload.orig_phase_b64 || null,
+                    payload.proc_phase_b64 || null
+                );
+
+                const glassesLabelMap = {
+                    aviator: i18n[currentLang]?.metalAviator || 'Classic Teardrop (Aviator)',
+                    wayfarer: i18n[currentLang]?.acetateWayfarer || 'Thick Frame (Modern)',
+                    round: i18n[currentLang]?.minimalistRound || 'Thin Round (Retro)',
+                };
+                const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
+                addHistory(`Glasses: ${glassesLabel}`);
+                const appliedPrefix = currentLang === 'tr' ? 'Uygulanan Gözlük:' : 'Applied Glasses:';
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>${appliedPrefix} ${glassesLabel}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Glasses] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Glasses processing failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
+    // PNG Download Event
+    if (downloadPngBtn) {
+        downloadPngBtn.addEventListener('click', () => {
+            if (!currentProcessedImage) return;
+            const a = document.createElement('a');
+            a.href = currentProcessedImage;
+            a.download = 'facewarp_result.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        });
+    }
+
+    // --- PDF REPORT EXPORT ---
 
     /** Convert a base-64 data-URL to the raw base-64 string and its MIME type. */
     function splitDataUrl(dataUrl) {
@@ -845,8 +1500,9 @@ document.addEventListener('DOMContentLoaded', () => {
         downloadBtn.textContent = currentLang === 'TR' ? 'PDF hazırlanıyor…' : 'Generating PDF…';
 
         try {
-            const JsPDF = await loadJsPdf();
-            const doc = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+            // jsPDF is loaded globally via <script> tag in index.html
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
             const pageW = doc.internal.pageSize.getWidth();
             let y = 15; // vertical cursor
 
@@ -893,7 +1549,7 @@ document.addEventListener('DOMContentLoaded', () => {
             doc.setFontSize(11);
             doc.setFont('helvetica', 'normal');
             const metrics = [
-                { label: 'MSE',  value: mseValue.textContent },
+                { label: 'MSE', value: mseValue.textContent },
                 { label: 'PSNR', value: psnrValue.textContent + ' dB' },
                 { label: 'SSIM', value: ssimValue.textContent },
             ];
@@ -910,6 +1566,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 doc.setFont('helvetica', 'bold');
                 doc.text(i18n[currentLang]?.analysisSummary || 'Analysis Summary', 15, y);
                 y += 7;
+
+                // Extract and display the applied operation explicitly
+                const opMatch = summaryText.match(/Applied (?:Emoji Preset|Glasses|Makeup|Hair|Beard|Filter):\s*(.+)/i)
+                    || summaryText.match(/Uygulanan .+?:\s*(.+)/i);
+                if (opMatch) {
+                    doc.setFontSize(11);
+                    doc.setFont('helvetica', 'bold');
+                    doc.setTextColor(30, 100, 180);
+                    let opName = opMatch[1].replace(/\.$/, '').trim();
+                    let finalStr = (currentLang === 'tr' ? 'Uygulanan İşlem: ' : 'Operation: ') + opName;
+                    if (currentLang === 'tr' && opName === 'Joker / Palyaço') {
+                        finalStr = 'Joker Estetiği Uygulandı';
+                    }
+                    doc.text(finalStr, 15, y);
+                    doc.setTextColor(0);
+                    y += 7;
+                }
+
                 doc.setFontSize(10);
                 doc.setFont('helvetica', 'normal');
                 const lines = doc.splitTextToSize(summaryText, pageW - 30);
@@ -940,7 +1614,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (y > 200) { doc.addPage(); y = 15; }
                 doc.setFontSize(14);
                 doc.setFont('helvetica', 'bold');
-                doc.text('FFT Spectrum', 15, y);
+                doc.text('FFT Magnitude Spectrum', 15, y);
                 y += 5;
                 const specW = 80, specH = 80;
                 if (origSpec) {
@@ -948,6 +1622,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (procSpec) {
                     doc.addImage(procSpec.data, procSpec.format, 110, y, specW, specH);
+                }
+                y += specH + 10;
+            }
+
+            // ── Phase Images (if available) ──
+            const origPhase = splitDataUrl(origPhaseImg?.src);
+            const procPhase = splitDataUrl(procPhaseImg?.src);
+            if (origPhase || procPhase) {
+                if (y > 200) { doc.addPage(); y = 15; }
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text('FFT Phase Spectrum', 15, y);
+                y += 5;
+                const specW = 80, specH = 80;
+                if (origPhase) {
+                    doc.addImage(origPhase.data, origPhase.format, 15, y, specW, specH);
+                }
+                if (procPhase) {
+                    doc.addImage(procPhase.data, procPhase.format, 110, y, specW, specH);
                 }
             }
 
@@ -960,5 +1653,93 @@ document.addEventListener('DOMContentLoaded', () => {
             downloadBtn.textContent = i18n[currentLang]?.downloadPDF || 'Download Results as PDF';
         }
     });
+    // --- HAIR COLOR LOGIC ---
+    function hexToRgb(hex) {
+        let h = hex.replace('#', '');
+        if (h.length === 3) h = [...h].map(x => x + x).join('');
+        return `${parseInt(h.substring(0,2), 16)},${parseInt(h.substring(2,4), 16)},${parseInt(h.substring(4,6), 16)}`;
+    }
+
+    const applyHairColorBtn = document.getElementById('applyHairColorBtn');
+    const hairColorPicker  = document.getElementById('hairColorPicker');
+    const hairOpacity      = document.getElementById('hairOpacity');
+
+    if (applyHairColorBtn) {
+        applyHairColorBtn.addEventListener('click', async () => {
+            if (!uploadedFile || !currentOriginalImage) {
+                alert(i18n[currentLang]?.uploadWait || 'Please upload an image first.');
+                return;
+            }
+
+            const rgbColor      = hexToRgb(hairColorPicker.value);
+            const intensityFloat = parseInt(hairOpacity.value) / 100.0;
+
+            // Debug — verify values before request
+            console.log('[Hair Color] target_color (RGB):', rgbColor);
+            console.log('[Hair Color] intensity:', intensityFloat);
+            console.log('[Hair Color] endpoint:', `${API_BASE}/process/hair-color`);
+
+            const formData = new FormData();
+            formData.append('image',        uploadedFile);
+            formData.append('target_color', rgbColor);
+            formData.append('intensity',    intensityFloat.toString());
+
+            loadingOverlay.style.display = 'flex';
+
+            try {
+                const response = await fetch(`${API_BASE}/process/hair-color`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const payload = await response.json();
+
+                // 1. Tam payload'ı konsolda göster
+                console.log('[Hair Color] Backend tam yanıtı (payload):', payload);
+
+                if (!response.ok) {
+                    throw new Error(payload?.detail || 'Hair color processing failed.');
+                }
+
+                // 2. Esnek key yakalama — tüm olası isimleri dene
+                const base64Data = payload.proc_image_b64
+                    || payload.image_b64
+                    || payload.image
+                    || payload.result
+                    || null;
+
+                if (base64Data) {
+                    // 3. Görseli güncelle ve başarı logu
+                    const resultSrc = base64Data.startsWith('data:')
+                        ? base64Data
+                        : `data:image/jpeg;base64,${base64Data}`;
+                    currentProcessedImage = resultSrc;
+                    afterImg.src = resultSrc;
+                    console.log('[Hair Color] Görsel başarıyla ekrana basıldı.');
+
+                    if (payload.metrics) {
+                        updateMetricsFromApi(payload.metrics);
+                    }
+
+                    analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Hair color applied.`;
+
+                    if (isSplitMode) {
+                        sliderPos = 25;
+                        updateSplitSlider();
+                    }
+                } else {
+                    // 4. 200 OK ama görsel verisi yok
+                    console.warn('[Hair Color] Uyarı: Backend yanıt verdi ancak içinde base64 görsel verisi bulunamadı. Mevcut anahtarlar:', Object.keys(payload));
+                    analysisSummary.innerHTML = `<strong>Status: Warning</strong><br/>Backend yanıt verdi ancak görsel verisi bulunamadı.`;
+                }
+
+            } catch (err) {
+                console.error('[Hair Color] Error:', err);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
 
 });
