@@ -37,9 +37,9 @@ def read_root():
     return {"message": "Backend API Sistemimiz Aktif!"}
 
 
+app.include_router(ai_router)      
+app.include_router(process_router) 
 app.include_router(upload_router)
-app.include_router(process_router)
 app.include_router(metrics_router)
 app.include_router(export_router)
-app.include_router(ai_router)
 
