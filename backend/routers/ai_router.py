@@ -124,7 +124,7 @@ async def process_beard(image: UploadFile = File(...), intensity: int = Form(70)
     except HTTPException: raise
     except Exception as exc: raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-# 6. EMOJİ PRESET (Arayüz JSON Gönderdiği İçin Gerekliydi Ama Sendeki Kodda Yoktu!)
+# 6. EMOJİ PRESET 
 @router.post("/process/emoji-preset")
 async def process_emoji_preset(req: EmojiRequest):
     logger.info(f"process_emoji_preset.received: {req.preset_name}")
@@ -134,7 +134,7 @@ async def process_emoji_preset(req: EmojiRequest):
         return {"image_b64": _data_url(processed), "metrics": _metrics(original, processed)}
     except Exception as exc: raise HTTPException(status_code=500, detail=str(exc))
 
-# 7. PALYAÇO / JOKER EMOJİSİ (Arkadaşlarının Eski Kodu Yerine Bizim V3'e Giden Gerçek Köprü)
+# 7. PALYAÇO / JOKER EMOJİSİ 
 @router.post("/process/clown_transformation")
 async def process_clown_transformation(image: UploadFile = File(...), intensity: Optional[float] = Form(100.0)):
     logger.info("process_clown_transformation.received")
