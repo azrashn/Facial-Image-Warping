@@ -66,22 +66,38 @@ def _get_hair_mask(image_bgr: np.ndarray) -> np.ndarray:
 
 def apply_hair_color(
     image_bgr: np.ndarray,
-    target_color: str = "blonde",
-    blend_strength: float = 0.6,
-    saturation_scale: float | None = None,
-    value_scale: float | None = None,
+    target_color: str = "255,0,0",
+    intensity: float = 0.6,
 ) -> np.ndarray:
-    try:
-        preset = HAIR_COLOR_PRESETS.get(target_color.lower(), HAIR_COLOR_PRESETS["blonde"])
-        target_h  = preset["h"]
-        s_scale   = saturation_scale if saturation_scale is not None else preset["s_boost"]
-        v_scale   = value_scale      if value_scale      is not None else preset["v_boost"]
+    """
+    Saç rengini dinamik RGB string'iyle değiştirir.
 
+    Parameters
+    ----------
+    image_bgr    : OpenCV BGR görüntüsü
+    target_color : "R,G,B" formatında string (örn: "255,165,0")
+    intensity    : 0.0–1.0 karışım gücü
+    """
+    try:
+        # 1. "R,G,B" string → int tuple
+        parts = [int(x.strip()) for x in target_color.split(",")]
+        r, g, b = parts[0], parts[1], parts[2]
+
+        # 2. RGB → BGR tek piksel — OpenCV HSV'ye çevirerek Hue, S-scale, V-scale üret
+        pixel_bgr = np.array([[[b, g, r]]], dtype=np.uint8)
+        pixel_hsv = cv2.cvtColor(pixel_bgr, cv2.COLOR_BGR2HSV)[0, 0]
+        target_h  = int(pixel_hsv[0])                       # 0-179 (OpenCV)
+        s_scale   = float(pixel_hsv[1]) / 128.0 + 0.5       # saturation boost
+        v_scale   = float(pixel_hsv[2]) / 200.0 + 0.4       # value boost, clamp korunuyor
+
+        # 3. Saç maskesini üret
         hair_mask = _get_hair_mask(image_bgr)
 
         if cv2.countNonZero(hair_mask) == 0:
+            logger.warning("apply_hair_color: boş maske — orijinal döndürülüyor")
             return image_bgr.copy()
 
+        # 4. HSV renk dönüşümü (mevcut mantık korunuyor)
         hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         mask_bool = hair_mask > 0
 
@@ -91,10 +107,11 @@ def apply_hair_color(
 
         colored = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
+        # 5. Yumuşak maske ile blend (mevcut mantık korunuyor)
         soft_mask = cv2.GaussianBlur(hair_mask, (31, 31), 0).astype(np.float32) / 255.0
         soft_mask_3ch = np.stack([soft_mask] * 3, axis=-1)
 
-        blend = blend_strength * soft_mask_3ch
+        blend = intensity * soft_mask_3ch
         result = (
             colored.astype(np.float32) * blend
             + image_bgr.astype(np.float32) * (1.0 - blend)
