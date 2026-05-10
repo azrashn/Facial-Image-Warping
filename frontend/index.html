@@ -317,16 +317,16 @@
                             </div>
 
                             <!-- RIGHT COLUMN: CAMERA -->
-                            <div class="split-col"
-                                style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--primary-color); border-radius: var(--radius-md); background: transparent; padding: 20px; position: relative; overflow: hidden; transition: border-color 0.3s ease;">
+                            <div class="split-col" id="cameraColumn"
+                                style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--primary-color); border-radius: var(--radius-md); background: transparent; padding: 20px; position: relative; overflow: hidden; transition: all 0.4s ease;">
 
                                 <!-- Camera Viewport -->
-                                <div
+                                <div id="cameraViewport"
                                     style="position: relative; width: 100%; flex-grow: 1; border-radius: calc(var(--radius-md) - 4px); overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--surface-color); border: 1px solid var(--border-color);">
 
                                     <div id="cameraPlaceholder"
                                         style="text-align: center; opacity: 0.6; padding: 20px;">
-                                        <i class="fas fa-camera" style="font-size: 3rem; margin-bottom: 10px;"></i>
+                                        <div style="font-size: 2.5rem; margin-bottom: 8px;">📷</div>
                                         <p style="margin: 0; font-weight: 500;" data-i18n="cameraOffline">Camera Offline
                                         </p>
                                     </div>
@@ -334,21 +334,27 @@
                                     <video id="cameraVideo" autoplay playsinline
                                         style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 1; background: #000;"></video>
                                     <canvas id="cameraCanvas" style="display:none;"></canvas>
+                                    <!-- Processed frame overlay for live mode -->
+                                    <img id="liveProcessedImg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 2;" alt="Processed">
+                                    <!-- FPS Badge (visible in live mode) -->
+                                    <span id="liveFpsBadge" style="position: absolute; top: 8px; right: 8px; font-size: 0.72rem; padding: 2px 8px; border-radius: 12px; background: rgba(0,0,0,0.6); color: #66bb6a; font-weight: 700; z-index: 5; display: none;">0 FPS</span>
+                                    <!-- Live indicator -->
+                                    <span id="liveIndicator" style="position: absolute; top: 8px; left: 8px; font-size: 0.72rem; padding: 2px 10px; border-radius: 12px; background: rgba(255,40,40,0.85); color: white; font-weight: 700; z-index: 5; display: none; animation: livePulse 1.2s ease-in-out infinite;">● LIVE</span>
                                 </div>
 
                                 <!-- Camera Controls -->
                                 <div
                                     style="display: flex; gap: 10px; width: 100%; margin-top: 15px; justify-content: center; z-index: 2;">
                                     <button class="split-btn" id="startCameraBtn"
-                                        style="flex: 1; background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); color: white; border: none;"><i
-                                            class="fas fa-video"></i> <span data-i18n="startCamera">Start
-                                            Camera</span></button>
+                                        style="flex: 1; background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); color: white; border: none;">
+                                        📷 <span data-i18n="startCamera">Start Camera</span></button>
                                     <button class="split-btn capture-mode" id="captureBtn"
-                                        style="flex: 1; display: none;"><i class="fas fa-camera"></i> <span
+                                        style="flex: 1; display: none;"><span
                                             data-i18n="capturePhoto">Capture</span></button>
+                                    <button class="split-btn" id="liveBtn"
+                                        style="flex: 1; display: none; background: linear-gradient(135deg, #f85032, #e73827); color: white; border: none; font-weight: 600;">🔴 Live</button>
                                     <button class="split-btn stop-mode" id="stopCameraBtn"
-                                        style="display: none; width: auto; padding: 0 15px;"><i
-                                            class="fas fa-times"></i></button>
+                                        style="display: none; width: auto; padding: 0 15px;">✖</button>
                                 </div>
                             </div>
 
@@ -406,6 +412,7 @@
                         </button>
                     </div>
                 </div>
+
 
                 <!-- 2. FREQUENCY SPECTRUM VIEW -->
                 <div class="view-panel" id="view-frequency">

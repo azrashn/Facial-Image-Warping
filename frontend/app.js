@@ -114,7 +114,10 @@ document.addEventListener('DOMContentLoaded', () => {
             noDataFft: "Veri yok (FFT Filtresi Çalıştırın)",
             selectRegionOutput: "Çıktı oluşturmak için bir bölge seçin",
             procFFTPhase: "İşlenmiş - FFT Fazı",
-            origFFTPhase: "Orijinal - FFT Fazı"
+            origFFTPhase: "Orijinal - FFT Fazı",
+            // Camera Live Mode
+            liveMode: "🔴 Canlı",
+            stopLive: "⏹ Canlıyı Durdur"
         },
         EN: {
             dropImage: "Drop image here",
@@ -213,7 +216,10 @@ document.addEventListener('DOMContentLoaded', () => {
             noDataFft: "No data (Run FFT Filter)",
             selectRegionOutput: "Select a region to generate output",
             procFFTPhase: "Processed - FFT Phase",
-            origFFTPhase: "Original - FFT Phase"
+            origFFTPhase: "Original - FFT Phase",
+            // Camera Live Mode
+            liveMode: "🔴 Live",
+            stopLive: "⏹ Stop Live"
         }
     };
 
@@ -1899,4 +1905,262 @@ document.addEventListener('DOMContentLoaded', () => {
     setupInteractiveCanvas('fftSelectionCanvas', 'Magnitude');
     setupInteractiveCanvas('fftPhaseCanvas', 'Phase');
 
+    // =========================================================================
+    // CAMERA MODULE — Browser-side webcam + Live processing via REST API
+    // =========================================================================
+    (function initCamera() {
+        const startCameraBtn = document.getElementById('startCameraBtn');
+        const captureBtn     = document.getElementById('captureBtn');
+        const liveBtn        = document.getElementById('liveBtn');
+        const stopCameraBtn  = document.getElementById('stopCameraBtn');
+        const cameraVideo    = document.getElementById('cameraVideo');
+        const cameraCanvas   = document.getElementById('cameraCanvas');
+        const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+        const cameraColumn   = document.getElementById('cameraColumn');
+        const liveProcessedImg = document.getElementById('liveProcessedImg');
+        const liveFpsBadge   = document.getElementById('liveFpsBadge');
+        const liveIndicator  = document.getElementById('liveIndicator');
+        const uploadCol      = document.querySelector('#previewPlaceholder > .split-col:first-child');
+
+        if (!startCameraBtn) return;
+
+        let cameraStream = null;
+        let isLiveMode = false;
+        let liveLoopId = null;
+        let liveProcessing = false;  // guard to prevent overlapping requests
+        let liveFrameCount = 0;
+        let liveFpsTimer = null;
+        let currentLivePreset = null; // which emoji preset is active in live mode
+
+        // ── START CAMERA ────────────────────────────────────────────────
+        startCameraBtn.addEventListener('click', async () => {
+            try {
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+                });
+                cameraVideo.srcObject = cameraStream;
+                cameraVideo.style.display = 'block';
+                cameraPlaceholder.style.display = 'none';
+
+                startCameraBtn.style.display = 'none';
+                captureBtn.style.display = 'inline-flex';
+                liveBtn.style.display = 'inline-flex';
+                stopCameraBtn.style.display = 'inline-flex';
+
+                console.log('[Camera] Started');
+            } catch (err) {
+                console.error('[Camera] getUserMedia failed:', err);
+                analysisSummary.innerHTML = `<strong>Camera Error:</strong> ${err.message}`;
+            }
+        });
+
+        // ── STOP CAMERA ─────────────────────────────────────────────────
+        stopCameraBtn.addEventListener('click', () => {
+            stopLiveMode();
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+            cameraVideo.srcObject = null;
+            cameraVideo.style.display = 'none';
+            cameraPlaceholder.style.display = 'block';
+            liveProcessedImg.style.display = 'none';
+
+            startCameraBtn.style.display = 'inline-flex';
+            captureBtn.style.display = 'none';
+            liveBtn.style.display = 'none';
+            stopCameraBtn.style.display = 'none';
+
+            // Restore camera column if it was expanded
+            restoreCameraColumn();
+            console.log('[Camera] Stopped');
+        });
+
+        // ── CAPTURE (snapshot → normal before/after workflow) ────────────
+        captureBtn.addEventListener('click', () => {
+            if (!cameraStream) return;
+            const ctx = cameraCanvas.getContext('2d');
+            cameraCanvas.width = cameraVideo.videoWidth;
+            cameraCanvas.height = cameraVideo.videoHeight;
+            ctx.drawImage(cameraVideo, 0, 0);
+
+            // Convert canvas to base64 and a File object
+            const dataUrl = cameraCanvas.toDataURL('image/jpeg', 0.92);
+            cameraCanvas.toBlob((blob) => {
+                if (!blob) return;
+                const file = new File([blob], 'camera_capture.jpg', { type: 'image/jpeg' });
+                setImage(dataUrl, file);
+                console.log('[Camera] Frame captured');
+            }, 'image/jpeg', 0.92);
+        });
+
+        // ── LIVE MODE ───────────────────────────────────────────────────
+        liveBtn.addEventListener('click', () => {
+            if (isLiveMode) {
+                stopLiveMode();
+                restoreCameraColumn();
+                liveBtn.textContent = '🔴 Live';
+                liveBtn.style.background = 'linear-gradient(135deg, #f85032, #e73827)';
+            } else {
+                startLiveMode();
+                expandCameraColumn();
+                liveBtn.textContent = '⏹ Stop Live';
+                liveBtn.style.background = 'linear-gradient(135deg, #667eea, #764ba2)';
+            }
+        });
+
+        function expandCameraColumn() {
+            // Hide the upload column, make camera fill the entire preview area
+            if (uploadCol) uploadCol.style.display = 'none';
+            cameraColumn.classList.add('camera-live-expanded');
+        }
+
+        function restoreCameraColumn() {
+            if (uploadCol) uploadCol.style.display = '';
+            cameraColumn.classList.remove('camera-live-expanded');
+        }
+
+        function startLiveMode() {
+            isLiveMode = true;
+            liveProcessedImg.style.display = 'none';
+            liveFpsBadge.style.display = 'inline';
+            liveIndicator.style.display = 'inline';
+            liveFrameCount = 0;
+
+            // FPS counter
+            if (liveFpsTimer) clearInterval(liveFpsTimer);
+            liveFpsTimer = setInterval(() => {
+                liveFpsBadge.textContent = liveFrameCount + ' FPS';
+                liveFrameCount = 0;
+            }, 1000);
+
+            // Start the processing loop
+            liveLoop();
+            console.log('[Live] Started');
+        }
+
+        function stopLiveMode() {
+            isLiveMode = false;
+            if (liveLoopId) { cancelAnimationFrame(liveLoopId); liveLoopId = null; }
+            if (liveFpsTimer) { clearInterval(liveFpsTimer); liveFpsTimer = null; }
+            liveProcessedImg.style.display = 'none';
+            liveFpsBadge.style.display = 'none';
+            liveIndicator.style.display = 'none';
+            liveFpsBadge.textContent = '0 FPS';
+            console.log('[Live] Stopped');
+        }
+
+        // ── Live processing loop ────────────────────────────────────────
+        function liveLoop() {
+            if (!isLiveMode) return;
+
+            if (!liveProcessing) {
+                liveProcessing = true;
+                processLiveFrame().finally(() => {
+                    liveProcessing = false;
+                });
+            }
+
+            // Schedule next frame (~target 10-15 FPS for REST API processing)
+            liveLoopId = setTimeout(() => {
+                if (isLiveMode) liveLoop();
+            }, 80); // ~12 FPS target (80ms interval)
+        }
+
+        async function processLiveFrame() {
+            if (!cameraStream || !isLiveMode) return;
+
+            // Determine which preset to apply
+            const preset = getCurrentLivePreset();
+            if (!preset) {
+                // No filter — just show raw camera
+                liveProcessedImg.style.display = 'none';
+                liveFrameCount++;
+                return;
+            }
+
+            try {
+                // Capture frame to canvas
+                const ctx = cameraCanvas.getContext('2d');
+                cameraCanvas.width = cameraVideo.videoWidth;
+                cameraCanvas.height = cameraVideo.videoHeight;
+                ctx.drawImage(cameraVideo, 0, 0);
+
+                // Convert to blob
+                const blob = await new Promise(resolve =>
+                    cameraCanvas.toBlob(resolve, 'image/jpeg', 0.75)
+                );
+                if (!blob || !isLiveMode) return;
+
+                // Send to backend
+                const formData = new FormData();
+                const b64 = await blobToBase64(blob);
+                formData.append('image_b64', b64);
+                formData.append('preset_name', preset);
+
+                const resp = await fetch(`${API_BASE}/process/emoji-preset`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_b64: b64,
+                        preset_name: preset
+                    })
+                });
+
+                if (!resp.ok || !isLiveMode) return;
+
+                const data = await resp.json();
+                if (data.processed_image && isLiveMode) {
+                    liveProcessedImg.src = data.processed_image;
+                    liveProcessedImg.style.display = 'block';
+                    liveFrameCount++;
+                }
+            } catch (err) {
+                // Silently ignore — next frame will retry
+                console.debug('[Live] Frame processing error:', err.message);
+            }
+        }
+
+        function blobToBase64(blob) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        // ── Determine which preset the sidebar has selected ─────────────
+        function getCurrentLivePreset() {
+            // Check if any emoji button is "active" (has a selected state)
+            const activeEmoji = document.querySelector('.emoji-btn.emoji-active');
+            if (activeEmoji) return activeEmoji.dataset.preset;
+            return currentLivePreset;
+        }
+
+        // ── Wire sidebar emoji buttons to live mode ─────────────────────
+        document.querySelectorAll('.emoji-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                // Toggle selection
+                const wasActive = btn.classList.contains('emoji-active');
+                document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('emoji-active'));
+
+                if (wasActive) {
+                    currentLivePreset = null;
+                    btn.style.outline = '';
+                } else {
+                    btn.classList.add('emoji-active');
+                    currentLivePreset = btn.dataset.preset;
+                    btn.style.outline = '2px solid var(--primary-color)';
+                }
+
+                // Clear outline on others
+                document.querySelectorAll('.emoji-btn:not(.emoji-active)').forEach(b => {
+                    b.style.outline = '';
+                });
+            });
+        });
+
+    })();
+
 });
+
