@@ -276,6 +276,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const fftLabProcPhasePlaceholder = document.getElementById('fftLabProcPhasePlaceholder');
     const fftOutputImg = document.getElementById('fftOutputImg');
     const fftOutputPlaceholder = document.getElementById('fftOutputPlaceholder');
+    const fftPhaseOutputImg = document.getElementById('fftPhaseOutputImg');
+    const fftPhaseOutputPlaceholder = document.getElementById('fftPhaseOutputPlaceholder');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -1820,7 +1822,110 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    function setupInteractiveCanvas(canvasId, name) {
+    function getFftSelectionCoords(canvas, imageElement, selection) {
+        if (!imageElement || !imageElement.src || imageElement.style.display === 'none') {
+            return null;
+        }
+
+        const canvasW = canvas.width || canvas.getBoundingClientRect().width;
+        const canvasH = canvas.height || canvas.getBoundingClientRect().height;
+        const naturalW = imageElement.naturalWidth || 1;
+        const naturalH = imageElement.naturalHeight || 1;
+        const imageRatio = naturalW / naturalH;
+        const canvasRatio = canvasW / Math.max(canvasH, 1);
+
+        let drawW = canvasW;
+        let drawH = canvasH;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        if (canvasRatio > imageRatio) {
+            drawH = canvasH;
+            drawW = drawH * imageRatio;
+            offsetX = (canvasW - drawW) / 2;
+        } else {
+            drawW = canvasW;
+            drawH = drawW / imageRatio;
+            offsetY = (canvasH - drawH) / 2;
+        }
+
+        const x0 = Math.max(selection.x, offsetX);
+        const y0 = Math.max(selection.y, offsetY);
+        const x1 = Math.min(selection.x + selection.w, offsetX + drawW);
+        const y1 = Math.min(selection.y + selection.h, offsetY + drawH);
+
+        if (x1 - x0 < 5 || y1 - y0 < 5) return null;
+
+        return {
+            x: (x0 - offsetX) / drawW,
+            y: (y0 - offsetY) / drawH,
+            w: (x1 - x0) / drawW,
+            h: (y1 - y0) / drawH,
+        };
+    }
+
+    async function applyFftRegionArtifact(coords, outputImg, outputPlaceholder) {
+        if (!uploadedFile || !currentOriginalImage || !coords) {
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Run FFT Filter first, then select a visible spectrum region.`;
+            return;
+        }
+
+        const idleText = i18n[currentLang]?.selectRegionOutput || 'Select a region to generate output';
+        const formData = new FormData();
+        formData.append('image', uploadedFile);
+        formData.append('intensity', intensitySlider.value);
+        formData.append('mask_coords', JSON.stringify(coords));
+
+        if (outputPlaceholder) {
+            outputPlaceholder.style.display = 'block';
+            outputPlaceholder.textContent = currentLang === 'TR' ? 'İşleniyor...' : 'Processing...';
+        }
+        if (outputImg) outputImg.style.display = 'none';
+        loadingOverlay.style.display = 'flex';
+
+        try {
+            const response = await fetch(`${API_BASE}/process/fft`, {
+                method: 'POST',
+                body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload?.detail || 'FFT region processing failed.');
+            if (!payload?.image_b64) throw new Error('Missing image_b64 in response.');
+
+            currentProcessedImage = payload.image_b64;
+            afterImg.src = currentProcessedImage;
+            landmarksOnlyImg.src = currentProcessedImage;
+
+            if (outputImg) {
+                outputImg.src = currentProcessedImage;
+                outputImg.style.display = 'block';
+            }
+            if (outputPlaceholder) outputPlaceholder.style.display = 'none';
+
+            updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+            setSpectrumImages(
+                payload.orig_spectrum_b64 || null,
+                payload.proc_spectrum_b64 || null,
+                payload.orig_phase_b64 || null,
+                payload.proc_phase_b64 || null
+            );
+
+            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>FFT partial-region artifact applied.`;
+            addHistory('FFT Partial Region Artifact');
+            if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+        } catch (err) {
+            console.error('[FFT Region] Error:', err);
+            if (outputPlaceholder) {
+                outputPlaceholder.style.display = 'block';
+                outputPlaceholder.textContent = err.message || idleText;
+            }
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message || 'FFT region processing failed.'}`;
+        } finally {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+
+    function setupInteractiveCanvas(canvasId, name, imageElement, outputImg, outputPlaceholder) {
         const canvas = document.getElementById(canvasId);
         if (!canvas) return;
 
@@ -1886,7 +1991,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (w > 5 && h > 5) {
                 console.log(`[FFT Lab - ${name}] Region Selected - X: ${Math.round(x)}, Y: ${Math.round(y)}, Width: ${Math.round(w)}, Height: ${Math.round(h)}`);
-                // Backend'den veri alinacak
+                const coords = getFftSelectionCoords(canvas, imageElement, { x, y, w, h });
+                if (coords) {
+                    applyFftRegionArtifact(coords, outputImg, outputPlaceholder);
+                } else {
+                    analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Run FFT Filter first, then select inside the visible spectrum image.`;
+                }
             } else {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
             }
@@ -1896,7 +2006,7 @@ document.addEventListener('DOMContentLoaded', () => {
         canvas.addEventListener('mouseleave', finishSelection);
     }
 
-    setupInteractiveCanvas('fftSelectionCanvas', 'Magnitude');
-    setupInteractiveCanvas('fftPhaseCanvas', 'Phase');
+    setupInteractiveCanvas('fftSelectionCanvas', 'Magnitude', fftLabProcSpectrumImg, fftOutputImg, fftOutputPlaceholder);
+    setupInteractiveCanvas('fftPhaseCanvas', 'Phase', fftLabProcPhaseImg, fftPhaseOutputImg, fftPhaseOutputPlaceholder);
 
 });
