@@ -13,21 +13,18 @@ logger = logging.getLogger("facial_pipeline.ai_module")
 _MODULE_DIR = Path(__file__).resolve().parent
 _MODELS_DIR = _MODULE_DIR.parent / "models"
 
-# Türkçe karakter sorunu için mutlak path
-import os
-_MODELS_DIR_STR = str(_MODELS_DIR)
-if not os.path.exists(_MODELS_DIR_STR):
-    _MODELS_DIR = Path("C:/FaceWarp/Facial-Image-Warping-main/backend/models")
+# Türkçe karakter sorunu için dinamik path
+_MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 import logging
 logger = logging.getLogger("facial_pipeline.ai_module")
 logger.info("MODELS_DIR: %s", _MODELS_DIR)
 logger.info("face_deploy exists: %s", (_MODELS_DIR / "face_deploy.prototxt").exists())
  
-_FACE_PROTO = "C:/FaceWarp/Facial-Image-Warping-main/backend/models/face_deploy.prototxt"
-_FACE_MODEL = "C:/FaceWarp/Facial-Image-Warping-main/backend/models/face_net.caffemodel"
-_AGE_PROTO  = "C:/FaceWarp/Facial-Image-Warping-main/backend/models/age_deploy.prototxt"
-_AGE_MODEL  = "C:/FaceWarp/Facial-Image-Warping-main/backend/models/age_net.caffemodel"
+_FACE_PROTO = str(_MODELS_DIR / "face_deploy.prototxt")
+_FACE_MODEL = str(_MODELS_DIR / "face_net.caffemodel")
+_AGE_PROTO  = str(_MODELS_DIR / "age_deploy.prototxt")
+_AGE_MODEL  = str(_MODELS_DIR / "age_net.caffemodel")
  
 AGE_BUCKETS = [
     "(0-2)", "(4-6)", "(8-12)", "(15-20)",
