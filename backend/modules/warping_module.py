@@ -279,7 +279,7 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         if lm is None:
             return image_bgr
             
-        px = float(intensity)
+        px = float(intensity) * 0.5
         deltas = np.zeros_like(lm)
         face_sz = _face_scale(lm)
         
@@ -403,7 +403,7 @@ def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         if lm is None:
             return image_bgr
             
-        px = float(intensity)
+        px = float(intensity) * 0.25
         deltas = np.zeros_like(lm)
         face_sz = _face_scale(lm)
         
