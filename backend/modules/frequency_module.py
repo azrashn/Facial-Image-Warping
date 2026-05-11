@@ -675,35 +675,18 @@ def _apply_color_with_mask(
         hsv[:, :, 0][mask_bool] * 0.15 + hue * 0.85
     )
     hsv[:, :, 1][mask_bool] = np.clip(
-        hsv[:, :, 1][mask_bool] * saturation_multiplier + 95,
-        0,
-        255,
-    )
-    hsv[:, :, 2][mask_bool] = np.clip(
-        hsv[:, :, 2][mask_bool] * 1.03 + 8,
+        hsv[:, :, 1][mask_bool] * saturation_multiplier + 15,
         0,
         255,
     )
 
     colored = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    target_hsv = np.uint8([[[hue, 255, 255]]])
-    target_bgr = cv2.cvtColor(target_hsv, cv2.COLOR_HSV2BGR)[0, 0].astype(np.float32)
-    color_layer = np.empty_like(image, dtype=np.float32)
-    color_layer[:] = target_bgr
-
-    color_strength = 0.76 if opacity >= 0.45 else 0.58
-    colored = (
-        colored.astype(np.float32) * (1.0 - color_strength)
-        + color_layer * color_strength
-    )
-
     soft_mask = cv2.GaussianBlur(mask_float, (0, 0), blur_sigma)
     max_value = float(soft_mask.max())
     if normalize_mask and max_value > 0:
         soft_mask /= max_value
-    visible_opacity = float(np.clip(opacity * 1.35 + 0.12, 0.0, 1.0))
-    soft_mask = soft_mask[..., None] * visible_opacity
+    soft_mask = soft_mask[..., None] * opacity
 
     result = (
         colored.astype(np.float32) * soft_mask
@@ -824,13 +807,8 @@ def apply_virtual_makeup(
         ]
         outer_points = _normalized_landmarks_to_points(landmarks, outer_lip, w, h)
         inner_points = _normalized_landmarks_to_points(landmarks, inner_lip, w, h)
-        if len(outer_points) < 3:
-            raise ValueError("Not enough lip landmarks were detected.")
         cv2.fillPoly(mask, [outer_points], 1.0)
-        if len(inner_points) >= 3:
-            inner_mask = np.zeros((h, w), dtype=np.float32)
-            cv2.fillPoly(inner_mask, [inner_points], 1.0)
-            mask = np.clip(mask - inner_mask * 0.72, 0.0, 1.0)
+        cv2.fillPoly(mask, [inner_points], 0.0)
         saturation_multiplier = 1.45
         blur_sigma = max(1.5, min(h, w) * 0.004)
         opacity = min(opacity, 0.75)
@@ -894,81 +872,6 @@ def apply_virtual_makeup(
         saturation_multiplier=saturation_multiplier,
         blur_sigma=blur_sigma,
         normalize_mask=normalize_mask,
-    )
-
-
-def _estimate_face_box(image: np.ndarray) -> tuple[int, int, int, int]:
-    h, w = image.shape[:2]
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(45, 45))
-    if len(faces) > 0:
-        x, y, fw, fh = sorted(faces, key=lambda box: box[2] * box[3], reverse=True)[0]
-        return int(x), int(y), int(fw), int(fh)
-
-    fw = int(w * 0.46)
-    fh = int(h * 0.58)
-    x = (w - fw) // 2
-    y = int(h * 0.18)
-    return x, y, fw, fh
-
-
-def apply_virtual_makeup_fallback(
-    image: np.ndarray,
-    region: str = "lip",
-    hue: int = 0,
-    opacity: float = 0.5,
-) -> np.ndarray:
-    """
-    Approximate makeup masks for camera frames when landmark detection fails.
-    """
-    if image is None:
-        raise ValueError("Input image is None.")
-
-    h, w = image.shape[:2]
-    x, y, fw, fh = _estimate_face_box(image)
-    region = (region or "").strip().lower()
-    mask = np.zeros((h, w), dtype=np.float32)
-
-    if region in {"lip", "lips"}:
-        center = (x + fw // 2, y + int(fh * 0.72))
-        axes = (max(8, int(fw * 0.17)), max(4, int(fh * 0.035)))
-        cv2.ellipse(mask, center, axes, 0, 0, 360, 1.0, -1)
-        saturation_multiplier = 1.45
-        blur_sigma = max(1.5, min(h, w) * 0.005)
-        opacity = min(opacity, 0.70)
-
-    elif region == "eyeshadow":
-        eye_y = y + int(fh * 0.39)
-        eye_dx = int(fw * 0.18)
-        eye_axes = (max(8, int(fw * 0.13)), max(5, int(fh * 0.045)))
-        cv2.ellipse(mask, (x + fw // 2 - eye_dx, eye_y), eye_axes, -6, 0, 360, 1.0, -1)
-        cv2.ellipse(mask, (x + fw // 2 + eye_dx, eye_y), eye_axes, 6, 0, 360, 1.0, -1)
-        saturation_multiplier = 1.50
-        blur_sigma = max(2.5, min(h, w) * 0.010)
-        opacity = min(opacity, 0.65)
-
-    elif region == "blush":
-        cheek_y = y + int(fh * 0.57)
-        cheek_dx = int(fw * 0.23)
-        cheek_axes = (max(10, int(fw * 0.13)), max(8, int(fh * 0.07)))
-        cv2.ellipse(mask, (x + fw // 2 - cheek_dx, cheek_y), cheek_axes, -12, 0, 360, 1.0, -1)
-        cv2.ellipse(mask, (x + fw // 2 + cheek_dx, cheek_y), cheek_axes, 12, 0, 360, 1.0, -1)
-        saturation_multiplier = 1.45
-        blur_sigma = max(3.0, min(h, w) * 0.014)
-        opacity = min(opacity, 0.58)
-
-    else:
-        raise ValueError("Region must be 'lip', 'blush', or 'eyeshadow'.")
-
-    return _apply_color_with_mask(
-        image=image,
-        mask=mask,
-        hue=hue,
-        opacity=opacity,
-        saturation_multiplier=saturation_multiplier,
-        blur_sigma=blur_sigma,
-        normalize_mask=True,
     )
 def create_face_region_mask(image: np.ndarray, landmarks: list) -> np.ndarray:
     """
