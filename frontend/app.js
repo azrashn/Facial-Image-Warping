@@ -95,6 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
             metalAviator: "Klasik Damla (Aviator)",
             acetateWayfarer: "Kemik Çerçeve (Modern)",
             minimalistRound: "İnce Yuvarlak (Retro)",
+            catEyeStyle: "Kedi Gözü (Cat-Eye)",
+            futuristicStyle: "Fütüristik (Kalkan)",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -102,7 +104,17 @@ document.addEventListener('DOMContentLoaded', () => {
             presetClown: "Joker / Palyaço",
             presetStarEyes: "Yıldızlı Bakış",
             presetHeartEyes: "Aşık",
-            presetCrying: "Ağlayan"
+            presetCrying: "Ağlayan",
+            // FFT Lab
+            tabFFTLab: "FFT Laboratuvarı",
+            fftMagnitude: "Büyüklük (Magnitude)",
+            fftPhase: "Faz (Phase)",
+            interactiveSelection: "Etkileşimli Bölge Seçimi: Bir alan seçmek için tıklayıp sürükleyin.",
+            selectionOutput: "Seçim Çıktısı",
+            noDataFft: "Veri yok (FFT Filtresi Çalıştırın)",
+            selectRegionOutput: "Çıktı oluşturmak için bir bölge seçin",
+            procFFTPhase: "İşlenmiş - FFT Fazı",
+            origFFTPhase: "Orijinal - FFT Fazı"
         },
         EN: {
             dropImage: "Drop image here",
@@ -182,6 +194,8 @@ document.addEventListener('DOMContentLoaded', () => {
             metalAviator: "Classic Teardrop (Aviator)",
             acetateWayfarer: "Thick Frame (Modern)",
             minimalistRound: "Thin Round (Retro)",
+            catEyeStyle: "Cat-Eye",
+            futuristicStyle: "Futuristic (Shield)",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -189,7 +203,17 @@ document.addEventListener('DOMContentLoaded', () => {
             presetClown: "Joker",
             presetStarEyes: "Starry Gaze",
             presetHeartEyes: "Heart-Eyes",
-            presetCrying: "Crying"
+            presetCrying: "Crying",
+            // FFT Lab
+            tabFFTLab: "FFT Laboratory",
+            fftMagnitude: "Magnitude",
+            fftPhase: "Phase",
+            interactiveSelection: "Interactive Region Selection: Click and drag to select a patch.",
+            selectionOutput: "Selection Output",
+            noDataFft: "No data (Run FFT Filter)",
+            selectRegionOutput: "Select a region to generate output",
+            procFFTPhase: "Processed - FFT Phase",
+            origFFTPhase: "Original - FFT Phase"
         }
     };
 
@@ -244,6 +268,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const procSpectrumImg = document.getElementById('procSpectrumImg');
     const origPhaseImg = document.getElementById('origPhaseImg');
     const procPhaseImg = document.getElementById('procPhaseImg');
+    
+    // FFT Lab Elements
+    const fftLabProcSpectrumImg = document.getElementById('fftLabProcSpectrumImg');
+    const fftLabProcPhaseImg = document.getElementById('fftLabProcPhaseImg');
+    const fftLabProcSpectrumPlaceholder = document.getElementById('fftLabProcSpectrumPlaceholder');
+    const fftLabProcPhasePlaceholder = document.getElementById('fftLabProcPhasePlaceholder');
+    const fftOutputImg = document.getElementById('fftOutputImg');
+    const fftOutputPlaceholder = document.getElementById('fftOutputPlaceholder');
+    const fftPhaseOutputImg = document.getElementById('fftPhaseOutputImg');
+    const fftPhaseOutputPlaceholder = document.getElementById('fftPhaseOutputPlaceholder');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -774,22 +808,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 fftLabProcPhaseImg.style.display = 'none';
             }
             if (fftLabProcPhasePlaceholder) fftLabProcPhasePlaceholder.style.display = 'block';
-        }
-
-        if (origPhaseB64 && origPhaseImg) {
-            origPhaseImg.src = origPhaseB64;
-            origPhaseImg.style.display = 'block';
-        } else if (origPhaseImg) {
-            origPhaseImg.src = '';
-            origPhaseImg.style.display = 'none';
-        }
-
-        if (procPhaseB64 && procPhaseImg) {
-            procPhaseImg.src = procPhaseB64;
-            procPhaseImg.style.display = 'block';
-        } else if (procPhaseImg) {
-            procPhaseImg.src = '';
-            procPhaseImg.style.display = 'none';
         }
     }
 
@@ -1489,6 +1507,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     aviator: i18n[currentLang]?.metalAviator || 'Classic Teardrop (Aviator)',
                     wayfarer: i18n[currentLang]?.acetateWayfarer || 'Thick Frame (Modern)',
                     round: i18n[currentLang]?.minimalistRound || 'Thin Round (Retro)',
+                    cat_eye: i18n[currentLang]?.catEyeStyle || 'Cat-Eye',
+                    futuristic: i18n[currentLang]?.futuristicStyle || 'Futuristic (Shield)',
                 };
                 const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);
@@ -1777,5 +1797,216 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // --- FFT LAB INTERACTIVE SELECTION ---
+    const fftSubBtns = document.querySelectorAll('.fft-sub-btn');
+    const fftMagView = document.getElementById('fft-mag-view');
+    const fftPhaseView = document.getElementById('fft-phase-view');
+
+    fftSubBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            fftSubBtns.forEach(b => {
+                b.classList.remove('active');
+                b.style.background = 'transparent';
+            });
+            btn.classList.add('active');
+            btn.style.background = 'var(--surface-color)';
+
+            if (btn.dataset.sub === 'magnitude') {
+                fftMagView.style.display = 'flex';
+                fftPhaseView.style.display = 'none';
+            } else {
+                fftMagView.style.display = 'none';
+                fftPhaseView.style.display = 'flex';
+            }
+        });
+    });
+
+    function getFftSelectionCoords(canvas, imageElement, selection) {
+        if (!imageElement || !imageElement.src || imageElement.style.display === 'none') {
+            return null;
+        }
+
+        const canvasW = canvas.width || canvas.getBoundingClientRect().width;
+        const canvasH = canvas.height || canvas.getBoundingClientRect().height;
+        const naturalW = imageElement.naturalWidth || 1;
+        const naturalH = imageElement.naturalHeight || 1;
+        const imageRatio = naturalW / naturalH;
+        const canvasRatio = canvasW / Math.max(canvasH, 1);
+
+        let drawW = canvasW;
+        let drawH = canvasH;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        if (canvasRatio > imageRatio) {
+            drawH = canvasH;
+            drawW = drawH * imageRatio;
+            offsetX = (canvasW - drawW) / 2;
+        } else {
+            drawW = canvasW;
+            drawH = drawW / imageRatio;
+            offsetY = (canvasH - drawH) / 2;
+        }
+
+        const x0 = Math.max(selection.x, offsetX);
+        const y0 = Math.max(selection.y, offsetY);
+        const x1 = Math.min(selection.x + selection.w, offsetX + drawW);
+        const y1 = Math.min(selection.y + selection.h, offsetY + drawH);
+
+        if (x1 - x0 < 5 || y1 - y0 < 5) return null;
+
+        return {
+            x: (x0 - offsetX) / drawW,
+            y: (y0 - offsetY) / drawH,
+            w: (x1 - x0) / drawW,
+            h: (y1 - y0) / drawH,
+        };
+    }
+
+    async function applyFftRegionArtifact(coords, outputImg, outputPlaceholder) {
+        if (!uploadedFile || !currentOriginalImage || !coords) {
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Run FFT Filter first, then select a visible spectrum region.`;
+            return;
+        }
+
+        const idleText = i18n[currentLang]?.selectRegionOutput || 'Select a region to generate output';
+        const formData = new FormData();
+        formData.append('image', uploadedFile);
+        formData.append('intensity', intensitySlider.value);
+        formData.append('mask_coords', JSON.stringify(coords));
+
+        if (outputPlaceholder) {
+            outputPlaceholder.style.display = 'block';
+            outputPlaceholder.textContent = currentLang === 'TR' ? 'İşleniyor...' : 'Processing...';
+        }
+        if (outputImg) outputImg.style.display = 'none';
+        loadingOverlay.style.display = 'flex';
+
+        try {
+            const response = await fetch(`${API_BASE}/process/fft`, {
+                method: 'POST',
+                body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload?.detail || 'FFT region processing failed.');
+            if (!payload?.image_b64) throw new Error('Missing image_b64 in response.');
+
+            currentProcessedImage = payload.image_b64;
+            afterImg.src = currentProcessedImage;
+            landmarksOnlyImg.src = currentProcessedImage;
+
+            if (outputImg) {
+                outputImg.src = currentProcessedImage;
+                outputImg.style.display = 'block';
+            }
+            if (outputPlaceholder) outputPlaceholder.style.display = 'none';
+
+            updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+            setSpectrumImages(
+                payload.orig_spectrum_b64 || null,
+                payload.proc_spectrum_b64 || null,
+                payload.orig_phase_b64 || null,
+                payload.proc_phase_b64 || null
+            );
+
+            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>FFT partial-region artifact applied.`;
+            addHistory('FFT Partial Region Artifact');
+            if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+        } catch (err) {
+            console.error('[FFT Region] Error:', err);
+            if (outputPlaceholder) {
+                outputPlaceholder.style.display = 'block';
+                outputPlaceholder.textContent = err.message || idleText;
+            }
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message || 'FFT region processing failed.'}`;
+        } finally {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+
+    function setupInteractiveCanvas(canvasId, name, imageElement, outputImg, outputPlaceholder) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        let isDrawing = false;
+        let startX = 0;
+        let startY = 0;
+        let currentX = 0;
+        let currentY = 0;
+
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        canvas.addEventListener('mousedown', (e) => {
+            resizeCanvas();
+            const rect = canvas.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+            isDrawing = true;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const rect = canvas.getBoundingClientRect();
+            currentX = e.clientX - rect.left;
+            currentY = e.clientY - rect.top;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const x = Math.min(startX, currentX);
+            const y = Math.min(startY, currentY);
+            const w = Math.abs(currentX - startX);
+            const h = Math.abs(currentY - startY);
+
+            ctx.clearRect(x, y, w, h);
+
+            ctx.strokeStyle = '#00ffcc';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.strokeRect(x, y, w, h);
+        });
+
+        const finishSelection = (e) => {
+            if (!isDrawing) return;
+            isDrawing = false;
+            
+            const rect = canvas.getBoundingClientRect();
+            currentX = e.clientX - rect.left;
+            currentY = e.clientY - rect.top;
+
+            const x = Math.min(startX, currentX);
+            const y = Math.min(startY, currentY);
+            const w = Math.abs(currentX - startX);
+            const h = Math.abs(currentY - startY);
+
+            if (w > 5 && h > 5) {
+                console.log(`[FFT Lab - ${name}] Region Selected - X: ${Math.round(x)}, Y: ${Math.round(y)}, Width: ${Math.round(w)}, Height: ${Math.round(h)}`);
+                const coords = getFftSelectionCoords(canvas, imageElement, { x, y, w, h });
+                if (coords) {
+                    applyFftRegionArtifact(coords, outputImg, outputPlaceholder);
+                } else {
+                    analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Run FFT Filter first, then select inside the visible spectrum image.`;
+                }
+            } else {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        };
+
+        canvas.addEventListener('mouseup', finishSelection);
+        canvas.addEventListener('mouseleave', finishSelection);
+    }
+
+    setupInteractiveCanvas('fftSelectionCanvas', 'Magnitude', fftLabProcSpectrumImg, fftOutputImg, fftOutputPlaceholder);
+    setupInteractiveCanvas('fftPhaseCanvas', 'Phase', fftLabProcPhaseImg, fftPhaseOutputImg, fftPhaseOutputPlaceholder);
 
 });

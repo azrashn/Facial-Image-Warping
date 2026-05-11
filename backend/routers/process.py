@@ -139,6 +139,32 @@ def _compute_phase_b64(fft_shifted: np.ndarray) -> str:
     return _data_url_from_image(cv2.cvtColor(phase_normalized, cv2.COLOR_GRAY2BGR))
 
 
+def _safe_landmarks_for_image(image_bgr: np.ndarray) -> list[dict[str, float]]:
+    """
+    Return normalized landmarks for the original image size with a pixel-landmark fallback.
+    """
+    pixel_landmarks = detect_face_landmarks(image_bgr)
+    if pixel_landmarks is not None and len(pixel_landmarks) >= 468:
+        h, w = image_bgr.shape[:2]
+        return [
+            {
+                "x": float(np.clip(point[0] / max(w, 1), 0.0, 1.0)),
+                "y": float(np.clip(point[1] / max(h, 1), 0.0, 1.0)),
+            }
+            for point in pixel_landmarks[:468]
+        ]
+
+    try:
+        rgb_for_landmarks = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        return get_landmarks(rgb_for_landmarks)
+    except Exception as exc:
+        logger.warning("MediaPipe normalized landmarks failed: %s", exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Face landmarks could not be detected for this image.",
+        ) from exc
+
+
 @router.post("/process/warp")
 async def process_warp(
     image: UploadFile = File(...),
@@ -231,8 +257,7 @@ async def process_age(
             else:
                 effected = apply_deaging(original, intensity)
                 try:
-                    rgb_for_landmarks = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
-                    landmarks = get_landmarks(rgb_for_landmarks)
+                    landmarks = _safe_landmarks_for_image(original)
                     face_mask = create_face_region_mask(original, landmarks)
                     processed = blend_effect_with_mask(
                         original=original,
@@ -352,16 +377,27 @@ async def process_makeup(
         contents = await image.read()
         original = _decode_upload(contents)
 
-        rgb_for_landmarks = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
-        landmarks = get_landmarks(rgb_for_landmarks)
+        if opacity > 1.0:
+            opacity = opacity / 100.0
 
-        processed = apply_virtual_makeup(
-            image=original,
-            landmarks=landmarks,
-            region=region,
-            hue=_hex_color_to_hue(color, hue),
-            opacity=opacity,
-        )
+        target_hue = _hex_color_to_hue(color, hue)
+        try:
+            landmarks = _safe_landmarks_for_image(original)
+            processed = apply_virtual_makeup(
+                image=original,
+                landmarks=landmarks,
+                region=region,
+                hue=target_hue,
+                opacity=opacity,
+            )
+        except HTTPException as exc:
+            logger.warning("Makeup landmarks unavailable; using approximate mask: %s", exc.detail)
+            processed = apply_virtual_makeup_fallback(
+                image=original,
+                region=region,
+                hue=target_hue,
+                opacity=opacity,
+            )
 
         metrics = _metrics_dict(original, processed)
 
@@ -997,6 +1033,35 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
     h, w = out.shape[:2]
     lm = detect_face_landmarks(out)
     if lm is None:
+        cx, cy = w // 2, h // 2
+        face_w = int(w * 0.42)
+        face_h = int(h * 0.56)
+        mask = np.zeros((h, w), dtype=np.float32)
+        cv2.ellipse(mask, (cx, cy), (face_w // 2, face_h // 2), 0, 0, 360, 1.0, -1)
+        mask = cv2.GaussianBlur(mask, (0, 0), max(8.0, min(h, w) * 0.035))
+        gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+        metal = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR).astype(np.float32) * 1.08 + 34.0
+        out = (
+            out.astype(np.float32) * (1.0 - mask[..., None] * 0.76)
+            + metal * (mask[..., None] * 0.76)
+        ).astype(np.uint8)
+        visor_y = cy - int(face_h * 0.13)
+        cv2.rectangle(
+            out,
+            (cx - int(face_w * 0.30), visor_y - int(face_h * 0.045)),
+            (cx + int(face_w * 0.30), visor_y + int(face_h * 0.045)),
+            (8, 12, 145),
+            -1,
+            cv2.LINE_AA,
+        )
+        cv2.rectangle(
+            out,
+            (cx - int(face_w * 0.30), visor_y - int(face_h * 0.045)),
+            (cx + int(face_w * 0.30), visor_y + int(face_h * 0.045)),
+            (40, 40, 255),
+            max(2, int(face_w * 0.015)),
+            cv2.LINE_AA,
+        )
         return out
     face_sz = _face_scale(lm)
     deltas = np.zeros_like(lm)
@@ -1006,7 +1071,14 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
     cx = (lm[133,0]+lm[362,0])/2.0
     for idx in jaw:
         dx = lm[idx,0] - cx
-        deltas[idx,0] += np.sign(dx) * face_sz * 0.06
+        deltas[idx,0] += np.sign(dx) * face_sz * 0.12
+        deltas[idx,1] += face_sz * 0.025
+
+    temple = [234, 93, 132, 58, 172, 454, 323, 361, 288, 397]
+    for idx in temple:
+        if idx < len(lm):
+            dx = lm[idx, 0] - cx
+            deltas[idx, 0] += np.sign(dx) * face_sz * 0.045
     # Flatten mouth
     mouth_top = [13,14,312,311,310,415,308,324,318,402,317]
     mouth_bot = [87,178,88,95,78,61,146,91,181,84,17]
@@ -1024,7 +1096,7 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
     boundary = _generate_warp_anchors(w, h, lm)
     warped = geometric_warp(out, np.vstack([lm,boundary]), np.vstack([dst,boundary]))
 
-    # Extended mask + silver overlay
+    # Extended mask + metallic gray skin.
     try:
         prep = preprocess_image(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
         wlms = get_landmarks(prep)
@@ -1032,21 +1104,190 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
     except Exception:
         mask = np.ones((h,w), np.float32)*0.4
         wlms = None
-    tinted = _apply_color_overlay(warped, mask, (192,192,192), 0.30)
 
-    # Yellow eyes
+    mask = np.clip(mask, 0.0, 1.0)
+    mask3 = mask[..., None]
+
+    gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+    metallic = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR).astype(np.float32)
+    metallic = metallic * 1.10 + np.array([24.0, 25.0, 27.0], dtype=np.float32)
+
+    xx = np.linspace(0.0, 1.0, w, dtype=np.float32).reshape(1, w)
+    yy = np.linspace(0.0, 1.0, h, dtype=np.float32).reshape(h, 1)
+    shine = np.clip(1.0 - np.abs((xx * 0.75 + yy * 0.25) - 0.46) * 3.4, 0.0, 1.0)
+    metallic += shine[..., None] * np.array([28.0, 30.0, 34.0], dtype=np.float32)
+
+    tinted = (
+        warped.astype(np.float32) * (1.0 - mask3 * 0.78)
+        + metallic * (mask3 * 0.78)
+    )
+
+    stripe_period = max(5, int(face_sz * 0.035))
+    stripe_height = max(1, stripe_period // 3)
+    scan_mask = np.zeros((h, w), dtype=np.float32)
+    for y in range(0, h, stripe_period):
+        scan_mask[y:y + stripe_height, :] = 1.0
+    scan_mask = cv2.GaussianBlur(scan_mask * mask, (0, 0), 0.65)
+    tinted = tinted - scan_mask[..., None] * 34.0
+    tinted += scan_mask[..., None] * np.array([12.0, 7.0, 2.0], dtype=np.float32)
+    tinted = np.clip(tinted, 0, 255).astype(np.uint8)
+
+    face_box_pts = lm.astype(np.int32)
+    fx, fy, fw, fh = cv2.boundingRect(face_box_pts)
+    pad_x = int(fw * 0.06)
+    pad_y = int(fh * 0.08)
+    panel_x0 = max(0, fx + pad_x)
+    panel_y0 = max(0, fy - pad_y)
+    panel_x1 = min(w - 1, fx + fw - pad_x)
+    panel_y1 = min(h - 1, fy + fh + int(fh * 0.04))
+    seam_color = (38, 42, 48)
+
+    forehead_y = panel_y0 + int((panel_y1 - panel_y0) * 0.20)
+    cv2.line(
+        tinted,
+        (panel_x0 + int(fw * 0.10), forehead_y),
+        (panel_x1 - int(fw * 0.10), forehead_y),
+        seam_color,
+        max(1, int(face_sz * 0.010)),
+        cv2.LINE_AA,
+    )
+    for x_plate in [panel_x0 + int(fw * 0.18), panel_x1 - int(fw * 0.18)]:
+        cv2.line(
+            tinted,
+            (x_plate, forehead_y),
+            (x_plate, panel_y0 + int(fh * 0.05)),
+            seam_color,
+            max(1, int(face_sz * 0.008)),
+            cv2.LINE_AA,
+        )
+
+    face_outline_idx = [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+        361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+        176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+        162, 21, 54, 103, 67, 109,
+    ]
+    outline = np.array(
+        [lm[idx] for idx in face_outline_idx if idx < len(lm)],
+        dtype=np.int32,
+    )
+    if len(outline) >= 3:
+        cv2.polylines(
+            tinted,
+            [outline.reshape((-1, 1, 2))],
+            True,
+            (55, 60, 66),
+            max(2, int(face_sz * 0.018)),
+            cv2.LINE_AA,
+        )
+
+    for ear_idx, tilt in [(234, -0.35), (454, 0.35)]:
+        if ear_idx < len(lm):
+            ex, ey = lm[ear_idx].astype(int)
+            antenna_len = int(face_sz * 0.42)
+            tip_x = int(ex + tilt * face_sz)
+            tip_y = max(0, int(ey - antenna_len))
+            cv2.line(
+                tinted,
+                (int(ex), int(ey)),
+                (tip_x, tip_y),
+                (48, 52, 58),
+                max(3, int(face_sz * 0.018)),
+                cv2.LINE_AA,
+            )
+            cv2.circle(
+                tinted,
+                (tip_x, tip_y),
+                max(5, int(face_sz * 0.034)),
+                (58, 64, 72),
+                -1,
+                cv2.LINE_AA,
+            )
+            cv2.circle(
+                tinted,
+                (tip_x, tip_y),
+                max(5, int(face_sz * 0.034)),
+                (165, 170, 176),
+                1,
+                cv2.LINE_AA,
+            )
+
     if wlms:
-        tinted = _color_eye_landmarks(tinted, wlms, (0,255,255), 5)
+        def _pt(idx: int) -> tuple[int, int]:
+            return int(wlms[idx]["x"] * w), int(wlms[idx]["y"] * h)
 
-    # Red antennas from ears
-    if wlms and len(wlms) > 454:
-        for ear_idx in [234, 454]:
-            ex, ey = int(wlms[ear_idx]["x"]*w), int(wlms[ear_idx]["y"]*h)
-            sign = -1 if ear_idx == 234 else 1
-            tip_x = ex + sign * int(face_sz * 0.3)
-            tip_y = ey - int(face_sz * 0.5)
-            cv2.line(tinted, (ex,ey), (tip_x,tip_y), (160,160,160), max(4,int(face_sz*0.04)))
-            cv2.circle(tinted, (tip_x,tip_y), max(8,int(face_sz*0.07)), (0,0,255), -1)
+        eye_rings = [
+            [33, 133, 160, 158, 153, 144, 159, 145],
+            [362, 263, 387, 385, 380, 373, 386, 374],
+        ]
+        valid_eye_pts = []
+
+        for eye_idx in eye_rings:
+            if not all(idx < len(wlms) for idx in eye_idx):
+                continue
+            pts = np.array([_pt(idx) for idx in eye_idx], dtype=np.int32)
+            valid_eye_pts.append(pts)
+
+            eye_mask = np.zeros((h, w), dtype=np.float32)
+            hull = cv2.convexHull(pts)
+            cv2.fillConvexPoly(eye_mask, hull, 1.0)
+            eye_mask = cv2.GaussianBlur(eye_mask, (0, 0), max(1.2, face_sz * 0.008))
+
+            glow_mask = np.zeros((h, w), dtype=np.float32)
+            cx_eye, cy_eye = np.mean(pts, axis=0).astype(int)
+            glow_r = max(9, int(face_sz * 0.085))
+            cv2.circle(glow_mask, (cx_eye, cy_eye), glow_r, 1.0, -1, cv2.LINE_AA)
+            glow_mask = cv2.GaussianBlur(glow_mask, (0, 0), glow_r * 0.65)
+
+            red = np.full_like(tinted, (8, 18, 255), dtype=np.uint8)
+            glow3 = glow_mask[..., None] * 0.35
+            eye3 = eye_mask[..., None] * 0.92
+            tinted = (
+                tinted.astype(np.float32) * (1.0 - glow3)
+                + red.astype(np.float32) * glow3
+            )
+            tinted = (
+                tinted * (1.0 - eye3)
+                + red.astype(np.float32) * eye3
+            ).astype(np.uint8)
+
+            x, y, ew, eh = cv2.boundingRect(hull)
+            cv2.line(
+                tinted,
+                (x, cy_eye),
+                (x + ew, cy_eye),
+                (40, 40, 255),
+                max(2, int(face_sz * 0.018)),
+                cv2.LINE_AA,
+            )
+
+        if len(valid_eye_pts) == 2:
+            left_center = np.mean(valid_eye_pts[0], axis=0).astype(int)
+            right_center = np.mean(valid_eye_pts[1], axis=0).astype(int)
+            bridge_y = int((left_center[1] + right_center[1]) / 2)
+            cv2.line(
+                tinted,
+                (left_center[0], bridge_y),
+                (right_center[0], bridge_y),
+                (25, 25, 170),
+                max(1, int(face_sz * 0.012)),
+                cv2.LINE_AA,
+            )
+
+        for bolt_idx in [123, 352]:
+            if bolt_idx < len(wlms):
+                bx, by = _pt(bolt_idx)
+                bolt_r = max(3, int(face_sz * 0.024))
+                cv2.circle(tinted, (bx, by), bolt_r, (48, 52, 58), -1, cv2.LINE_AA)
+                cv2.circle(tinted, (bx, by), bolt_r, (150, 155, 160), 1, cv2.LINE_AA)
+                cv2.line(
+                    tinted,
+                    (bx - bolt_r + 1, by),
+                    (bx + bolt_r - 1, by),
+                    (115, 120, 125),
+                    1,
+                    cv2.LINE_AA,
+                )
 
     return tinted
 
@@ -1571,10 +1812,15 @@ async def process_fft(
             except (_json.JSONDecodeError, ValueError) as exc:
                 logger.warning("[FFT] Could not parse mask_coords: %s", exc)
 
-        # Apply FFT filter (apply_fft_filter does not yet support mask;
-        # coordinates are logged above and will be used when the module is extended)
         filter_intensity = float(intensity)
-        processed = apply_fft_filter(original, intensity=filter_intensity)
+        if parsed_mask:
+            processed, _ = apply_fft_partial_region_artifact(
+                original,
+                mask_coords=parsed_mask,
+                intensity=filter_intensity,
+            )
+        else:
+            processed, _ = apply_fft_filter(original, intensity=filter_intensity)
 
         metrics = _metrics_dict(original, processed)
 
@@ -1598,6 +1844,7 @@ async def process_fft(
             proc_spectrum_b64=proc_spectrum_b64,
             orig_phase_b64=orig_phase_b64,
             proc_phase_b64=proc_phase_b64,
+            energy=compute_energy_analysis(processed, radius=30),
         )
 
     except HTTPException:
@@ -1839,27 +2086,3 @@ async def process_clown_transformation(
     except Exception as exc:
         logger.exception("process_clown_transformation.failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-@router.post("/process/clown_transformation")
-async def process_clown_transformation(image: UploadFile = File(...)):
-    contents = await image.read()
-    file_bytes = np.frombuffer(contents, np.uint8)
-    original = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    if original is None:
-        raise HTTPException(status_code=400, detail="Invalid image.")
-    
-    processed = _apply_clown(original)
-    
-    metrics = _metrics_dict(original, processed)
-    orig_fft_shifted = compute_fft(original)[2]
-    proc_fft_shifted = compute_fft(processed)[2]
-    orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
-    proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
-
-    return {
-        "proc_image_b64": _data_url_from_image(processed),
-        "image_b64": _data_url_from_image(processed),
-        "metrics": metrics,
-        "orig_spectrum_b64": _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR)),
-        "proc_spectrum_b64": _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR)),
-    }
