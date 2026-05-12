@@ -128,6 +128,49 @@ def _get_tasks_face_landmarker():
     return _TASK_LANDMARKER
 
 
+class PersistentFaceMesh:
+    """
+    Single MediaPipe FaceMesh instance for video streaming.
+
+    Do **not** create a new ``FaceMesh`` per frame — that destroys temporal
+    tracking and tanks FPS. Use ``static_image_mode=False`` for real-time use.
+    """
+
+    def __init__(self) -> None:
+        if not (hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh")):
+            raise RuntimeError(
+                "MediaPipe solutions FaceMesh is not available. "
+                "Install mediapipe with face_mesh support for realtime mode."
+            )
+        self._mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=False,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+
+    def detect(self, image_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Return (N, 2) float32 pixel landmarks or *None* if no face."""
+        if image_bgr is None or image_bgr.size == 0:
+            return None
+        h, w = image_bgr.shape[:2]
+        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        res = self._mesh.process(rgb)
+        if not res.multi_face_landmarks:
+            return None
+        lm = res.multi_face_landmarks[0].landmark
+        return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+
+    def close(self) -> None:
+        self._mesh.close()
+
+
+def detect_face_landmarks_live(mesh: PersistentFaceMesh, image_bgr: np.ndarray) -> Optional[np.ndarray]:
+    """Landmark detection using a persistent :class:`PersistentFaceMesh` instance."""
+    return mesh.detect(image_bgr)
+
+
 def _landmarks_via_tasks(image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
     from mediapipe.tasks.python.vision.core import image as mp_image_module
 
@@ -362,7 +405,11 @@ def _face_scale(lm: np.ndarray) -> float:
     return float(np.linalg.norm(left_eye - right_eye))
 
 
-def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_smile(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Görev 3 Düzeltmesi: Natural Smile (Diagonal Displacement & Wide Falloff).
     Dudak köşelerini sadece dikey değil, elmacık kemiklerine doğru çapraz (yukarı ve dışa) çeker.
@@ -370,7 +417,7 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     Burun ucu, çene altı ve göz altları gibi kilit noktalar sabitlenerek yırtılma engellenir.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
             
@@ -381,7 +428,7 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         
         # Etki Alanını Genişlet: Yanak kasları ve çevresinin harekete dahil olması için sigma büyütüldü
         sigma = face_sz * 0.25
-        
+
         # 61: Sol dudak köşesi, 291: Sağ dudak köşesi
         w_left = _gaussian_falloff(lm, 61, sigma)
         w_right = _gaussian_falloff(lm, 291, sigma)
@@ -436,7 +483,11 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_eyebrow_raise(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Rigid-body eyebrow lift: BOTH the upper and lower boundary
     landmarks of each brow translate by the exact same delta,
@@ -444,7 +495,7 @@ def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     forehead prevents mesh tearing above the brow.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
         strength = _clamp_intensity(intensity)
@@ -492,14 +543,18 @@ def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_lip_widen(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Görev 1 Düzeltmesi: Lip Widen (Distance-Based Weighted Displacement).
     Dudak köşesi etrafındaki noktaları Gauss ağırlığıyla yatayda kaydırarak
     yırtılmayı (pixel tearing) engeller.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
             
@@ -527,7 +582,11 @@ def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_face_slim(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Face slim with smooth radial contraction toward the nose tip.
     Each jaw/cheek landmark is pulled along the vector toward the
@@ -535,7 +594,7 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     decaying smoothly toward inner cheeks.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
         strength = _clamp_intensity(intensity)
@@ -608,7 +667,11 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_eye_scaling(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Görev 2 Düzeltmesi: Radial Eye Scaling (Smooth Falloff & Anchors).
     Gözleri kendi merkezlerinden orantılı şekilde büyütür/küçültür.
@@ -616,7 +679,7 @@ def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     Kaş, burun köprüsü ve yanak üstü gibi anchor noktalar KESİNLİKLE sabitlenir.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
 
@@ -672,7 +735,11 @@ def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
+def apply_emoji_preset(
+    image_bgr: np.ndarray,
+    emoji_name: str,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Apply predefined expression presets by chaining existing warps.
     """
@@ -682,13 +749,21 @@ def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
         out = image_bgr.copy()
 
         if preset.get("smile", 0.0) > 0:
-            out = apply_smile(out, int(round(preset["smile"] * 100)))
+            out = apply_smile(
+                out, int(round(preset["smile"] * 100)), landmarks=landmarks
+            )
         if preset.get("eyebrow_raise", 0.0) > 0:
-            out = apply_eyebrow_raise(out, int(round(preset["eyebrow_raise"] * 100)))
+            out = apply_eyebrow_raise(
+                out, int(round(preset["eyebrow_raise"] * 100)), landmarks=landmarks
+            )
         if preset.get("lip_widen", 0.0) > 0:
-            out = apply_lip_widen(out, int(round(preset["lip_widen"] * 100)))
+            out = apply_lip_widen(
+                out, int(round(preset["lip_widen"] * 100)), landmarks=landmarks
+            )
         if preset.get("eye_enlarge", 0.0) != 0:
-            out = apply_eye_scaling(out, int(round(preset["eye_enlarge"] * 100)))
+            out = apply_eye_scaling(
+                out, int(round(preset["eye_enlarge"] * 100)), landmarks=landmarks
+            )
 
         return out
     except Exception as exc:
@@ -696,7 +771,11 @@ def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_beard(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Görev 5 Düzeltmesi: Ultimate Facial Hair (Multiply Blend & Normalized Mask).
     Sakal/Bıyık dokusunu fiziksel olarak koyulaştırmak için Multiply Blend kullanır.
@@ -704,7 +783,7 @@ def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     Alttaki deri rengini "yutmak" yerine direkt olarak cilt piksellerini karartır.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
 
