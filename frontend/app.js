@@ -1909,10 +1909,13 @@ document.addEventListener('DOMContentLoaded', () => {
         let _liveErrorCount = 0;      // consecutive error counter
         const _MAX_LIVE_ERRORS = 10;  // pause live after this many consecutive errors
         let _lastFrameTime = 0;       // for rAF throttling
-        const _TARGET_INTERVAL = 66;  // ~15 FPS target (ms between frames)
+        const _TARGET_INTERVAL = 33;  // ~30 FPS target (ms between frames)
         let _liveHasPendingTick = false;
         let liveWorker = null;
         let liveWorkerReady = false;
+        let _liveWs = null;           // WebSocket connection for live mode
+        let _wsReady = false;         // WebSocket open state
+        let _wsPendingFrame = false;  // throttle: waiting for server response
 
         // ── Profiling helper ────────────────────────────────────────────
         function _profileLog(label, startMs) {
@@ -2080,29 +2083,182 @@ document.addEventListener('DOMContentLoaded', () => {
             _liveErrorCount = 0;
             _lastFrameTime = 0;
             _liveHasPendingTick = false;
+            _wsPendingFrame = false;
+
+            // Open WebSocket connection to backend
+            const wsUrl = API_BASE.replace('http', 'ws') + '/live/ws';
+            _liveWs = new WebSocket(wsUrl);
+            _wsReady = false;
+
+            _liveWs.onopen = () => {
+                _wsReady = true;
+                console.log('[Live] WebSocket connected');
+                // Send initial config
+                const preset = getCurrentLivePreset();
+                _liveWs.send(JSON.stringify({
+                    type: 'config',
+                    filter: _mapPresetToFilter(preset),
+                    intensity: Number(intensitySlider?.value || 50),
+                }));
+            };
+
+            _liveWs.onmessage = (ev) => {
+                try {
+                    const msg = JSON.parse(ev.data);
+                    if (msg.type === 'frame' && isLiveMode) {
+                        _wsPendingFrame = false;
+                        if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
+                        liveProcessedImg.src = msg.data;
+                        liveProcessedImg.style.display = 'block';
+                        liveFrameCount++;
+                        _liveErrorCount = 0;
+                        liveStreamState.lastRenderLatencyMs = 0;
+                        if (liveIndicator.textContent !== '● LIVE') {
+                            liveIndicator.textContent = '● LIVE';
+                            liveIndicator.style.background = 'rgba(255,40,40,0.85)';
+                        }
+                        // Update FPS from server
+                        if (msg.fps) {
+                            liveFpsBadge.textContent = `${msg.fps} FPS`;
+                        }
+                        // Face detection indicator
+                        if (msg.face_detected === false) {
+                            liveFpsBadge.textContent += ' | No Face';
+                        }
+                    }
+                } catch (e) { console.debug('[Live] WS parse error:', e); }
+            };
+
+            _liveWs.onerror = (err) => {
+                console.error('[Live] WebSocket error:', err);
+                _wsReady = false;
+            };
+
+            _liveWs.onclose = () => {
+                console.log('[Live] WebSocket closed');
+                _wsReady = false;
+                _liveWs = null;
+            };
 
             // True end-to-end FPS counter (counts only rendered frames)
             if (liveFpsTimer) clearInterval(liveFpsTimer);
             liveFpsTimer = setInterval(() => {
                 const latency = Math.round(liveStreamState.lastRenderLatencyMs || 0);
-                liveFpsBadge.textContent = `${liveFrameCount} FPS | ${latency}ms`;
+                liveFpsBadge.textContent = `${liveFrameCount} FPS`;
                 liveFrameCount = 0;
             }, 1000);
 
             // Start with requestAnimationFrame
             liveRafLoop(performance.now());
-            console.log('[Live] Started');
+            console.log('[Live] Started (WebSocket mode)');
+        }
+
+        // Helper: map sidebar preset names to backend filter names
+        function _mapPresetToFilter(preset) {
+            if (!preset) return 'none';
+            const map = {
+                // Geometric warps
+                'smile': 'smile', 'eyebrow': 'eyebrow_raise', 'lip': 'lip_widen',
+                'slim': 'face_slim', 'eye_scale': 'eye_scaling',
+                // Emoji presets (direct names from process.py _EMOJI_PRESETS_MAP)
+                'alien': 'alien', 'robot': 'robot', 'clown': 'clown',
+                'star_eyes': 'star_eyes', 'heart_eyes': 'heart_eyes', 'crying': 'crying',
+                // Makeup
+                'makeup_lips': 'makeup_lips', 'makeup_eyeshadow': 'makeup_eyeshadow',
+                'makeup_blush': 'makeup_blush',
+                // Glasses
+                'glasses': 'glasses',
+                // Hair
+                'hair_color': 'hair_color',
+                // Aging
+                'aging': 'aging', 'deaging': 'deaging',
+                // Cartoon
+                'cartoon': 'cartoon',
+                // Beard
+                'beard': 'beard',
+            };
+            return map[preset] || preset;
+        }
+
+        // Build full config payload with all extra parameters
+        function _buildLiveConfig(preset) {
+            const filterName = _mapPresetToFilter(preset);
+            const config = {
+                type: 'config',
+                filter: filterName,
+                intensity: Number(intensitySlider?.value || 50),
+            };
+
+            // Makeup params
+            const makeupColor = document.getElementById('makeupColor');
+            const makeupOpacity = document.getElementById('makeupOpacity');
+            if (filterName.startsWith('makeup_')) {
+                // Convert hex color to OpenCV hue
+                const hex = (makeupColor?.value || '#ff0000').replace('#', '');
+                const r = parseInt(hex.substring(0, 2), 16);
+                const g = parseInt(hex.substring(2, 4), 16);
+                const b = parseInt(hex.substring(4, 6), 16);
+                // Approximate HSV hue from RGB
+                const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
+                let h = 0;
+                if (maxC !== minC) {
+                    if (maxC === r) h = 60 * (((g - b) / (maxC - minC)) % 6);
+                    else if (maxC === g) h = 60 * ((b - r) / (maxC - minC) + 2);
+                    else h = 60 * ((r - g) / (maxC - minC) + 4);
+                }
+                if (h < 0) h += 360;
+                config.makeup_hue = Math.round(h / 2); // OpenCV hue range is 0-179
+                config.makeup_opacity = Number(makeupOpacity?.value || 50) / 100.0;
+            }
+
+            // Glasses type
+            if (filterName === 'glasses') {
+                const glassesSelect = document.getElementById('glassesSelect');
+                config.glasses_type = glassesSelect?.value || 'aviator';
+            }
+
+            // Hair color
+            if (filterName === 'hair_color') {
+                const hairPicker = document.getElementById('hairColorPicker');
+                const hairOpacity = document.getElementById('hairOpacity');
+                const hex = (hairPicker?.value || '#ff0000').replace('#', '');
+                const r = parseInt(hex.substring(0, 2), 16);
+                const g = parseInt(hex.substring(2, 4), 16);
+                const b = parseInt(hex.substring(4, 6), 16);
+                config.hair_color = `${r},${g},${b}`;
+                config.hair_intensity = Number(hairOpacity?.value || 60) / 100.0;
+            }
+
+            // Beard type & darkness
+            if (filterName === 'beard') {
+                config.beard_type = document.getElementById('beardSelect')?.value || 'beard';
+                config.beard_darkness = Number(document.getElementById('beardDarknessSlider')?.value || 60);
+                config.intensity = config.beard_darkness;
+            }
+
+            // Eye scale uses raw slider value (-100 to 100)
+            if (filterName === 'eye_scaling') {
+                const eyeSlider = document.getElementById('eyeSizeSlider');
+                config.intensity = Number(eyeSlider?.value || 0);
+            }
+
+            return config;
         }
 
         function stopLiveMode() {
             isLiveMode = false;
             if (liveRafId) { cancelAnimationFrame(liveRafId); liveRafId = null; }
             if (liveFpsTimer) { clearInterval(liveFpsTimer); liveFpsTimer = null; }
-            // Do NOT hide liveProcessedImg immediately — preserve last frame
+            // Close WebSocket
+            if (_liveWs) {
+                try { _liveWs.close(); } catch (_) {}
+                _liveWs = null;
+                _wsReady = false;
+            }
+            _wsPendingFrame = false;
             liveFpsBadge.style.display = 'none';
             liveIndicator.style.display = 'none';
             liveFpsBadge.textContent = '0 FPS';
-            // Revoke blob URL
             if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
             console.log('[Live] Stopped');
         }
@@ -2135,115 +2291,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
         async function processLiveFrame() {
             if (!cameraStream || !isLiveMode) return;
+            if (!_wsReady || !_liveWs) return;
+            if (_wsPendingFrame) return; // throttle: wait for server to respond
 
             const preset = getCurrentLivePreset();
-            if (!preset) {
+            const liveConfig = _buildLiveConfig(preset);
+
+            // Send config update
+            _liveWs.send(JSON.stringify(liveConfig));
+
+            if (!liveConfig.filter || liveConfig.filter === 'none') {
                 liveProcessedImg.style.display = 'none';
                 liveFrameCount++;
                 return;
             }
 
-            const t0 = performance.now();
-
             try {
-                // ── Stage 1: Capture frame to canvas ────────────────────
+                // Stage 1: Capture frame to canvas
                 const ctx = cameraCanvas.getContext('2d');
                 const vw = cameraVideo.videoWidth;
                 const vh = cameraVideo.videoHeight;
-                if (!vw || !vh) return; // video not ready
+                if (!vw || !vh) return;
 
                 cameraCanvas.width = vw;
                 cameraCanvas.height = vh;
                 ctx.drawImage(cameraVideo, 0, 0);
-                _profileLog('canvas draw', t0);
 
-                // ── Stage 2: Canvas → base64 (direct, skip blob step) ───
-                const t1 = performance.now();
+                // Stage 2: Encode to base64
                 const b64 = await encodeFrameOffThread();
-                _profileLog('toDataURL', t1);
+                if (!isLiveMode || !_wsReady) return;
 
-                if (!isLiveMode) return;
+                // Stage 3: Send via WebSocket
+                _wsPendingFrame = true;
+                _liveWs.send(JSON.stringify({
+                    type: 'frame',
+                    data: b64,
+                }));
 
-                // ── Stage 3: Send to unified /process/apply with skip_spectra ─
-                const t2 = performance.now();
-                let resp = null;
-                let attempts = 0;
-                const captureTs = t0 / 1000.0;
-                while (attempts < 3) {
-                    attempts += 1;
-                    try {
-                        const isMakeupLive = String(preset).startsWith('makeup_');
-                        const payload = {
-                            image_b64: b64,
-                            filter_name: preset,
-                            intensity: Number(intensitySlider?.value || 50),
-                            smoothing: Number(smoothingSlider?.value || 30),
-                            skip_spectra: true,
-                            client_capture_ts: captureTs,
-                            client_send_ts: Date.now() / 1000.0,
-                        };
-                        if (isMakeupLive) {
-                            payload.makeup_hue = hexToOpenCVHue(makeupColor?.value || '#ff0000');
-                            payload.makeup_opacity = Number(makeupOpacity?.value || 50) / 100.0;
-                        }
-                        resp = await fetch(`${API_BASE}/process/apply`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        });
-                        if (resp.ok) break;
-                    } catch (_) {}
-                    await new Promise(resolve => setTimeout(resolve, 60 * attempts));
-                }
-                _profileLog('fetch round-trip', t2);
-
-                if (!resp.ok || !isLiveMode) {
-                    _liveErrorCount++;
-                    if (_liveErrorCount >= _MAX_LIVE_ERRORS) {
-                        console.warn('[Live] Too many errors, pausing live mode');
-                        liveIndicator.textContent = '● ERROR';
-                        liveIndicator.style.background = 'rgba(255,165,0,0.85)';
-                    }
-                    return;
-                }
-
-                // ── Stage 4: Parse response and render ──────────────────
-                const t3 = performance.now();
-                const data = await resp.json();
-                _profileLog('json parse', t3);
-
-                // FIX: use correct response keys (image_b64 or processed_image)
-                const imgSrc = data.image_b64 || data.processed_image;
-                if (imgSrc && isLiveMode) {
-                    // Memory management: revoke previous blob URL if we used one
-                    if (_lastBlobUrl) {
-                        URL.revokeObjectURL(_lastBlobUrl);
-                        _lastBlobUrl = null;
-                    }
-
-                    liveProcessedImg.src = imgSrc;
-                    liveProcessedImg.style.display = 'block';
-                    liveFrameCount++;
-                    liveStreamState.lastProfile = data.profile || null;
-                    liveStreamState.lastRenderLatencyMs = Number(data?.profile?.total_ms || (performance.now() - t0));
-                    _liveErrorCount = 0; // reset error counter on success
-
-                    // Reset error indicator if it was showing
-                    if (liveIndicator.textContent !== '● LIVE') {
-                        liveIndicator.textContent = '● LIVE';
-                        liveIndicator.style.background = 'rgba(255,40,40,0.85)';
-                    }
-                }
-
-                const totalMs = performance.now() - t0;
-                const p = data.profile || {};
-                analysisSummary.innerHTML = `<strong>Live Profile:</strong> capture ${Math.round(p.capture_ms || 0)}ms | transport ${Math.round(p.transport_ms || 0)}ms | infer ${Math.round(p.infer_ms || 0)}ms | render ${Math.round(p.render_ms || 0)}ms | total ${Math.round(p.total_ms || liveStreamState.lastRenderLatencyMs)}ms`;
-                if (totalMs > 200) {
-                    console.debug(`[Live] Total frame: ${totalMs.toFixed(0)}ms`);
-                }
-
+                _liveErrorCount = 0;
             } catch (err) {
                 _liveErrorCount++;
+                _wsPendingFrame = false;
                 if (_liveErrorCount <= 3) {
                     console.warn('[Live] Frame error:', err.message);
                 }
@@ -2256,13 +2344,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // ── Determine which preset the sidebar has selected ─────────────
         function getCurrentLivePreset() {
+            // Check emoji buttons first
             const activeEmoji = document.querySelector('.emoji-btn.emoji-active');
             if (activeEmoji) return activeEmoji.dataset.preset;
+
+            // Check if a sidebar operation is selected
             if (selectedOperation) {
                 const allowedLiveOps = new Set([
                     'smile', 'eyebrow', 'lip', 'slim',
                     'aging', 'deaging', 'fft', 'cartoon',
-                    'eye_scale', 'makeup_lips', 'makeup_eyeshadow', 'makeup_blush'
+                    'eye_scale', 'beard',
+                    'makeup_lips', 'makeup_eyeshadow', 'makeup_blush',
+                    'glasses', 'hair_color',
                 ]);
                 if (allowedLiveOps.has(selectedOperation)) return selectedOperation;
             }
@@ -2289,6 +2382,46 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             });
         });
+
+        // ── Wire sidebar ACTION buttons to live mode ────────────────────
+        // When live is active, clicking Apply buttons on sidebar panels
+        // switches the live filter instead of running a one-shot API call.
+
+        const livePanelButtons = {
+            'applyMakeupBtn': () => {
+                const region = document.getElementById('makeupRegion')?.value || 'lips';
+                selectedOperation = `makeup_${region}`;
+            },
+            'applyGlassesBtn': () => { selectedOperation = 'glasses'; },
+            'applyHairColorBtn': () => { selectedOperation = 'hair_color'; },
+            'cartoonBtn': () => { selectedOperation = 'cartoon'; },
+            'beardBtn': () => { selectedOperation = 'beard'; },
+            'eyeSizeBtn': () => { selectedOperation = 'eye_scale'; },
+        };
+
+        Object.entries(livePanelButtons).forEach(([btnId, setOp]) => {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            // Add a capture-phase listener that fires BEFORE the normal handler
+            btn.addEventListener('click', () => {
+                if (isLiveMode) {
+                    setOp();
+                    console.log('[Live] Sidebar switched to:', selectedOperation);
+                }
+            }, true); // capture phase
+        });
+
+        // Also wire makeup region dropdown to update immediately in live mode
+        const makeupRegionSelect = document.getElementById('makeupRegion');
+        if (makeupRegionSelect) {
+            makeupRegionSelect.addEventListener('change', () => {
+                if (isLiveMode && selectedOperation?.startsWith('makeup_')) {
+                    const region = makeupRegionSelect.value || 'lips';
+                    selectedOperation = `makeup_${region}`;
+                    console.log('[Live] Makeup region changed to:', selectedOperation);
+                }
+            });
+        }
 
         window.addEventListener('beforeunload', () => {
             stopLiveMode();

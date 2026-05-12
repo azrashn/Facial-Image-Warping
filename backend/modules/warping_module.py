@@ -130,24 +130,68 @@ def _get_tasks_face_landmarker():
 
 class PersistentFaceMesh:
     """
-    Single MediaPipe FaceMesh instance for video streaming.
+    Single persistent MediaPipe face landmark detector for video streaming.
 
-    Do **not** create a new ``FaceMesh`` per frame — that destroys temporal
-    tracking and tanks FPS. Use ``static_image_mode=False`` for real-time use.
+    Supports two backends:
+      1. **Tasks API** (mediapipe ≥0.10.x) — ``FaceLandmarker`` in ``VIDEO`` mode.
+         This is the primary path for modern mediapipe where ``mp.solutions``
+         has been removed.
+      2. **Solutions API** (legacy mediapipe <0.10) — ``FaceMesh`` with
+         ``static_image_mode=False``.
+
+    Do **not** create a new detector per frame — that destroys temporal
+    tracking and tanks FPS.
     """
 
     def __init__(self) -> None:
-        if not (hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh")):
-            raise RuntimeError(
-                "MediaPipe solutions FaceMesh is not available. "
-                "Install mediapipe with face_mesh support for realtime mode."
+        self._backend: str = "none"
+        self._mesh = None           # Legacy solutions FaceMesh
+        self._landmarker = None     # Tasks API FaceLandmarker
+        self._frame_ts_ms: int = 0  # Monotonic timestamp for VIDEO mode
+
+        # ── Try Tasks API first (mediapipe >=0.10.x) ──
+        try:
+            from mediapipe.tasks.python.vision import (
+                FaceLandmarker,
+                FaceLandmarkerOptions,
             )
-        self._mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+            from mediapipe.tasks.python.core.base_options import BaseOptions
+            from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
+                VisionTaskRunningMode,
+            )
+
+            model_path = _face_landmarker_model_path()
+            options = FaceLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=model_path),
+                running_mode=VisionTaskRunningMode.VIDEO,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._landmarker = FaceLandmarker.create_from_options(options)
+            self._backend = "tasks_video"
+            logger.info("PersistentFaceMesh: using Tasks API (VIDEO mode)")
+            return
+        except Exception as exc:
+            logger.debug("Tasks API VIDEO init failed: %s — trying solutions", exc)
+
+        # ── Fallback: legacy solutions API ──
+        if hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh"):
+            self._mesh = mp.solutions.face_mesh.FaceMesh(
+                static_image_mode=False,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._backend = "solutions"
+            logger.info("PersistentFaceMesh: using legacy solutions FaceMesh")
+            return
+
+        raise RuntimeError(
+            "No MediaPipe face landmark backend available. "
+            "Install mediapipe >= 0.10.0 (Tasks API) or a legacy version with solutions."
         )
 
     def detect(self, image_bgr: np.ndarray) -> Optional[np.ndarray]:
@@ -155,6 +199,38 @@ class PersistentFaceMesh:
         if image_bgr is None or image_bgr.size == 0:
             return None
         h, w = image_bgr.shape[:2]
+
+        if self._backend == "tasks_video":
+            return self._detect_tasks(image_bgr, h, w)
+        elif self._backend == "solutions":
+            return self._detect_solutions(image_bgr, h, w)
+        return None
+
+    def _detect_tasks(self, image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
+        """Detect using Tasks API FaceLandmarker in VIDEO mode."""
+        from mediapipe.tasks.python.vision.core import image as mp_image_module
+
+        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        mp_image = mp_image_module.Image(mp_image_module.ImageFormat.SRGB, rgb)
+
+        # VIDEO mode requires monotonically increasing timestamps
+        self._frame_ts_ms += 33  # ~30 FPS cadence
+        try:
+            result = self._landmarker.detect_for_video(mp_image, self._frame_ts_ms)
+        except Exception as exc:
+            logger.debug("Tasks detect_for_video failed: %s", exc)
+            return None
+
+        if not result.face_landmarks:
+            return None
+        lm_list = result.face_landmarks[0]
+        pts = np.array([[p.x * w, p.y * h] for p in lm_list], dtype=np.float32)
+        if pts.shape[0] > 468:
+            pts = pts[:468].copy()
+        return pts
+
+    def _detect_solutions(self, image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
+        """Detect using legacy solutions FaceMesh."""
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         res = self._mesh.process(rgb)
         if not res.multi_face_landmarks:
@@ -163,7 +239,14 @@ class PersistentFaceMesh:
         return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
 
     def close(self) -> None:
-        self._mesh.close()
+        """Release underlying detector resources."""
+        try:
+            if self._mesh is not None:
+                self._mesh.close()
+            if self._landmarker is not None:
+                self._landmarker.close()
+        except Exception:
+            pass
 
 
 def detect_face_landmarks_live(mesh: PersistentFaceMesh, image_bgr: np.ndarray) -> Optional[np.ndarray]:
