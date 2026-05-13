@@ -557,8 +557,7 @@ def _draw_futuristic(image, landmarks, w, h):
     overlay = np.zeros_like(image)
     mask = np.zeros((h, w), dtype=np.uint8)
     frame_t = max(7, int(ed * 0.072))
-    frame_dark = (6, 8, 14)
-    accent_neon = (255, 228, 60)
+    frame_color = (0, 0, 0)
 
     lhw, lhh = int(g["l_eye_w"] * 0.93), int(g["l_eye_w"] * 0.93 * 0.51)
     rhw, rhh = int(g["r_eye_w"] * 0.93), int(g["r_eye_w"] * 0.93 * 0.51)
@@ -566,23 +565,19 @@ def _draw_futuristic(image, landmarks, w, h):
     rc = _rot_pts(_futuristic_shield_lens(g["rc"][0], g["rc"][1], rhw, rhh), g["rc"], ang)
 
     _composite_frame_and_lens(
-        overlay, mask, lc, g["lc"], frame_dark, frame_t,
-        (12, 35, 70), 80, inner_factor=0.86,
+        overlay, mask, lc, g["lc"], frame_color, frame_t,
+        (5, 5, 5), 90, inner_factor=0.86,
     )
     _composite_frame_and_lens(
-        overlay, mask, rc, g["rc"], frame_dark, frame_t,
-        (12, 35, 70), 80, inner_factor=0.86,
+        overlay, mask, rc, g["rc"], frame_color, frame_t,
+        (5, 5, 5), 90, inner_factor=0.86,
     )
 
     li, ri = g["li"].copy(), g["ri"].copy()
-    top_l = _rot(li + np.array([-ed * 0.035, -ed * 0.095]), mid_ip, ang)
-    top_r = _rot(ri + np.array([ed * 0.035, -ed * 0.095]), mid_ip, ang)
-    ridge_mid = _rot(mid_ip + np.array([0, -ed * 0.12]), mid_ip, ang)
-    _draw_curve(overlay, mask, _bezier_quad(top_l, ridge_mid + np.array([0, -ed * 0.02]), top_r, 48), accent_neon, max(4, frame_t // 5), alpha=238)
-    _draw_arc_bridge(overlay, mask, li, ri, ed * 0.018, frame_dark, max(6, frame_t - 4))
+    _draw_arc_bridge(overlay, mask, li, ri, ed * 0.018, frame_color, max(6, frame_t - 4))
 
     arm_t = max(4, int(ed * 0.026))
-    _draw_temples(overlay, mask, g, landmarks, w, h, frame_dark, arm_t, (10, 14, 20))
+    _draw_temples(overlay, mask, g, landmarks, w, h, frame_color, arm_t)
     return image, overlay, mask
 
 
@@ -633,8 +628,7 @@ def _sprite_retro(im, lm, w, h):
     return _draw_from_sprite(im, lm, w, h, "retro", _draw_retro)
 
 
-def _sprite_cat_eye(im, lm, w, h):
-    return _draw_from_sprite(im, lm, w, h, "cat_eye", _draw_cat_eye)
+
 
 
 def _sprite_sport(im, lm, w, h):
@@ -687,7 +681,6 @@ MODEL_ALIASES = {
     "kemik": "wayfarer",
     "sunglasses": "wayfarer",
     "reading": "round",
-    "cateye": "cat_eye",
 }
 
 
@@ -697,7 +690,6 @@ MODEL_DISPATCH = {
     "round": _sprite_round,
     "square": _sprite_square,
     "retro": _sprite_retro,
-    "cat_eye": _sprite_cat_eye,
     "sport": _sprite_sport,
     "futuristic": _sprite_futuristic,
 }

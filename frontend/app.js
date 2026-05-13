@@ -95,8 +95,10 @@ document.addEventListener('DOMContentLoaded', () => {
             metalAviator: "Klasik Damla (Aviator)",
             acetateWayfarer: "Kemik Çerçeve (Modern)",
             minimalistRound: "İnce Yuvarlak (Retro)",
-            catEyeStyle: "Kedi Gözü (Cat-Eye)",
             futuristicStyle: "Fütüristik (Kalkan)",
+            squareStyle: "Kare Çerçeve",
+            retroStyle: "Retro Browline",
+            sportStyle: "Spor (Sarmal)",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -197,8 +199,10 @@ document.addEventListener('DOMContentLoaded', () => {
             metalAviator: "Classic Teardrop (Aviator)",
             acetateWayfarer: "Thick Frame (Modern)",
             minimalistRound: "Thin Round (Retro)",
-            catEyeStyle: "Cat-Eye",
             futuristicStyle: "Futuristic (Shield)",
+            squareStyle: "Square Frame",
+            retroStyle: "Retro Browline",
+            sportStyle: "Sport Wraparound",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -1465,8 +1469,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     aviator: i18n[currentLang]?.metalAviator || 'Classic Teardrop (Aviator)',
                     wayfarer: i18n[currentLang]?.acetateWayfarer || 'Thick Frame (Modern)',
                     round: i18n[currentLang]?.minimalistRound || 'Thin Round (Retro)',
-                    cat_eye: i18n[currentLang]?.catEyeStyle || 'Cat-Eye',
                     futuristic: i18n[currentLang]?.futuristicStyle || 'Futuristic (Shield)',
+                    square: i18n[currentLang]?.squareStyle || 'Square Frame',
+                    retro: i18n[currentLang]?.retroStyle || 'Retro Browline',
+                    sport: i18n[currentLang]?.sportStyle || 'Sport Wraparound',
                 };
                 const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);
@@ -2419,6 +2425,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     const region = makeupRegionSelect.value || 'lips';
                     selectedOperation = `makeup_${region}`;
                     console.log('[Live] Makeup region changed to:', selectedOperation);
+                }
+            });
+        }
+
+        // Wire glasses dropdown to push config immediately in live mode
+        const liveGlassesSelect = document.getElementById('glassesSelect');
+        if (liveGlassesSelect) {
+            liveGlassesSelect.addEventListener('change', () => {
+                if (isLiveMode) {
+                    selectedOperation = 'glasses';
+                    console.log('[Live] Glasses type changed to:', liveGlassesSelect.value);
                 }
             });
         }

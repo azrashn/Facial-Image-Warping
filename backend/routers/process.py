@@ -921,8 +921,9 @@ async def process_glasses(
     Parameters
     ----------
     glasses_type : str
-        Model ID: ``"aviator"``, ``"wayfarer"``, ``"round"``
-        (legacy ``"sunglasses"`` / ``"reading"`` still accepted).
+        Model ID: ``"aviator"``, ``"wayfarer"``, ``"round"``, ``"square"``,
+        ``"retro"``, ``"cat_eye"``, ``"sport"``, ``"futuristic"``
+        (legacy ``"sunglasses"`` / ``"reading"`` / ``"cateye"`` still accepted).
     """
     try:
         contents = await image.read()
