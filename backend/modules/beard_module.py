@@ -1,12 +1,14 @@
 from __future__ import annotations
- 
+
 import logging
- 
+import math
+import random
+
 import cv2
 import numpy as np
- 
+
 logger = logging.getLogger("facial_pipeline.beard_module")
- 
+
 # MediaPipe landmark indeksleri
 _FULL_BEARD_POLY = [132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 378, 379, 365, 397, 288, 361, 323, 436, 426, 327, 164, 98, 206, 216]
 _LIPS_OUTER_ORDERED = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146]
@@ -29,28 +31,86 @@ def _detect_skin_tone(image_bgr: np.ndarray, landmarks: np.ndarray) -> np.ndarra
         return np.array([120, 100, 160], dtype=np.float32)
     return np.mean(colors, axis=0).astype(np.float32)
 
-def _make_beard_texture(
-    shape: tuple[int, int, int],
+def _draw_particle_hairs(
+    image_bgr: np.ndarray,
+    mask: np.ndarray,
+    landmarks: np.ndarray,
     skin_color: np.ndarray,
-    darkness: float = 0.5,
-) -> tuple[np.ndarray, np.ndarray]:
-    h, w = shape[:2]
+    darkness: float,
+    alpha: float,
+    is_mustache: bool = False
+) -> np.ndarray:
+    valid_y, valid_x = np.where(mask > 30)
+    if len(valid_y) == 0:
+        return image_bgr
+        
+    overlay = image_bgr.copy()
     
-    # "Kıl Kıl" doku sentezi
-    noise = np.zeros((h, w), dtype=np.uint8)
-    cv2.randu(noise, 0, 255)
-    noise = cv2.GaussianBlur(noise, (5, 5), 0)
-    _, binary = cv2.threshold(noise, 127, 255, cv2.THRESH_BINARY)
-    edges = cv2.Canny(binary, 100, 200)
+    face_width = np.linalg.norm(landmarks[234] - landmarks[454]) if len(landmarks) > 454 else 150.0
+    scale = max(0.5, face_width / 150.0)
+
+    # Sakal ve bıyık için kavisli ve uzun kıllar (Nokta nokta görünümünü kırmak için uzun çizgiler)
+    if is_mustache:
+        length_min = 8 * scale
+        length_max = 16 * scale
+        target_count = int(10000 * alpha)
+    else:
+        length_min = 12 * scale
+        length_max = 28 * scale
+        target_count = int(22000 * alpha)
+        
+    base_color = skin_color * (1.0 - darkness)
+    base_color = np.clip(base_color, 10, 100)
     
-    # Kenarları yumuşatarak float maskeye çevir
-    edge_mask = cv2.GaussianBlur(edges, (3, 3), 0).astype(np.float32) / 255.0
-    
-    beard_color = skin_color * (1.0 - darkness * 0.8)
-    beard_color = np.clip(beard_color, 10, 200)
-    texture = np.full((h, w, 3), beard_color, dtype=np.float32)
-    
-    return texture, edge_mask
+    center_x = landmarks[164][0] if 164 < len(landmarks) else image_bgr.shape[1] / 2.0
+
+    for _ in range(target_count):
+        idx = random.randint(0, len(valid_y) - 1)
+        x, y = valid_x[idx], valid_y[idx]
+        
+        # Yönelme (Directional Flow)
+        if is_mustache:
+            if x < center_x:
+                base_angle = math.pi * 0.65 # Sola aşağı
+            else:
+                base_angle = math.pi * 0.35 # Sağa aşağı
+            angle = base_angle + random.uniform(-0.25, 0.25)
+        else:
+            dx = center_x - x
+            angle_bias = (dx / (face_width * 0.5)) * 0.25
+            angle = math.pi / 2 + angle_bias + random.uniform(-0.3, 0.3)
+            
+        length = random.uniform(length_min, length_max)
+        
+        # Kavisli kıl için iki parçalı çizim
+        curve_angle = angle + random.uniform(-0.4, 0.4)
+        
+        mid_x = int(x + math.cos(angle) * (length * 0.4))
+        mid_y = int(y + math.sin(angle) * (length * 0.4))
+        
+        end_x = int(mid_x + math.cos(curve_angle) * (length * 0.6))
+        end_y = int(mid_y + math.sin(curve_angle) * (length * 0.6))
+        
+        # Renk Derinliği
+        noise_b = random.randint(-15, 20)
+        noise_g = random.randint(-15, 20)
+        noise_r = random.randint(-15, 20)
+        
+        c_b = int(np.clip(base_color[0] + noise_b, 0, 255))
+        c_g = int(np.clip(base_color[1] + noise_g, 0, 255))
+        c_r = int(np.clip(base_color[2] + noise_r, 0, 255))
+        
+        # Kök daha koyu
+        color_root = (c_b, c_g, c_r)
+        # Uçlar daha açık ve şeffaf etkisi vermek için ince
+        color_tip = (min(255, c_b + 40), min(255, c_g + 40), min(255, c_r + 40))
+        
+        cv2.line(overlay, (x, y), (mid_x, mid_y), color_root, 2, cv2.LINE_AA)
+        cv2.line(overlay, (mid_x, mid_y), (end_x, end_y), color_tip, 1, cv2.LINE_AA)
+
+    # Genel yoğunluğu daha gerçekçi yapmak için alpha blending
+    result = cv2.addWeighted(overlay, 0.85, image_bgr, 0.15, 0)
+    return result
 
 def apply_beard(
     image_bgr: np.ndarray,
@@ -75,15 +135,10 @@ def apply_beard(
         if len(lip_pts) >= 3:
             cv2.fillPoly(mask, [np.array(lip_pts, dtype=np.int32)], 0)
 
-        texture, edge_mask = _make_beard_texture(image_bgr.shape, skin_color, darkness)
+        # Maske kenarlarını çok hafif yumuşat ki kıllar keskin sınırda bitmesin
+        mask = cv2.GaussianBlur(mask, (15, 15), 0)
 
-        # Yumuşak bölge maskesi ile "kıl" maskesini birleştir
-        soft_mask = cv2.GaussianBlur(mask, (21, 21), 0).astype(np.float32) / 255.0
-        final_alpha = soft_mask * edge_mask * alpha
-        final_alpha_3ch = np.stack([final_alpha] * 3, axis=-1)
-
-        result = (texture * final_alpha_3ch + image_bgr.astype(np.float32) * (1.0 - final_alpha_3ch)).astype(np.uint8)
-        return result
+        return _draw_particle_hairs(image_bgr, mask, landmarks, skin_color, darkness, alpha, is_mustache=False)
     except Exception as exc:
         logger.error("apply_beard failed: %s — returning original", exc)
         return image_bgr.copy()
@@ -112,14 +167,9 @@ def apply_mustache(
             hull = cv2.convexHull(np.array(nose_pts, dtype=np.int32))
             cv2.fillPoly(mask, [hull], 0)
 
-        texture, edge_mask = _make_beard_texture(image_bgr.shape, skin_color, darkness)
+        mask = cv2.GaussianBlur(mask, (15, 15), 0)
 
-        soft_mask = cv2.GaussianBlur(mask, (15, 15), 0).astype(np.float32) / 255.0
-        final_alpha = soft_mask * edge_mask * alpha
-        final_alpha_3ch = np.stack([final_alpha] * 3, axis=-1)
-
-        result = (texture * final_alpha_3ch + image_bgr.astype(np.float32) * (1.0 - final_alpha_3ch)).astype(np.uint8)
-        return result
+        return _draw_particle_hairs(image_bgr, mask, landmarks, skin_color, darkness, alpha, is_mustache=True)
     except Exception as exc:
         logger.error("apply_mustache failed: %s — returning original", exc)
         return image_bgr.copy()

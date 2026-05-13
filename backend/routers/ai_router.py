@@ -116,24 +116,26 @@ async def estimate_age_single(
 
 @router.post("/process/hair-color")
 async def process_hair_color(
-    image:        UploadFile = File(...),
-    target_color: str        = Form("255,0,0"),
-    intensity:    float      = Form(0.6),
+    image:          UploadFile = File(...),
+    target_color:   str        = Form("blonde"),
+    blend_strength: float      = Form(0.6),
 ):
     """
     Saç rengini değiştir.
-
+ 
+    Güncelleme Planı v2 — Rol 4: HSV renk kanalı + MediaPipe segmentasyon.
+ 
     Parameters
     ----------
-    target_color : "R,G,B" formatında string (örn: "255,165,0")
-    intensity    : 0.0-1.0 karışım gücü
+    target_color   : "blonde" | "red" | "black" | "blue" | "brown"
+    blend_strength : 0.0-1.0 arası karışım gücü
     """
-    logger.info("process_hair_color.received: color=%s intensity=%.2f", target_color, intensity)
+    logger.info("process_hair_color.received: color=%s blend=%.2f", target_color, blend_strength)
     try:
         contents = await image.read()
         original = _decode_upload(contents)
  
-        processed = apply_hair_color(original, target_color, intensity)
+        processed = apply_hair_color(original, target_color, blend_strength)
  
         metrics = _metrics(original, processed)
  
