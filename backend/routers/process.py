@@ -1581,24 +1581,23 @@ def _draw_heart(image: np.ndarray, cx: int, cy: int, size: int, color=(0,0,255))
     r = size // 2
     # Heart = two circles on top + triangle on bottom
     overlay = image.copy()
-    cv2.circle(overlay, (cx - r//2, cy - r//3), r//2, color, -1)
-    cv2.circle(overlay, (cx + r//2, cy - r//3), r//2, color, -1)
+    cv2.circle(overlay, (cx - r//2, cy - r//3), r//2, color, -1, cv2.LINE_AA)
+    cv2.circle(overlay, (cx + r//2, cy - r//3), r//2, color, -1, cv2.LINE_AA)
     tri = np.array([
         [cx - r, cy - r//4],
         [cx + r, cy - r//4],
         [cx, cy + r],
     ], dtype=np.int32)
-    cv2.fillConvexPoly(overlay, tri, color)
+    cv2.fillConvexPoly(overlay, tri, color, cv2.LINE_AA)
     return overlay
 
 
 def _place_heart_masks(image: np.ndarray, landmarks) -> np.ndarray:
-    """Place red heart shapes over both eyes."""
+    """Place large neon red heart shapes over both eyes."""
     if landmarks is None:
         return image
     h, w = image.shape[:2]
-    out = image.copy()
-
+    
     left_eye = [33, 133, 160, 158, 153, 144, 159, 145]
     right_eye = [362, 263, 387, 385, 380, 373, 386, 374]
 
@@ -1613,15 +1612,49 @@ def _place_heart_masks(image: np.ndarray, landmarks) -> np.ndarray:
         return image
 
     eye_dist = abs(cr[0] - cl[0])
-    heart_size = max(12, int(eye_dist * 0.45))
+    
+    # Göz bebeğini merkeze alan ve kaşları tamamen serbest bırakan boyut (Hafif büyütüldü)
+    heart_size = max(17, int(eye_dist * 0.55))
+
+    glow_canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    solid_overlay = np.zeros((h, w, 4), dtype=np.uint8)
+    
+    neon_color = (40, 40, 255)  # Parlak Kırmızı/Neon glow rengi (BGR)
+    solid_color = (20, 20, 235) # Opak Kırmızı
 
     for (cx, cy) in [cl, cr]:
-        out = _draw_heart(out, cx, cy, heart_size, (0, 0, 255))
-    return out
+        # Kalbi göz merkezinde tut
+        cy_adj = cy
+        
+        # 1. Glow Layer (daha büyük çizilip bulanıklaştırılacak)
+        glow_canvas = _draw_heart(glow_canvas, cx, cy_adj, int(heart_size * 1.3), neon_color)
+        
+        # 2. Solid Heart Layer
+        solid_temp = np.zeros((h, w, 3), dtype=np.uint8)
+        solid_temp = _draw_heart(solid_temp, cx, cy_adj, heart_size, solid_color)
+        mask = np.any(solid_temp > 0, axis=-1)
+        solid_overlay[mask] = [solid_color[0], solid_color[1], solid_color[2], 255]
+
+    # Neon parlama efekti (cv2.GaussianBlur)
+    k_size = int(heart_size * 0.7)
+    if k_size % 2 == 0: k_size += 1
+    glow_blur = cv2.GaussianBlur(glow_canvas, (k_size, k_size), 0)
+    
+    result = image.astype(np.float32)
+    
+    # Glow ekle (Additive Blending)
+    result += glow_blur.astype(np.float32) * 1.2
+    result = np.clip(result, 0, 255).astype(np.uint8)
+    
+    # Opak Kalpleri bindir (Alpha Blending)
+    alpha = solid_overlay[..., 3:] / 255.0
+    result = (result.astype(np.float32) * (1.0 - alpha) + solid_overlay[..., :3].astype(np.float32) * alpha).astype(np.uint8)
+    
+    return result
 
 
 def _apply_heart_eyes(image: np.ndarray) -> np.ndarray:
-    """😍 Heart-Eyes: brow raise + lip widen + red lips + heart overlays."""
+    """😍 Heart-Eyes: brow raise/widen + blush effect + red lips + neon heart overlays."""
     out = image.copy()
     h, w = out.shape[:2]
     lm = detect_face_landmarks(out)
@@ -1630,32 +1663,106 @@ def _apply_heart_eyes(image: np.ndarray) -> np.ndarray:
     face_sz = _face_scale(lm)
     deltas = np.zeros_like(lm)
 
-    # Raise brows
-    brow_all = [70,63,105,66,107,46,53,52,65,55,300,293,334,296,336,276,283,282,295,285]
-    for idx in brow_all: deltas[idx,1] -= face_sz * 0.04
-    # Widen lips
-    deltas[61,0] -= face_sz * 0.03
-    deltas[291,0] += face_sz * 0.03
+    # Ekstrem Kaş Warping - "Masum" Aşık Emoji (😍) kaşı: 
+    # İçler çok yukarı, kavis aşağı bastırılmış (düzleşmiş), dışlar aşağı
+    left_brow_zones = [
+        ([107, 55], -0.18, 0.02), # En iç: çok yukarı, hafif içe
+        ([66, 65], -0.10, 0.01),  # Orta-iç: yukarı
+        ([105, 52], 0.02, 0.0),   # Tepe kavis (Arch): hafif aşağı bastırarak kavisi kır
+        ([63, 53], 0.08, -0.01),  # Orta-dış: aşağı
+        ([70, 46], 0.12, -0.02),  # En dış uç: çok aşağı, hafif dışa
+    ]
+    
+    right_brow_zones = [
+        ([336, 285], -0.18, -0.02), # En iç
+        ([296, 295], -0.10, -0.01), # Orta-iç
+        ([334, 282], 0.02, 0.0),    # Tepe kavis
+        ([293, 283], 0.08, 0.01),   # Orta-dış
+        ([300, 276], 0.12, 0.02),   # En dış uç
+    ]
+    
+    for zone in left_brow_zones:
+        for idx in zone[0]:
+            deltas[idx, 1] += face_sz * zone[1] # y ekseni (eksi=yukarı, artı=aşağı)
+            deltas[idx, 0] += face_sz * zone[2] # x ekseni
+            
+    for zone in right_brow_zones:
+        for idx in zone[0]:
+            deltas[idx, 1] += face_sz * zone[1]
+            deltas[idx, 0] += face_sz * zone[2]
 
-    anchors_zero = [10,338,297,332,284,251,168,6,197,195,5,4,152]
+    # Kapalı Gülümseme (Mouth Warping)
+    # Dudak köşelerini ve hem üst hem alt dudak hattını *beraber* bükerek ağzı kapalı tut ve güçlü bir gülümseme oluştur
+    smile_left = [
+        ([61], -0.10, -0.06),             # En sol köşe: Çok güçlü yukarı ve dışa
+        ([40, 146], -0.06, -0.03),        # Köşenin yanı (Üst ve Alt dudak beraber): Yukarı ve dışa
+        ([39, 91], -0.03, -0.01),         # İçeri doğru
+        ([37, 181], -0.01, 0.0)           # Merkeze yaklaşırken etki azalır
+    ]
+    for pts, y_force, x_force in smile_left:
+        for idx in pts:
+            deltas[idx, 1] += face_sz * y_force  # y ekseni (eksi=yukarı)
+            deltas[idx, 0] += face_sz * x_force  # x ekseni (eksi=sola)
+            
+    smile_right = [
+        ([291], -0.10, 0.06),             # En sağ köşe: Çok güçlü yukarı ve dışa
+        ([270, 375], -0.06, 0.03),        # Köşenin yanı (Üst ve Alt dudak beraber)
+        ([269, 321], -0.03, 0.01),        # İçeri doğru
+        ([267, 405], -0.01, 0.0)          # Merkeze yaklaşırken
+    ]
+    for pts, y_force, x_force in smile_right:
+        for idx in pts:
+            deltas[idx, 1] += face_sz * y_force  # y ekseni (eksi=yukarı)
+            deltas[idx, 0] += face_sz * x_force  # x ekseni (artı=sağa)
+
+    anchors_zero = [10, 338, 297, 332, 284, 251, 168, 6, 197, 195, 5, 4, 152]
     for idx in anchors_zero: deltas[idx] = 0.0
     deltas[np.abs(deltas) < 0.05] = 0.0
 
     dst = lm + deltas
     boundary = _generate_warp_anchors(w, h, lm)
-    warped = geometric_warp(out, np.vstack([lm,boundary]), np.vstack([dst,boundary]))
+    warped = geometric_warp(out, np.vstack([lm, boundary]), np.vstack([dst, boundary]))
 
     try:
         prep = preprocess_image(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
         wlms = get_landmarks(prep)
         mask = _create_extended_face_mask(warped, wlms, 0.35)
     except Exception:
-        mask = np.ones((h,w), np.float32)*0.4
+        mask = np.ones((h, w), np.float32) * 0.4
         wlms = None
 
-    # Red lip color + hearts
     if wlms:
-        warped = _apply_lip_color(warped, wlms, (0,0,255), 0.45)
+        # 1. Yanak Işık Yansıması (Blush Effect)
+        left_cheek_idx = 205
+        right_cheek_idx = 425
+        
+        def _get_wlm_pt(idx):
+            if idx < len(wlms):
+                return int(wlms[idx]["x"]*w), int(wlms[idx]["y"]*h)
+            return None
+            
+        lc = _get_wlm_pt(left_cheek_idx)
+        rc = _get_wlm_pt(right_cheek_idx)
+        
+        blush_radius = int(face_sz * 0.20)
+        blush_mask = np.zeros((h, w), dtype=np.float32)
+        
+        if lc: cv2.circle(blush_mask, lc, blush_radius, 1.0, -1)
+        if rc: cv2.circle(blush_mask, rc, blush_radius, 1.0, -1)
+        
+        k_size = int(blush_radius * 1.5)
+        if k_size % 2 == 0: k_size += 1
+        blush_mask = cv2.GaussianBlur(blush_mask, (k_size, k_size), 0)
+        
+        blush_color = np.full_like(warped, (40, 40, 255), dtype=np.uint8) # Yanaklar için neon kırmızı yansıma
+        blush_alpha = blush_mask[..., np.newaxis] * 0.45 # Yarı saydam harmanlama
+        
+        warped = (warped.astype(np.float32) * (1.0 - blush_alpha) + blush_color.astype(np.float32) * blush_alpha).astype(np.uint8)
+
+        # 2. Kırmızı Dudaklar
+        warped = _apply_lip_color(warped, wlms, (10, 10, 240), 0.50)
+        
+        # 3. Büyük Neon Kalpler
         warped = _place_heart_masks(warped, wlms)
 
     return warped
