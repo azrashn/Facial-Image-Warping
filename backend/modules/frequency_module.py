@@ -211,12 +211,23 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     intensity = float(np.clip(intensity, 0.0, 1.0))
     h, w = image.shape[:2]
 
+    # Performance branch: run heavy frequency/texture analysis at low-res.
+    # Blend/composite still returns hi-res output.
+    ds_factor = 1.0
+    lo_image = image
+    if w * h > 640 * 480:
+        ds_factor = min(w / 480.0, h / 360.0)
+        lo_w = max(320, int(round(w / ds_factor)))
+        lo_h = max(240, int(round(h / ds_factor)))
+        lo_image = cv2.resize(image, (lo_w, lo_h), interpolation=cv2.INTER_AREA)
+    lh, lw = lo_image.shape[:2]
+
     # ── Build face + hair mask ────────────────────────────────────────
-    face_mask = _build_face_hair_mask(image)          # float32 [0..1]
+    face_mask = _build_face_hair_mask(lo_image)          # float32 [0..1]
     face_mask_3 = face_mask[..., np.newaxis]           # (H,W,1) for BGR ops
 
     # ── 1. WRINKLE & TEXTURE ENHANCEMENT ──────────────────────────────
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    lab = cv2.cvtColor(lo_image, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
 
     # High-pass frequency filter → fine skin detail
@@ -267,13 +278,13 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
 
     # ★ Composite wrinkle effect onto original using face mask
     result = (
-        image.astype(np.float32) * (1.0 - face_mask_3)
+        lo_image.astype(np.float32) * (1.0 - face_mask_3)
         + wrinkled.astype(np.float32) * face_mask_3
     )
     result = np.clip(result, 0, 255).astype(np.uint8)
 
     # ── 2. HAIR WHITENING / GRAYING ───────────────────────────────────
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(lo_image, cv2.COLOR_BGR2HSV)
     v_ch_hsv = hsv[:, :, 2].astype(np.float32)
     s_ch_hsv = hsv[:, :, 1].astype(np.float32)
     h_ch_hsv = hsv[:, :, 0].astype(np.float32)
@@ -335,6 +346,13 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     )
     result = np.clip(result, 0, 255).astype(np.uint8)
 
+    if ds_factor > 1.0:
+        # Upscale aged branch and mask, then blend back onto original hi-res.
+        up_result = cv2.resize(result, (w, h), interpolation=cv2.INTER_LINEAR)
+        up_mask = cv2.resize(face_mask, (w, h), interpolation=cv2.INTER_LINEAR)
+        up_mask = np.clip(up_mask, 0.0, 1.0)[..., None]
+        merged = image.astype(np.float32) * (1.0 - up_mask) + up_result.astype(np.float32) * up_mask
+        return np.clip(merged, 0, 255).astype(np.uint8)
     return result
 
 

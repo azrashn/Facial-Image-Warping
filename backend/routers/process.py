@@ -1,5 +1,7 @@
 import base64
 import logging
+import time
+import threading
 
 import cv2
 import numpy as np
@@ -71,9 +73,12 @@ except ModuleNotFoundError:
 
 router = APIRouter()
 logger = logging.getLogger("facial_pipeline.process")
+_LIVE_STABLE_LOCK = threading.Lock()
+_LIVE_STABLE_LANDMARKS: dict[str, np.ndarray] = {}
 
 WARP_OPS = {"smile", "eyebrow", "lip", "slim"}
 AGE_OPS = {"aging", "deaging", "age", "deage", "fft"}
+MAKEUP_OPS = {"makeup_lips", "makeup_eyeshadow", "makeup_blush"}
 
 
 def _hex_color_to_hue(color: str | None, fallback: int = 0) -> int:
@@ -139,30 +144,389 @@ def _compute_phase_b64(fft_shifted: np.ndarray) -> str:
     return _data_url_from_image(cv2.cvtColor(phase_normalized, cv2.COLOR_GRAY2BGR))
 
 
-def _safe_landmarks_for_image(image_bgr: np.ndarray) -> list[dict[str, float]]:
+# ══════════════════════════════════════════════════════════════════════════════
+# GÖREV 2 — Downsample Performance Pipeline
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Heavy operations (landmark detection, Delaunay, geometric_warp) run on a
+# LOW-resolution copy.  Final masks / displacement fields are scaled UP to
+# the original resolution before compositing.  This keeps the geometry pass
+# under ~30 ms on a standard laptop (targeting 30 FPS).
+# ══════════════════════════════════════════════════════════════════════════════
+
+LO_W, LO_H = 480, 360          # low-res processing canvas
+_DS_INTERP_DOWN = cv2.INTER_AREA
+_DS_INTERP_UP   = cv2.INTER_LINEAR
+
+
+def _downsample(image: np.ndarray) -> tuple[np.ndarray, float, float]:
+    """Return (lo_image, sx, sy) – scale factors from lo → hi."""
+    h, w = image.shape[:2]
+    if w <= LO_W and h <= LO_H:
+        return image, 1.0, 1.0
+    lo = cv2.resize(image, (LO_W, LO_H), interpolation=_DS_INTERP_DOWN)
+    return lo, w / LO_W, h / LO_H
+
+
+def _upsample_mask(mask: np.ndarray, target_hw: tuple[int, int]) -> np.ndarray:
+    """Scale a single-channel mask to target (h, w)."""
+    return cv2.resize(mask, (target_hw[1], target_hw[0]),
+                      interpolation=_DS_INTERP_UP)
+
+
+def _process_lo_composite(
+    hi_image: np.ndarray,
+    apply_fn,
+    *,
+    needs_mask: bool = False,
+) -> np.ndarray:
     """
-    Return normalized landmarks for the original image size with a pixel-landmark fallback.
+    Run *apply_fn* on a low-resolution copy and composite back to hi-res.
+
+    If apply_fn is purely pixel-level (color grading, FFT), the function is
+    applied directly at full resolution (cheap).  For geometry-heavy functions
+    that benefit from downsampling, this wrapper:
+
+      1. Downsample the image
+      2. Run apply_fn on the lo-res copy → get processed lo-res image
+      3. Upscale the processed image to original resolution
+      4. Blend with the original using a face-region mask (optional)
     """
-    pixel_landmarks = detect_face_landmarks(image_bgr)
-    if pixel_landmarks is not None and len(pixel_landmarks) >= 468:
-        h, w = image_bgr.shape[:2]
-        return [
-            {
-                "x": float(np.clip(point[0] / max(w, 1), 0.0, 1.0)),
-                "y": float(np.clip(point[1] / max(h, 1), 0.0, 1.0)),
-            }
-            for point in pixel_landmarks[:468]
-        ]
+    h, w = hi_image.shape[:2]
+    if w * h <= LO_W * LO_H:
+        # Already small — run directly
+        return apply_fn(hi_image)
+
+    lo, sx, sy = _downsample(hi_image)
+    lo_result = apply_fn(lo)
+
+    # Scale back
+    hi_result = cv2.resize(lo_result, (w, h), interpolation=_DS_INTERP_UP)
+
+    if not needs_mask:
+        return hi_result
+
+    # Blend: use the low-res result in the face region, original elsewhere
+    # This avoids background blurring from upscale interpolation
+    try:
+        rgb_lo = cv2.cvtColor(lo, cv2.COLOR_BGR2RGB)
+        landmarks = get_landmarks(preprocess_image(rgb_lo))
+        lo_mask = _create_face_overlay_mask(lo, landmarks)
+        hi_mask = _upsample_mask(lo_mask, (h, w))
+        hi_mask3 = hi_mask[..., np.newaxis]
+        blended = (hi_result.astype(np.float32) * hi_mask3 +
+                   hi_image.astype(np.float32) * (1.0 - hi_mask3))
+        return np.clip(blended, 0, 255).astype(np.uint8)
+    except Exception:
+        return hi_result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GÖREV 3 — Safe Aging/FFT Blend (float32 buffer, bounds checking)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _safe_aging_blend(
+    original: np.ndarray,
+    aged: np.ndarray,
+    face_mask: np.ndarray | None = None,
+    strength: float = 1.0,
+) -> np.ndarray:
+    """
+    Blend an aging/deaging result with the original using float32 arithmetic.
+
+    Parameters
+    ----------
+    original : uint8 BGR image
+    aged     : uint8 BGR image (same shape)
+    face_mask: optional float32 single-channel mask [0, 1].
+               If None, full-image blend is performed.
+    strength : blending strength in [0, 1].
+
+    Returns
+    -------
+    uint8 BGR blended image — guaranteed no overflow / NaN.
+    """
+    # Ensure same spatial dimensions
+    if original.shape[:2] != aged.shape[:2]:
+        aged = cv2.resize(aged, (original.shape[1], original.shape[0]),
+                          interpolation=cv2.INTER_LINEAR)
+
+    # Work in float32
+    orig_f = original.astype(np.float32)
+    aged_f = aged.astype(np.float32)
+
+    # Sanitize NaN / Inf that might creep in from FFT operations
+    aged_f = np.nan_to_num(aged_f, nan=0.0, posinf=255.0, neginf=0.0)
+
+    strength = float(np.clip(strength, 0.0, 1.0))
+
+    if face_mask is not None:
+        # Ensure mask is float32 in [0, 1]
+        if face_mask.dtype != np.float32:
+            face_mask = face_mask.astype(np.float32)
+        if face_mask.max() > 1.0:
+            face_mask = face_mask / 255.0
+        # Ensure spatial match
+        if face_mask.shape[:2] != original.shape[:2]:
+            face_mask = cv2.resize(face_mask,
+                                   (original.shape[1], original.shape[0]),
+                                   interpolation=cv2.INTER_LINEAR)
+        mask3 = face_mask[..., np.newaxis] * strength
+        blended = orig_f * (1.0 - mask3) + aged_f * mask3
+    else:
+        blended = orig_f * (1.0 - strength) + aged_f * strength
+
+    return np.clip(blended, 0.0, 255.0).astype(np.uint8)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GÖREV 1 — Unified Dispatch Endpoint  /process/apply
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Single entry-point for ALL filter categories:
+#   - Geometric warps  (smile, eyebrow, lip, slim)
+#   - Emoji presets     (alien, robot, clown, star_eyes, heart_eyes, crying)
+#   - Aging / De-aging  (aging, deaging, fft)
+#   - Hair dye          (hair_color)
+#   - Cartoon           (cartoon)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class UnifiedApplyRequest(BaseModel):
+    """JSON body for the unified /process/apply endpoint."""
+    image_b64: str
+    filter_name: str
+    intensity: float = 50.0
+    smoothing: float = 30.0
+    # Hair dye specific
+    hair_color: str | None = None       # "R,G,B"  e.g. "255,165,0"
+    hair_intensity: float = 0.6
+    makeup_hue: int = 0
+    makeup_opacity: float = 0.5
+    # Bypass FFT spectra computation for faster live mode
+    skip_spectra: bool = False
+    # Optional client-side timing probes for end-to-end profiling
+    client_capture_ts: float | None = None
+    client_send_ts: float | None = None
+
+
+def _build_warp_fn(op: str, intensity: float, smoothing: float):
+    """Return a callable(image) → image for the given warp operation."""
+    def _fn(image):
+        if op == "smile":
+            result = apply_smile(image, intensity)
+        elif op == "eyebrow":
+            result = apply_eyebrow_raise(image, intensity)
+        elif op == "lip":
+            result = apply_lip_widen(image, intensity)
+        elif op == "slim":
+            result = apply_face_slim(image, intensity)
+        elif op == "eye_scale":
+            result = apply_eye_scaling(image, intensity)
+        else:
+            return image
+        # Apply smoothing
+        sm = max(0.0, min(1.0, smoothing / 100.0))
+        if sm > 0:
+            blurred = cv2.GaussianBlur(result, (0, 0), 0.5 + sm * 2.0)
+            result = cv2.addWeighted(result, 1.0 - sm * 0.4,
+                                     blurred, sm * 0.4, 0)
+        return result
+    return _fn
+
+
+def _build_age_fn(op: str, intensity: float):
+    """Return a callable(image) → image for aging/deaging."""
+    def _fn(image):
+        if op in ("aging", "age"):
+            aged = apply_aging(image, intensity)
+            try:
+                rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                landmarks = get_landmarks(rgb)
+                face_mask = create_face_region_mask(image, landmarks)
+                return _safe_aging_blend(image, aged, face_mask,
+                                         strength=min(1.0, intensity / 100.0))
+            except Exception:
+                return _safe_aging_blend(image, aged,
+                                         strength=min(1.0, intensity / 100.0))
+        elif op in ("deaging", "deage"):
+            deaged = apply_deaging(image, intensity)
+            try:
+                rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                landmarks = get_landmarks(rgb)
+                face_mask = create_face_region_mask(image, landmarks)
+                return _safe_aging_blend(image, deaged, face_mask,
+                                         strength=min(1.0, intensity / 100.0))
+            except Exception:
+                return _safe_aging_blend(image, deaged,
+                                         strength=min(1.0, intensity / 100.0))
+        elif op == "fft":
+            processed, _ = apply_fft_filter(image, intensity)
+            return processed
+        return image
+    return _fn
+
+
+def _build_hair_fn(color_str: str, hair_intensity: float):
+    """Return a callable(image) → image for hair-dye."""
+    def _fn(image):
+        try:
+            from modules.hair_module import apply_hair_color
+        except ModuleNotFoundError:
+            from backend.modules.hair_module import apply_hair_color
+        return apply_hair_color(image, color_str, hair_intensity)
+    return _fn
+
+
+def _build_makeup_fn(region: str, hue: int, opacity: float):
+    """Return callable(image) -> image for landmark-based virtual makeup."""
+    def _fn(image):
+        rgb_for_landmarks = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        landmarks = get_landmarks(preprocess_image(rgb_for_landmarks))
+        return apply_virtual_makeup(
+            image=image,
+            landmarks=landmarks,
+            region=region,
+            hue=int(hue),
+            opacity=float(opacity),
+        )
+    return _fn
+
+
+def _get_stable_landmarks(tag: str, image: np.ndarray) -> np.ndarray | None:
+    """Landmark fetch with fallback to previous stable mesh."""
+    lm = detect_face_landmarks(image)
+    with _LIVE_STABLE_LOCK:
+        if lm is not None:
+            _LIVE_STABLE_LANDMARKS[tag] = lm.copy()
+            return lm
+        prev = _LIVE_STABLE_LANDMARKS.get(tag)
+        return prev.copy() if prev is not None else None
+
+
+# Categories that benefit from downsample processing
+_GEOMETRY_HEAVY = {"smile", "eyebrow", "lip", "slim", "eye_scale",
+                   "alien", "robot", "clown", "star_eyes",
+                   "heart_eyes", "crying"}
+
+
+@router.post("/process/apply")
+async def process_unified_apply(body: UnifiedApplyRequest):
+    """
+    Unified dispatch endpoint for ALL filter categories.
+
+    ``filter_name`` can be:
+      - Warp:    ``smile``, ``eyebrow``, ``lip``, ``slim``
+      - Emoji:   ``alien``, ``robot``, ``clown``, ``star_eyes``,
+                 ``heart_eyes``, ``crying``
+      - Aging:   ``aging``, ``deaging``, ``fft``
+      - Hair:    ``hair_color``
+      - Cartoon: ``cartoon``
+    """
+    fname = (body.filter_name or "").strip().lower()
+    logger.info("process_unified_apply: filter=%s intensity=%.1f", fname, body.intensity)
+
+    t_start = time.perf_counter()
+    t_decode_done = t_start
+    t_process_done = t_start
+
+    # Decode image
+    try:
+        original = _decode_base64_image(body.image_b64)
+        t_decode_done = time.perf_counter()
+    except Exception as exc:
+        raise HTTPException(status_code=400,
+                            detail=f"Image decode failed: {exc}") from exc
 
     try:
-        rgb_for_landmarks = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        return get_landmarks(rgb_for_landmarks)
+        # ── Route to the correct filter function ─────────────────────────
+        if fname in WARP_OPS or fname == "eye_scale":
+            apply_fn = _build_warp_fn(fname, body.intensity, body.smoothing)
+        elif fname in _EMOJI_PRESETS_MAP:
+            apply_fn = _EMOJI_PRESETS_MAP[fname]
+        elif fname in AGE_OPS:
+            apply_fn = _build_age_fn(fname, body.intensity)
+        elif fname in MAKEUP_OPS:
+            region = fname.split("_", 1)[1]
+            apply_fn = _build_makeup_fn(region, body.makeup_hue, body.makeup_opacity)
+        elif fname == "hair_color" and body.hair_color:
+            apply_fn = _build_hair_fn(body.hair_color, body.hair_intensity)
+        elif fname == "cartoon":
+            apply_fn = apply_cartoon_filter
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown filter '{fname}'. Valid: "
+                       f"{', '.join(sorted(set(WARP_OPS) | {'eye_scale'} | set(_EMOJI_PRESETS_MAP) | AGE_OPS | MAKEUP_OPS | {'hair_color', 'cartoon'}))}"
+            )
+
+        # ── Apply with optional downsampling for geometry-heavy ops ──────
+        if fname in _GEOMETRY_HEAVY:
+            processed = _process_lo_composite(original, apply_fn,
+                                               needs_mask=True)
+        else:
+            processed = apply_fn(original)
+        t_process_done = time.perf_counter()
+
+        # ── Build response ───────────────────────────────────────────────
+        metrics = _metrics_dict(original, processed)
+
+        profile = {
+            "capture_ms": None,
+            "transport_ms": None,
+            "infer_ms": round((t_process_done - t_decode_done) * 1000.0, 2),
+            "overlay_ms": 0.0,
+            "render_ms": round((time.perf_counter() - t_process_done) * 1000.0, 2),
+            "total_ms": round((time.perf_counter() - t_start) * 1000.0, 2),
+        }
+        if body.client_capture_ts is not None and body.client_send_ts is not None:
+            try:
+                profile["capture_ms"] = round(
+                    max(0.0, (body.client_send_ts - body.client_capture_ts) * 1000.0), 2
+                )
+            except Exception:
+                profile["capture_ms"] = None
+        if body.client_send_ts is not None:
+            try:
+                profile["transport_ms"] = round(
+                    max(0.0, (time.time() - float(body.client_send_ts)) * 1000.0), 2
+                )
+            except Exception:
+                profile["transport_ms"] = None
+
+        # Skip expensive FFT spectra in live mode
+        if body.skip_spectra:
+            return {
+                "processed_image": _data_url_from_image(processed),
+                "image_b64": _data_url_from_image(processed),
+                "metrics": metrics,
+                "profile": profile,
+            }
+
+        orig_fft_shifted = compute_fft(original)[2]
+        proc_fft_shifted = compute_fft(processed)[2]
+
+        payload = _response_payload(
+            image_b64=_data_url_from_image(processed),
+            metrics=metrics,
+            orig_spectrum_b64=_data_url_from_image(
+                cv2.cvtColor(compute_magnitude_spectrum(orig_fft_shifted),
+                             cv2.COLOR_GRAY2BGR)),
+            proc_spectrum_b64=_data_url_from_image(
+                cv2.cvtColor(compute_magnitude_spectrum(proc_fft_shifted),
+                             cv2.COLOR_GRAY2BGR)),
+            orig_phase_b64=_compute_phase_b64(orig_fft_shifted),
+            proc_phase_b64=_compute_phase_b64(proc_fft_shifted),
+            energy=None,
+        )
+        payload["profile"] = profile
+        return payload
+
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("MediaPipe normalized landmarks failed: %s", exc)
-        raise HTTPException(
-            status_code=422,
-            detail="Face landmarks could not be detected for this image.",
-        ) from exc
+        logger.error("process_unified_apply '%s' failed: %s", fname, exc,
+                     exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/process/warp")
@@ -255,18 +619,9 @@ async def process_age(
             if op in ["aging", "age"]:
                 processed = apply_aging(original, intensity)
             else:
-                effected = apply_deaging(original, intensity)
-                try:
-                    landmarks = _safe_landmarks_for_image(original)
-                    face_mask = create_face_region_mask(original, landmarks)
-                    processed = blend_effect_with_mask(
-                        original=original,
-                        effected=effected,
-                        mask=face_mask,
-                    )
-                except Exception as exc:
-                    logger.warning("Face mask unavailable for deaging; using full image: %s", exc)
-                    processed = effected
+                # apply_deaging already includes internal face-mask-based blending
+                # via _build_face_hair_mask — do NOT double-blend with blend_effect_with_mask
+                processed = apply_deaging(original, intensity)
 
             original_for_metrics = original
 
@@ -581,8 +936,9 @@ async def process_glasses(
     Parameters
     ----------
     glasses_type : str
-        Model ID: ``"aviator"``, ``"wayfarer"``, ``"round"``
-        (legacy ``"sunglasses"`` / ``"reading"`` still accepted).
+        Model ID: ``"aviator"``, ``"wayfarer"``, ``"round"``, ``"square"``,
+        ``"retro"``, ``"cat_eye"``, ``"sport"``, ``"futuristic"``
+        (legacy ``"sunglasses"`` / ``"reading"`` / ``"cateye"`` still accepted).
     """
     try:
         contents = await image.read()
@@ -1768,84 +2124,272 @@ def _apply_heart_eyes(image: np.ndarray) -> np.ndarray:
     return warped
 
 
-# ── 6. CRYING PRESET ─────────────────────────────────────────────────────────
-def _place_tear_masks(image: np.ndarray, landmarks) -> np.ndarray:
-    """Draw light-blue teardrop shapes below each eye."""
-    if landmarks is None:
-        return image
-    h, w = image.shape[:2]
-    out = image.copy()
+# ── 6. CRYING PRESET (v2 – DSP-Aware Refraction Tears) ───────────────────────
 
-    # Lower-eyelid landmarks
-    for lid_idx in [145, 374]:
-        if lid_idx >= len(landmarks):
+
+def _build_teardrop_mask(
+    h: int, w: int,
+    anchor_x: int, anchor_y: int,
+    tear_radius: int, tear_length: int,
+) -> np.ndarray:
+    """Create a smooth float32 teardrop mask (0..1).
+
+    Shape: rounded circle at top → elongated tapered tail below.
+    All drawing uses cv2 primitives (no pixel loops).
+    """
+    mask = np.zeros((h, w), dtype=np.float32)
+
+    # Upper bulb (circle)
+    cv2.circle(mask, (anchor_x, anchor_y + tear_radius), tear_radius, 1.0, -1, cv2.LINE_AA)
+
+    # Lower tapered tail (triangle)
+    tri = np.array([
+        [anchor_x - tear_radius, anchor_y + tear_radius],
+        [anchor_x + tear_radius, anchor_y + tear_radius],
+        [anchor_x, anchor_y + tear_radius + tear_length],
+    ], dtype=np.int32)
+    cv2.fillConvexPoly(mask, tri, 1.0, cv2.LINE_AA)
+
+    # Smooth edges for natural appearance
+    k = max(3, (tear_radius // 2) | 1)
+    mask = cv2.GaussianBlur(mask, (k, k), tear_radius * 0.3)
+    # Re-normalize to [0, 1]
+    mx = mask.max()
+    if mx > 0:
+        mask /= mx
+    return mask
+
+
+def _apply_eye_redness(
+    image: np.ndarray,
+    landmarks: list,
+    redness_color: tuple = (10, 10, 50),
+    opacity: float = 0.35,
+) -> np.ndarray:
+    """Apply a faint Gaussian-blurred reddish tint around both eye ROIs.
+
+    Simulates the soreness / irritation of crying.  Uses a smooth alpha
+    gradient so the redness fades naturally into surrounding skin.
+    """
+    h, w = image.shape[:2]
+
+    # Eye landmark indices (upper + lower eyelid contour)
+    left_eye_idx = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+    right_eye_idx = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+
+    result = image.astype(np.float32) / 255.0
+    red_layer = np.array(redness_color, dtype=np.float32) / 255.0
+
+    for eye_indices in [left_eye_idx, right_eye_idx]:
+        pts = []
+        for idx in eye_indices:
+            if idx < len(landmarks):
+                lm = landmarks[idx]
+                pts.append([int(lm["x"] * w), int(lm["y"] * h)])
+        if len(pts) < 4:
             continue
+
+        pts_arr = np.array(pts, dtype=np.int32)
+        # Expand ROI for the redness halo
+        cx = int(np.mean(pts_arr[:, 0]))
+        cy = int(np.mean(pts_arr[:, 1]))
+        rx = int(np.std(pts_arr[:, 0]) * 2.5)
+        ry = int(np.std(pts_arr[:, 1]) * 3.0)
+
+        # Create elliptical gradient mask
+        eye_mask = np.zeros((h, w), dtype=np.float32)
+        cv2.ellipse(eye_mask, (cx, cy), (rx, ry), 0, 0, 360, 1.0, -1, cv2.LINE_AA)
+
+        # Heavy blur for soft gradient
+        blur_k = max(15, (rx | 1))
+        if blur_k % 2 == 0:
+            blur_k += 1
+        eye_mask = cv2.GaussianBlur(eye_mask, (blur_k, blur_k), rx * 0.4)
+        # Normalize
+        mx = eye_mask.max()
+        if mx > 0:
+            eye_mask /= mx
+
+        # Alpha blend redness
+        alpha = eye_mask[..., np.newaxis] * opacity
+        result = result * (1.0 - alpha) + red_layer * alpha
+
+    return np.clip(result * 255.0, 0, 255).astype(np.uint8)
+
+
+def _apply_refraction_tears(
+    image: np.ndarray,
+    landmarks: list,
+) -> np.ndarray:
+    """Procedural refraction tears with pixel displacement + specular highlight.
+
+    Academic DSP Trick
+    ------------------
+    Instead of painting flat blue colour, we DISPLACE the underlying pixels
+    based on the tear's convex shape (simulated normal map).  This creates
+    the visual illusion of clear liquid refracting the face behind it.
+
+    Additionally, a small sharp white specular highlight is placed at the
+    convex top of each teardrop for realistic light reflection.
+    """
+    h, w = image.shape[:2]
+    result = image.astype(np.float32)
+
+    # Tear anchor points: inner-eye lower lids + outer-eye corners
+    # Using inner corner (133, 362) and lower lid mid-point (145, 374)
+    tear_anchors = []
+    for lid_idx, corner_idx in [(145, 133), (374, 362)]:
+        if lid_idx >= len(landmarks) or corner_idx >= len(landmarks):
+            continue
+        # Primary tear from lower lid center
         lx = int(landmarks[lid_idx]["x"] * w)
         ly = int(landmarks[lid_idx]["y"] * h)
+        tear_anchors.append((lx, ly, "primary"))
+        # Secondary smaller tear from inner corner
+        cx = int(landmarks[corner_idx]["x"] * w)
+        cy = int(landmarks[corner_idx]["y"] * h)
+        tear_anchors.append((cx, cy, "secondary"))
 
-        # Teardrop: circle + elongated triangle below
-        tear_r = max(3, int(h * 0.012))
-        tear_len = max(8, int(h * 0.06))
-        color = (255, 200, 100)  # light blue BGR
+    for ax, ay, tear_type in tear_anchors:
+        if tear_type == "primary":
+            tear_r = max(4, int(h * 0.016))
+            tear_len = max(12, int(h * 0.08))
+            refract_strength = 4.0
+        else:
+            tear_r = max(3, int(h * 0.010))
+            tear_len = max(8, int(h * 0.05))
+            refract_strength = 2.5
 
-        # Draw on overlay for alpha blending
-        overlay = out.copy()
-        cv2.circle(overlay, (lx, ly + tear_r), tear_r, color, -1)
-        tri = np.array([
-            [lx - tear_r, ly + tear_r],
-            [lx + tear_r, ly + tear_r],
-            [lx, ly + tear_r + tear_len],
-        ], dtype=np.int32)
-        cv2.fillConvexPoly(overlay, tri, color)
-        cv2.addWeighted(overlay, 0.7, out, 0.3, 0, out)
+        # Build teardrop mask
+        tear_mask = _build_teardrop_mask(h, w, ax, ay, tear_r, tear_len)
 
-    return out
+        # ── Pixel Displacement (Refraction) ──────────────────────────────
+        # Build displacement field based on tear shape gradient
+        # The gradient of the mask approximates the "normal" of the
+        # tear's convex surface — pixels are shifted along this gradient.
+        grad_x = cv2.Sobel(tear_mask, cv2.CV_32F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(tear_mask, cv2.CV_32F, 0, 1, ksize=3)
+
+        # Create coordinate grids
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+
+        # Displace source coordinates by the gradient (refraction)
+        map_x = xx - grad_x * refract_strength
+        map_y = yy - grad_y * refract_strength
+
+        # Clamp to image bounds
+        map_x = np.clip(map_x, 0, w - 1)
+        map_y = np.clip(map_y, 0, h - 1)
+
+        # Apply displacement via remap (vectorized, no pixel loops)
+        refracted = cv2.remap(
+            result.astype(np.uint8), map_x, map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        ).astype(np.float32)
+
+        # Composite: where tear_mask > 0, use refracted pixels
+        tear_alpha = tear_mask[..., np.newaxis]
+
+        # Slight brightness boost inside the tear (wet/glossy look)
+        brightness_boost = 1.08
+        refracted_bright = np.clip(refracted * brightness_boost, 0, 255)
+
+        # Very faint blue-ish tint to hint at water (subtle, not flat paint)
+        water_tint = np.array([245.0, 230.0, 220.0], dtype=np.float32)  # very pale cyan/blue
+        tinted_refracted = refracted_bright * 0.92 + water_tint * 0.08
+
+        result = result * (1.0 - tear_alpha) + tinted_refracted * tear_alpha
+
+        # ── Specular Highlight ───────────────────────────────────────────
+        # Sharp white dot at the convex top of the teardrop
+        spec_x = ax
+        spec_y = ay + max(2, tear_r // 3)
+        spec_r = max(2, tear_r // 3)
+
+        spec_mask = np.zeros((h, w), dtype=np.float32)
+        cv2.circle(spec_mask, (spec_x, spec_y), spec_r, 1.0, -1, cv2.LINE_AA)
+        # Slight blur for soft specular
+        sk = max(3, spec_r | 1)
+        spec_mask = cv2.GaussianBlur(spec_mask, (sk, sk), spec_r * 0.3)
+        mx = spec_mask.max()
+        if mx > 0:
+            spec_mask /= mx
+
+        spec_alpha = spec_mask[..., np.newaxis] * 0.85
+        white = np.full_like(result, 255.0)
+        result = result * (1.0 - spec_alpha) + white * spec_alpha
+
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 
 def _apply_crying(image: np.ndarray) -> np.ndarray:
-    """😢 Crying: brow frown + mouth corner droop + procedural tears."""
+    """😢 Crying v2 — DSP-Aware Refraction Tears + Eye Redness.
+
+    Pipeline
+    --------
+    1. Geometric warp: sad brows (inner UP, outer DOWN) + mouth droop
+    2. Eye redness: faint Gaussian red tint around eye ROIs
+    3. Refraction tears: pixel displacement via gradient-based refraction
+    4. Specular highlights: sharp white at tear convex top
+    """
     out = image.copy()
     h, w = out.shape[:2]
-    lm = detect_face_landmarks(out)
+    lm = _get_stable_landmarks("crying", out)
     if lm is None:
         return out
     face_sz = _face_scale(lm)
     deltas = np.zeros_like(lm)
 
-    # Sad/worried arched brows: inner UP, outer DOWN (strong)
+    # ── Sad/worried arched brows: inner UP, outer DOWN (strong) ──
     for idx in [107, 55, 336, 285]:
-        deltas[idx,1] -= face_sz * 0.10
+        deltas[idx, 1] -= face_sz * 0.10
     for idx in [70, 46, 300, 276]:
-        deltas[idx,1] += face_sz * 0.07
+        deltas[idx, 1] += face_sz * 0.07
 
-    # Mouth corners droop – strong downward pull on outer corners
-    deltas[61,1] += face_sz * 0.08   # left corner down
-    deltas[291,1] += face_sz * 0.08  # right corner down
-    # Neighboring points for smooth curve
+    # ── Mouth corners droop ──
+    deltas[61, 1] += face_sz * 0.08
+    deltas[291, 1] += face_sz * 0.08
     for idx in [146, 91]:
-        deltas[idx,1] += face_sz * 0.05
+        deltas[idx, 1] += face_sz * 0.05
     for idx in [375, 321]:
-        deltas[idx,1] += face_sz * 0.05
+        deltas[idx, 1] += face_sz * 0.05
 
-    anchors_zero = [10,338,297,332,284,251,168,6,197,195,5,4,152]
-    for idx in anchors_zero: deltas[idx] = 0.0
+    # ── Slightly squint eyes (narrow them vertically for crying look) ──
+    upper_lid_l = [159, 160, 161]
+    lower_lid_l = [144, 145, 153]
+    upper_lid_r = [386, 385, 384]
+    lower_lid_r = [373, 374, 380]
+    squint = face_sz * 0.025
+    for idx in upper_lid_l + upper_lid_r:
+        deltas[idx, 1] += squint
+    for idx in lower_lid_l + lower_lid_r:
+        deltas[idx, 1] -= squint * 0.5
+
+    # ── Lock boundary anchors ──
+    anchors_zero = [10, 338, 297, 332, 284, 251, 168, 6, 197, 195, 5, 4, 152]
+    for idx in anchors_zero:
+        deltas[idx] = 0.0
     deltas[np.abs(deltas) < 0.05] = 0.0
 
+    # ── Single-pass warp with dense boundary anchors ──
     dst = lm + deltas
     boundary = _generate_warp_anchors(w, h, lm)
-    warped = geometric_warp(out, np.vstack([lm,boundary]), np.vstack([dst,boundary]))
+    warped = geometric_warp(out, np.vstack([lm, boundary]), np.vstack([dst, boundary]))
 
+    # ── Get fresh landmarks on warped result ──
     try:
         prep = preprocess_image(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
         wlms = get_landmarks(prep)
-        mask = _create_extended_face_mask(warped, wlms, 0.35)
     except Exception:
-        mask = np.ones((h,w), np.float32)*0.4
         wlms = None
 
-    # Draw tears
-    if wlms:
-        warped = _place_tear_masks(warped, wlms)
+    if wlms is not None:
+        # Stage 2: Eye redness
+        warped = _apply_eye_redness(warped, wlms, redness_color=(10, 10, 50), opacity=0.35)
+
+        # Stage 3 & 4: Refraction tears + specular highlights
+        warped = _apply_refraction_tears(warped, wlms)
 
     return warped
 

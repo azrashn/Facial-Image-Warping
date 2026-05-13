@@ -95,8 +95,10 @@ document.addEventListener('DOMContentLoaded', () => {
             metalAviator: "Klasik Damla (Aviator)",
             acetateWayfarer: "Kemik Çerçeve (Modern)",
             minimalistRound: "İnce Yuvarlak (Retro)",
-            catEyeStyle: "Kedi Gözü (Cat-Eye)",
             futuristicStyle: "Fütüristik (Kalkan)",
+            squareStyle: "Kare Çerçeve",
+            retroStyle: "Retro Browline",
+            sportStyle: "Spor (Sarmal)",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -114,7 +116,10 @@ document.addEventListener('DOMContentLoaded', () => {
             noDataFft: "Veri yok (FFT Filtresi Çalıştırın)",
             selectRegionOutput: "Çıktı oluşturmak için bir bölge seçin",
             procFFTPhase: "İşlenmiş - FFT Fazı",
-            origFFTPhase: "Orijinal - FFT Fazı"
+            origFFTPhase: "Orijinal - FFT Fazı",
+            // Camera Live Mode
+            liveMode: "🔴 Canlı",
+            stopLive: "⏹ Canlıyı Durdur"
         },
         EN: {
             dropImage: "Drop image here",
@@ -194,8 +199,10 @@ document.addEventListener('DOMContentLoaded', () => {
             metalAviator: "Classic Teardrop (Aviator)",
             acetateWayfarer: "Thick Frame (Modern)",
             minimalistRound: "Thin Round (Retro)",
-            catEyeStyle: "Cat-Eye",
             futuristicStyle: "Futuristic (Shield)",
+            squareStyle: "Square Frame",
+            retroStyle: "Retro Browline",
+            sportStyle: "Sport Wraparound",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -213,7 +220,10 @@ document.addEventListener('DOMContentLoaded', () => {
             noDataFft: "No data (Run FFT Filter)",
             selectRegionOutput: "Select a region to generate output",
             procFFTPhase: "Processed - FFT Phase",
-            origFFTPhase: "Original - FFT Phase"
+            origFFTPhase: "Original - FFT Phase",
+            // Camera Live Mode
+            liveMode: "🔴 Live",
+            stopLive: "⏹ Stop Live"
         }
     };
 
@@ -649,14 +659,14 @@ document.addEventListener('DOMContentLoaded', () => {
      * by 512 (the preprocessed image size) to get pixel positions inside
      * the SVG whose viewBox is "0 0 512 512".
      */
-    async function generateLandmarks() {
-        if (!uploadedFile) return;
+    async function generateLandmarks(targetFile = uploadedFile, retries = 2) {
+        if (!targetFile) return;
 
         const CANVAS = 512; // matches SVG viewBox and backend preprocess size
 
         try {
             const formData = new FormData();
-            formData.append('image', uploadedFile);
+            formData.append('image', targetFile);
 
             const response = await fetch(`${API_BASE}/process/landmarks`, {
                 method: 'POST',
@@ -718,6 +728,10 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(`[Landmarks] Rendered ${landmarks.length} points.`);
         } catch (err) {
             console.error('[Landmarks] Error:', err);
+            if (retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 140));
+                return generateLandmarks(targetFile, retries - 1);
+            }
             analysisSummary.innerHTML =
                 `<strong>Landmarks:</strong> ${err.message || 'Failed to fetch landmarks.'}`;
 
@@ -1140,6 +1154,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (applyMakeupBtn) {
         applyMakeupBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage) return;
+            currentLivePreset = `makeup_${makeupRegion.value}`;
+            selectedOperation = currentLivePreset;
 
             const hueValue = hexToOpenCVHue(makeupColor.value);
 
@@ -1233,6 +1249,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cartoonBtn) {
         cartoonBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage) return;
+            selectedOperation = 'cartoon';
+            currentLivePreset = 'cartoon';
 
             const formData = new FormData();
             formData.append('image', uploadedFile);
@@ -1263,65 +1281,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Camera Capture
-    const cameraVideo = document.getElementById('cameraVideo');
-    const cameraPlaceholder = document.getElementById('cameraPlaceholder');
-    const startCameraBtn = document.getElementById('startCameraBtn');
-    const stopCameraBtn = document.getElementById('stopCameraBtn');
-    const captureBtn = document.getElementById('captureBtn');
-    const cameraCanvas = document.getElementById('cameraCanvas');
-    let mediaStream = null;
-
-    function stopCamera() {
-        if (mediaStream) {
-            mediaStream.getTracks().forEach(track => track.stop());
-            mediaStream = null;
-        }
-        if (cameraVideo) cameraVideo.style.display = 'none';
-        if (cameraPlaceholder) cameraPlaceholder.style.display = 'block';
-        if (startCameraBtn) startCameraBtn.style.display = 'flex';
-        if (captureBtn) captureBtn.style.display = 'none';
-        if (stopCameraBtn) stopCameraBtn.style.display = 'none';
-    }
-
-    if (startCameraBtn) {
-        startCameraBtn.addEventListener('click', async () => {
-            try {
-                mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                if (cameraVideo) {
-                    cameraVideo.srcObject = mediaStream;
-                    cameraVideo.style.display = 'block';
-                }
-                if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
-                if (startCameraBtn) startCameraBtn.style.display = 'none';
-                if (captureBtn) captureBtn.style.display = 'flex';
-                if (stopCameraBtn) stopCameraBtn.style.display = 'flex';
-            } catch (err) {
-                console.error('Error accessing camera:', err);
-                alert('Could not access camera. Please allow permissions.');
-            }
-        });
-    }
-
-    if (stopCameraBtn) {
-        stopCameraBtn.addEventListener('click', stopCamera);
-    }
-
-    if (captureBtn) {
-        captureBtn.addEventListener('click', () => {
-            if (!mediaStream) return;
-            cameraCanvas.width = cameraVideo.videoWidth;
-            cameraCanvas.height = cameraVideo.videoHeight;
-            cameraCanvas.getContext('2d').drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
-            cameraCanvas.toBlob((blob) => {
-                if (blob) {
-                    const file = new File([blob], 'camera-capture.png', { type: 'image/png' });
-                    handleFile(file);
-                    stopCamera(); // Auto-stop camera after capture
-                }
-            }, 'image/png');
-        });
-    }
+    // Camera Capture — handled by the canonical initCamera() IIFE module below.
+    // The duplicate camera system (mediaStream, stopCamera, etc.) was removed
+    // to prevent state lifecycle conflicts (two competing systems on the same elements).
 
     // --- NEW FACE FEATURES (Göz, Sakal, Yaş Karşılaştırma) ---
     const eyeSizeSlider = document.getElementById('eyeSizeSlider');
@@ -1352,6 +1314,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (eyeSizeBtn) {
         eyeSizeBtn.addEventListener('click', async () => {
             if (!uploadedFile || !currentOriginalImage) return;
+            selectedOperation = 'eye_scale';
+            currentLivePreset = 'eye_scale';
             const formData = new FormData();
             formData.append('image', uploadedFile);
             formData.append('scale', eyeSizeSlider.value);
@@ -1507,8 +1471,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     aviator: i18n[currentLang]?.metalAviator || 'Classic Teardrop (Aviator)',
                     wayfarer: i18n[currentLang]?.acetateWayfarer || 'Thick Frame (Modern)',
                     round: i18n[currentLang]?.minimalistRound || 'Thin Round (Retro)',
-                    cat_eye: i18n[currentLang]?.catEyeStyle || 'Cat-Eye',
                     futuristic: i18n[currentLang]?.futuristicStyle || 'Futuristic (Shield)',
+                    square: i18n[currentLang]?.squareStyle || 'Square Frame',
+                    retro: i18n[currentLang]?.retroStyle || 'Retro Browline',
+                    sport: i18n[currentLang]?.sportStyle || 'Sport Wraparound',
                 };
                 const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);
@@ -2009,4 +1975,595 @@ document.addEventListener('DOMContentLoaded', () => {
     setupInteractiveCanvas('fftSelectionCanvas', 'Magnitude', fftLabProcSpectrumImg, fftOutputImg, fftOutputPlaceholder);
     setupInteractiveCanvas('fftPhaseCanvas', 'Phase', fftLabProcPhaseImg, fftPhaseOutputImg, fftPhaseOutputPlaceholder);
 
+    // =========================================================================
+    // CAMERA MODULE — Browser-side webcam + Live processing via REST API
+    // =========================================================================
+    // Rewritten: fixes latency, response keys, FPS meter, memory leaks,
+    // capture race conditions, temporal smoothing, coordinate transforms,
+    // error handling, and state lifecycle.
+    // =========================================================================
+    (function initCamera() {
+        const startCameraBtn = document.getElementById('startCameraBtn');
+        const captureBtn     = document.getElementById('captureBtn');
+        const liveBtn        = document.getElementById('liveBtn');
+        const stopCameraBtn  = document.getElementById('stopCameraBtn');
+        const cameraVideo    = document.getElementById('cameraVideo');
+        const cameraCanvas   = document.getElementById('cameraCanvas');
+        const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+        const cameraColumn   = document.getElementById('cameraColumn');
+        const liveProcessedImg = document.getElementById('liveProcessedImg');
+        const liveFpsBadge   = document.getElementById('liveFpsBadge');
+        const liveIndicator  = document.getElementById('liveIndicator');
+        const uploadCol      = document.querySelector('#previewPlaceholder > .split-col:first-child');
+
+        if (!startCameraBtn) return;
+
+        const liveStreamState = {
+            cameraStream: null,
+            isLiveMode: false,
+            liveRafId: null,
+            liveProcessing: false,
+            liveFrameCount: 0,
+            liveFpsTimer: null,
+            currentLivePreset: null,
+            frameSeq: 0,
+            lastRenderLatencyMs: 0,
+            lastProfile: null,
+        };
+        const captureState = { lastCapturedAtMs: 0 };
+        const analysisState = { lastError: null };
+        const uiState = { isLiveIndicatorError: false };
+        let cameraStream = null;
+        let isLiveMode = false;
+        let liveRafId = null;
+        let liveProcessing = false;
+        let liveFrameCount = 0;
+        let liveFpsTimer = null;
+        let currentLivePreset = null;
+
+        let _lastBlobUrl = null;      // for memory management (revoke old blob URLs)
+        let _liveErrorCount = 0;      // consecutive error counter
+        const _MAX_LIVE_ERRORS = 10;  // pause live after this many consecutive errors
+        let _lastFrameTime = 0;       // for rAF throttling
+        const _TARGET_INTERVAL = 33;  // ~30 FPS target (ms between frames)
+        let _liveHasPendingTick = false;
+        let liveWorker = null;
+        let liveWorkerReady = false;
+        let _liveWs = null;           // WebSocket connection for live mode
+        let _wsReady = false;         // WebSocket open state
+        let _wsPendingFrame = false;  // throttle: waiting for server response
+
+        // ── Profiling helper ────────────────────────────────────────────
+        function _profileLog(label, startMs) {
+            const elapsed = performance.now() - startMs;
+            if (elapsed > 50) { // only log slow stages
+                console.debug(`[Live Profile] ${label}: ${elapsed.toFixed(1)}ms`);
+            }
+        }
+
+        function ensureLiveWorker() {
+            if (liveWorker) return;
+            try {
+                liveWorker = new Worker('live-worker.js');
+                liveWorkerReady = true;
+            } catch (err) {
+                console.warn('[Live] Worker unavailable, fallback to main thread encoding:', err?.message);
+                liveWorker = null;
+                liveWorkerReady = false;
+            }
+        }
+
+        function encodeFrameMainThread() {
+            return Promise.resolve(cameraCanvas.toDataURL('image/jpeg', 0.65));
+        }
+
+        function encodeFrameOffThread() {
+            if (!liveWorkerReady || !liveWorker) return encodeFrameMainThread();
+            return new Promise(async (resolve, reject) => {
+                try {
+                    const bitmap = await createImageBitmap(cameraCanvas);
+                    const onMessage = (ev) => {
+                        const msg = ev.data || {};
+                        if (msg.type === 'encodedFrame') {
+                            liveWorker.removeEventListener('message', onMessage);
+                            resolve(msg.dataUrl);
+                        } else if (msg.type === 'workerError') {
+                            liveWorker.removeEventListener('message', onMessage);
+                            reject(new Error(msg.error || 'Worker encoding failed'));
+                        }
+                    };
+                    liveWorker.addEventListener('message', onMessage);
+                    liveWorker.postMessage({
+                        type: 'encodeFrame',
+                        bitmap,
+                        width: cameraCanvas.width,
+                        height: cameraCanvas.height,
+                        quality: 0.65,
+                    }, [bitmap]);
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        }
+
+        // ── START CAMERA ────────────────────────────────────────────────
+        startCameraBtn.addEventListener('click', async () => {
+            try {
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+                });
+                cameraVideo.srcObject = cameraStream;
+                cameraVideo.style.display = 'block';
+                cameraPlaceholder.style.display = 'none';
+
+                startCameraBtn.style.display = 'none';
+                captureBtn.style.display = 'inline-flex';
+                liveBtn.style.display = 'inline-flex';
+                stopCameraBtn.style.display = 'inline-flex';
+
+                console.log('[Camera] Started');
+            } catch (err) {
+                console.error('[Camera] getUserMedia failed:', err);
+                analysisSummary.innerHTML = `<strong>Camera Error:</strong> ${err.message}`;
+            }
+        });
+
+        // ── STOP CAMERA ─────────────────────────────────────────────────
+        stopCameraBtn.addEventListener('click', () => {
+            stopLiveMode();
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+            cameraVideo.srcObject = null;
+            cameraVideo.style.display = 'none';
+            cameraPlaceholder.style.display = 'block';
+            liveProcessedImg.style.display = 'none';
+
+            startCameraBtn.style.display = 'inline-flex';
+            captureBtn.style.display = 'none';
+            liveBtn.style.display = 'none';
+            stopCameraBtn.style.display = 'none';
+
+            // Restore camera column — but do NOT clear captured comparison state
+            restoreCameraColumn();
+
+            // Revoke last blob URL to free memory
+            if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
+            if (liveWorker) {
+                liveWorker.terminate();
+                liveWorker = null;
+                liveWorkerReady = false;
+            }
+            console.log('[Camera] Stopped');
+        });
+
+        // ── CAPTURE (snapshot → normal before/after workflow) ────────────
+        // FIX: async to prevent race condition — wait for blob before calling setImage
+        captureBtn.addEventListener('click', async () => {
+            if (!cameraStream) return;
+            const ctx = cameraCanvas.getContext('2d');
+            cameraCanvas.width = cameraVideo.videoWidth;
+            cameraCanvas.height = cameraVideo.videoHeight;
+            ctx.drawImage(cameraVideo, 0, 0);
+
+            // Convert canvas to blob (await to prevent race)
+            const blob = await new Promise(resolve =>
+                cameraCanvas.toBlob(resolve, 'image/jpeg', 0.92)
+            );
+            if (!blob) return;
+
+            const file = new File([blob], 'camera_capture.jpg', { type: 'image/jpeg' });
+            const dataUrl = cameraCanvas.toDataURL('image/jpeg', 0.92);
+            // setImage is synchronous and will trigger generateLandmarks
+            // only AFTER uploadedFile is set (no race)
+            setImage(dataUrl, file);
+            if (toggleLandmarks.checked) {
+                await generateLandmarks(file, 2);
+            }
+            console.log('[Camera] Frame captured');
+        });
+
+        // ── LIVE MODE ───────────────────────────────────────────────────
+        liveBtn.addEventListener('click', () => {
+            if (isLiveMode) {
+                stopLiveMode();
+                restoreCameraColumn();
+                liveBtn.textContent = '🔴 Live';
+                liveBtn.style.background = 'linear-gradient(135deg, #f85032, #e73827)';
+            } else {
+                startLiveMode();
+                expandCameraColumn();
+                liveBtn.textContent = '⏹ Stop Live';
+                liveBtn.style.background = 'linear-gradient(135deg, #667eea, #764ba2)';
+            }
+        });
+
+        function expandCameraColumn() {
+            if (uploadCol) uploadCol.style.display = 'none';
+            cameraColumn.classList.add('camera-live-expanded');
+        }
+
+        function restoreCameraColumn() {
+            if (uploadCol) uploadCol.style.display = '';
+            cameraColumn.classList.remove('camera-live-expanded');
+        }
+
+        function startLiveMode() {
+            ensureLiveWorker();
+            isLiveMode = true;
+            liveProcessedImg.style.display = 'none';
+            liveFpsBadge.style.display = 'inline';
+            liveIndicator.style.display = 'inline';
+            liveFrameCount = 0;
+            _liveErrorCount = 0;
+            _lastFrameTime = 0;
+            _liveHasPendingTick = false;
+            _wsPendingFrame = false;
+
+            // Open WebSocket connection to backend
+            const wsUrl = API_BASE.replace('http', 'ws') + '/live/ws';
+            _liveWs = new WebSocket(wsUrl);
+            _wsReady = false;
+
+            _liveWs.onopen = () => {
+                _wsReady = true;
+                console.log('[Live] WebSocket connected');
+                // Send initial config
+                const preset = getCurrentLivePreset();
+                _liveWs.send(JSON.stringify({
+                    type: 'config',
+                    filter: _mapPresetToFilter(preset),
+                    intensity: Number(intensitySlider?.value || 50),
+                }));
+            };
+
+            _liveWs.onmessage = (ev) => {
+                try {
+                    const msg = JSON.parse(ev.data);
+                    if (msg.type === 'frame' && isLiveMode) {
+                        _wsPendingFrame = false;
+                        if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
+                        liveProcessedImg.src = msg.data;
+                        liveProcessedImg.style.display = 'block';
+                        liveFrameCount++;
+                        _liveErrorCount = 0;
+                        liveStreamState.lastRenderLatencyMs = 0;
+                        if (liveIndicator.textContent !== '● LIVE') {
+                            liveIndicator.textContent = '● LIVE';
+                            liveIndicator.style.background = 'rgba(255,40,40,0.85)';
+                        }
+                        // Update FPS from server
+                        if (msg.fps) {
+                            liveFpsBadge.textContent = `${msg.fps} FPS`;
+                        }
+                        // Face detection indicator
+                        if (msg.face_detected === false) {
+                            liveFpsBadge.textContent += ' | No Face';
+                        }
+                    }
+                } catch (e) { console.debug('[Live] WS parse error:', e); }
+            };
+
+            _liveWs.onerror = (err) => {
+                console.error('[Live] WebSocket error:', err);
+                _wsReady = false;
+            };
+
+            _liveWs.onclose = () => {
+                console.log('[Live] WebSocket closed');
+                _wsReady = false;
+                _liveWs = null;
+            };
+
+            // True end-to-end FPS counter (counts only rendered frames)
+            if (liveFpsTimer) clearInterval(liveFpsTimer);
+            liveFpsTimer = setInterval(() => {
+                const latency = Math.round(liveStreamState.lastRenderLatencyMs || 0);
+                liveFpsBadge.textContent = `${liveFrameCount} FPS`;
+                liveFrameCount = 0;
+            }, 1000);
+
+            // Start with requestAnimationFrame
+            liveRafLoop(performance.now());
+            console.log('[Live] Started (WebSocket mode)');
+        }
+
+        // Helper: map sidebar preset names to backend filter names
+        function _mapPresetToFilter(preset) {
+            if (!preset) return 'none';
+            const map = {
+                // Geometric warps
+                'smile': 'smile', 'eyebrow': 'eyebrow_raise', 'lip': 'lip_widen',
+                'slim': 'face_slim', 'eye_scale': 'eye_scaling',
+                // Emoji presets (direct names from process.py _EMOJI_PRESETS_MAP)
+                'alien': 'alien', 'robot': 'robot', 'clown': 'clown',
+                'star_eyes': 'star_eyes', 'heart_eyes': 'heart_eyes', 'crying': 'crying',
+                // Makeup
+                'makeup_lips': 'makeup_lips', 'makeup_eyeshadow': 'makeup_eyeshadow',
+                'makeup_blush': 'makeup_blush',
+                // Glasses
+                'glasses': 'glasses',
+                // Hair
+                'hair_color': 'hair_color',
+                // Aging
+                'aging': 'aging', 'deaging': 'deaging',
+                // Cartoon
+                'cartoon': 'cartoon',
+                // Beard
+                'beard': 'beard',
+            };
+            return map[preset] || preset;
+        }
+
+        // Build full config payload with all extra parameters
+        function _buildLiveConfig(preset) {
+            const filterName = _mapPresetToFilter(preset);
+            const config = {
+                type: 'config',
+                filter: filterName,
+                intensity: Number(intensitySlider?.value || 50),
+            };
+
+            // Makeup params
+            const makeupColor = document.getElementById('makeupColor');
+            const makeupOpacity = document.getElementById('makeupOpacity');
+            if (filterName.startsWith('makeup_')) {
+                // Convert hex color to OpenCV hue
+                const hex = (makeupColor?.value || '#ff0000').replace('#', '');
+                const r = parseInt(hex.substring(0, 2), 16);
+                const g = parseInt(hex.substring(2, 4), 16);
+                const b = parseInt(hex.substring(4, 6), 16);
+                // Approximate HSV hue from RGB
+                const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
+                let h = 0;
+                if (maxC !== minC) {
+                    if (maxC === r) h = 60 * (((g - b) / (maxC - minC)) % 6);
+                    else if (maxC === g) h = 60 * ((b - r) / (maxC - minC) + 2);
+                    else h = 60 * ((r - g) / (maxC - minC) + 4);
+                }
+                if (h < 0) h += 360;
+                config.makeup_hue = Math.round(h / 2); // OpenCV hue range is 0-179
+                config.makeup_opacity = Number(makeupOpacity?.value || 50) / 100.0;
+            }
+
+            // Glasses type
+            if (filterName === 'glasses') {
+                const glassesSelect = document.getElementById('glassesSelect');
+                config.glasses_type = glassesSelect?.value || 'aviator';
+            }
+
+            // Hair color
+            if (filterName === 'hair_color') {
+                const hairPicker = document.getElementById('hairColorPicker');
+                const hairOpacity = document.getElementById('hairOpacity');
+                const hex = (hairPicker?.value || '#ff0000').replace('#', '');
+                const r = parseInt(hex.substring(0, 2), 16);
+                const g = parseInt(hex.substring(2, 4), 16);
+                const b = parseInt(hex.substring(4, 6), 16);
+                config.hair_color = `${r},${g},${b}`;
+                config.hair_intensity = Number(hairOpacity?.value || 60) / 100.0;
+            }
+
+            // Beard type & darkness
+            if (filterName === 'beard') {
+                config.beard_type = document.getElementById('beardSelect')?.value || 'beard';
+                config.beard_darkness = Number(document.getElementById('beardDarknessSlider')?.value || 60);
+                config.intensity = config.beard_darkness;
+            }
+
+            // Eye scale uses raw slider value (-100 to 100)
+            if (filterName === 'eye_scaling') {
+                const eyeSlider = document.getElementById('eyeSizeSlider');
+                config.intensity = Number(eyeSlider?.value || 0);
+            }
+
+            return config;
+        }
+
+        function stopLiveMode() {
+            isLiveMode = false;
+            if (liveRafId) { cancelAnimationFrame(liveRafId); liveRafId = null; }
+            if (liveFpsTimer) { clearInterval(liveFpsTimer); liveFpsTimer = null; }
+            // Close WebSocket
+            if (_liveWs) {
+                try { _liveWs.close(); } catch (_) {}
+                _liveWs = null;
+                _wsReady = false;
+            }
+            _wsPendingFrame = false;
+            liveFpsBadge.style.display = 'none';
+            liveIndicator.style.display = 'none';
+            liveFpsBadge.textContent = '0 FPS';
+            if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
+            console.log('[Live] Stopped');
+        }
+
+        // ── rAF-based processing loop (throttled to target FPS) ────────
+        function liveRafLoop(timestamp) {
+            if (!isLiveMode) return;
+
+            // Throttle: skip frame if too soon
+            if (timestamp - _lastFrameTime >= _TARGET_INTERVAL) {
+                _lastFrameTime = timestamp;
+
+                if (!liveProcessing) {
+                    liveProcessing = true;
+                    processLiveFrame().finally(() => {
+                        liveProcessing = false;
+                        if (isLiveMode && _liveHasPendingTick) {
+                            _liveHasPendingTick = false;
+                            liveProcessing = true;
+                            processLiveFrame().finally(() => { liveProcessing = false; });
+                        }
+                    });
+                } else {
+                    _liveHasPendingTick = true;
+                }
+            }
+
+            liveRafId = requestAnimationFrame(liveRafLoop);
+        }
+
+        async function processLiveFrame() {
+            if (!cameraStream || !isLiveMode) return;
+            if (!_wsReady || !_liveWs) return;
+            if (_wsPendingFrame) return; // throttle: wait for server to respond
+
+            const preset = getCurrentLivePreset();
+            const liveConfig = _buildLiveConfig(preset);
+
+            // Send config update
+            _liveWs.send(JSON.stringify(liveConfig));
+
+            if (!liveConfig.filter || liveConfig.filter === 'none') {
+                liveProcessedImg.style.display = 'none';
+                liveFrameCount++;
+                return;
+            }
+
+            try {
+                // Stage 1: Capture frame to canvas
+                const ctx = cameraCanvas.getContext('2d');
+                const vw = cameraVideo.videoWidth;
+                const vh = cameraVideo.videoHeight;
+                if (!vw || !vh) return;
+
+                cameraCanvas.width = vw;
+                cameraCanvas.height = vh;
+                ctx.drawImage(cameraVideo, 0, 0);
+
+                // Stage 2: Encode to base64
+                const b64 = await encodeFrameOffThread();
+                if (!isLiveMode || !_wsReady) return;
+
+                // Stage 3: Send via WebSocket
+                _wsPendingFrame = true;
+                _liveWs.send(JSON.stringify({
+                    type: 'frame',
+                    data: b64,
+                }));
+
+                _liveErrorCount = 0;
+            } catch (err) {
+                _liveErrorCount++;
+                _wsPendingFrame = false;
+                if (_liveErrorCount <= 3) {
+                    console.warn('[Live] Frame error:', err.message);
+                }
+                if (_liveErrorCount >= _MAX_LIVE_ERRORS) {
+                    liveIndicator.textContent = '● ERROR';
+                    liveIndicator.style.background = 'rgba(255,165,0,0.85)';
+                }
+            }
+        }
+
+        // ── Determine which preset the sidebar has selected ─────────────
+        function getCurrentLivePreset() {
+            // Check emoji buttons first
+            const activeEmoji = document.querySelector('.emoji-btn.emoji-active');
+            if (activeEmoji) return activeEmoji.dataset.preset;
+
+            // Check if a sidebar operation is selected
+            if (selectedOperation) {
+                const allowedLiveOps = new Set([
+                    'smile', 'eyebrow', 'lip', 'slim',
+                    'aging', 'deaging', 'fft', 'cartoon',
+                    'eye_scale', 'beard',
+                    'makeup_lips', 'makeup_eyeshadow', 'makeup_blush',
+                    'glasses', 'hair_color',
+                ]);
+                if (allowedLiveOps.has(selectedOperation)) return selectedOperation;
+            }
+            return currentLivePreset;
+        }
+
+        // ── Wire sidebar emoji buttons to live mode ─────────────────────
+        document.querySelectorAll('.emoji-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const wasActive = btn.classList.contains('emoji-active');
+                document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('emoji-active'));
+
+                if (wasActive) {
+                    currentLivePreset = null;
+                    btn.style.outline = '';
+                } else {
+                    btn.classList.add('emoji-active');
+                    currentLivePreset = btn.dataset.preset;
+                    btn.style.outline = '2px solid var(--primary-color)';
+                }
+
+                document.querySelectorAll('.emoji-btn:not(.emoji-active)').forEach(b => {
+                    b.style.outline = '';
+                });
+            });
+        });
+
+        // ── Wire sidebar ACTION buttons to live mode ────────────────────
+        // When live is active, clicking Apply buttons on sidebar panels
+        // switches the live filter instead of running a one-shot API call.
+
+        const livePanelButtons = {
+            'applyMakeupBtn': () => {
+                const region = document.getElementById('makeupRegion')?.value || 'lips';
+                selectedOperation = `makeup_${region}`;
+            },
+            'applyGlassesBtn': () => { selectedOperation = 'glasses'; },
+            'applyHairColorBtn': () => { selectedOperation = 'hair_color'; },
+            'cartoonBtn': () => { selectedOperation = 'cartoon'; },
+            'beardBtn': () => { selectedOperation = 'beard'; },
+            'eyeSizeBtn': () => { selectedOperation = 'eye_scale'; },
+        };
+
+        Object.entries(livePanelButtons).forEach(([btnId, setOp]) => {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            // Add a capture-phase listener that fires BEFORE the normal handler
+            btn.addEventListener('click', () => {
+                if (isLiveMode) {
+                    setOp();
+                    console.log('[Live] Sidebar switched to:', selectedOperation);
+                }
+            }, true); // capture phase
+        });
+
+        // Also wire makeup region dropdown to update immediately in live mode
+        const makeupRegionSelect = document.getElementById('makeupRegion');
+        if (makeupRegionSelect) {
+            makeupRegionSelect.addEventListener('change', () => {
+                if (isLiveMode && selectedOperation?.startsWith('makeup_')) {
+                    const region = makeupRegionSelect.value || 'lips';
+                    selectedOperation = `makeup_${region}`;
+                    console.log('[Live] Makeup region changed to:', selectedOperation);
+                }
+            });
+        }
+
+        // Wire glasses dropdown to push config immediately in live mode
+        const liveGlassesSelect = document.getElementById('glassesSelect');
+        if (liveGlassesSelect) {
+            liveGlassesSelect.addEventListener('change', () => {
+                if (isLiveMode) {
+                    selectedOperation = 'glasses';
+                    console.log('[Live] Glasses type changed to:', liveGlassesSelect.value);
+                }
+            });
+        }
+
+        window.addEventListener('beforeunload', () => {
+            stopLiveMode();
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+            if (liveWorker) {
+                liveWorker.terminate();
+                liveWorker = null;
+                liveWorkerReady = false;
+            }
+        });
+
+    })();
+
 });
+

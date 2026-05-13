@@ -1296,3 +1296,21 @@ input:checked + .slider.round:before { transform: translateX(20px); }
     border-radius: 50%;
 }
 
+
+/* ¦¦ Live Mode Pulse Animation ¦¦ */
+@keyframes livePulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ¦¦ Live Mode: camera column expanded ¦¦ */
+.camera-live-expanded {
+    position: absolute !important;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 10;
+    flex: unset !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 8px !important;
+    background: var(--bg-color) !important;
+}

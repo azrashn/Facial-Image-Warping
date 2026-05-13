@@ -9,11 +9,15 @@ try:
     from routers.metrics import router as metrics_router
     from routers.process import router as process_router
     from routers.upload import router as upload_router
+    from routers.stream_router import router as stream_router
+    from routers.live_router import router as live_router
 except ModuleNotFoundError:
     from routers.export import router as export_router
     from routers.metrics import router as metrics_router
     from routers.process import router as process_router
     from routers.upload import router as upload_router
+    from routers.stream_router import router as stream_router
+    from routers.live_router import router as live_router
 
 
 app = FastAPI(title="Facial Warping API - Group 14")
@@ -42,4 +46,7 @@ app.include_router(process_router)
 app.include_router(upload_router)
 app.include_router(metrics_router)
 app.include_router(export_router)
+app.include_router(ai_router)
+app.include_router(stream_router)
+app.include_router(live_router)
 

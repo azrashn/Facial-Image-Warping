@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+import time
 import urllib.request
 from typing import Optional
 
@@ -52,6 +54,51 @@ def _has_duplicate_vertices(tri: np.ndarray, eps: float = 1e-4) -> bool:
 
 
 _TASK_LANDMARKER = None
+_LM_STATE_LOCK = threading.Lock()
+_LM_PREV_POINTS: Optional[np.ndarray] = None
+_LM_PREV_TIME = 0.0
+_LM_PREV_SHAPE: tuple[int, int] | None = None
+
+
+def _estimate_head_pose(lm: np.ndarray, w: int, h: int) -> tuple[float, float, float]:
+    """Approximate (yaw, pitch, roll) in degrees using solvePnP."""
+    if lm.shape[0] < 468:
+        return 0.0, 0.0, 0.0
+    # Stable canonical 3D-ish template for core points.
+    model_points = np.array(
+        [
+            [0.0, 0.0, 0.0],        # nose tip (1)
+            [0.0, -63.0, -12.0],    # chin (152)
+            [-45.0, 32.0, -24.0],   # left eye corner (33)
+            [45.0, 32.0, -24.0],    # right eye corner (263)
+            [-34.0, -28.0, -20.0],  # left mouth corner (61)
+            [34.0, -28.0, -20.0],   # right mouth corner (291)
+        ],
+        dtype=np.float32,
+    )
+    image_points = np.array(
+        [lm[1], lm[152], lm[33], lm[263], lm[61], lm[291]], dtype=np.float32
+    )
+    focal = float(max(w, h))
+    cam = np.array([[focal, 0, w / 2.0], [0, focal, h / 2.0], [0, 0, 1]], dtype=np.float32)
+    dist = np.zeros((4, 1), dtype=np.float32)
+    ok, rvec, _tvec = cv2.solvePnP(
+        model_points, image_points, cam, dist, flags=cv2.SOLVEPNP_ITERATIVE
+    )
+    if not ok:
+        return 0.0, 0.0, 0.0
+    rot, _ = cv2.Rodrigues(rvec)
+    sy = np.sqrt(rot[0, 0] * rot[0, 0] + rot[1, 0] * rot[1, 0])
+    singular = sy < 1e-6
+    if not singular:
+        pitch = np.degrees(np.arctan2(rot[2, 1], rot[2, 2]))
+        yaw = np.degrees(np.arctan2(-rot[2, 0], sy))
+        roll = np.degrees(np.arctan2(rot[1, 0], rot[0, 0]))
+    else:
+        pitch = np.degrees(np.arctan2(-rot[1, 2], rot[1, 1]))
+        yaw = np.degrees(np.arctan2(-rot[2, 0], sy))
+        roll = 0.0
+    return float(yaw), float(pitch), float(roll)
 _TASK_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/latest/face_landmarker.task"
@@ -81,6 +128,132 @@ def _get_tasks_face_landmarker():
     return _TASK_LANDMARKER
 
 
+class PersistentFaceMesh:
+    """
+    Single persistent MediaPipe face landmark detector for video streaming.
+
+    Supports two backends:
+      1. **Tasks API** (mediapipe ≥0.10.x) — ``FaceLandmarker`` in ``VIDEO`` mode.
+         This is the primary path for modern mediapipe where ``mp.solutions``
+         has been removed.
+      2. **Solutions API** (legacy mediapipe <0.10) — ``FaceMesh`` with
+         ``static_image_mode=False``.
+
+    Do **not** create a new detector per frame — that destroys temporal
+    tracking and tanks FPS.
+    """
+
+    def __init__(self) -> None:
+        self._backend: str = "none"
+        self._mesh = None           # Legacy solutions FaceMesh
+        self._landmarker = None     # Tasks API FaceLandmarker
+        self._frame_ts_ms: int = 0  # Monotonic timestamp for VIDEO mode
+
+        # ── Try Tasks API first (mediapipe >=0.10.x) ──
+        try:
+            from mediapipe.tasks.python.vision import (
+                FaceLandmarker,
+                FaceLandmarkerOptions,
+            )
+            from mediapipe.tasks.python.core.base_options import BaseOptions
+            from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
+                VisionTaskRunningMode,
+            )
+
+            model_path = _face_landmarker_model_path()
+            options = FaceLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=model_path),
+                running_mode=VisionTaskRunningMode.VIDEO,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._landmarker = FaceLandmarker.create_from_options(options)
+            self._backend = "tasks_video"
+            logger.info("PersistentFaceMesh: using Tasks API (VIDEO mode)")
+            return
+        except Exception as exc:
+            logger.debug("Tasks API VIDEO init failed: %s — trying solutions", exc)
+
+        # ── Fallback: legacy solutions API ──
+        if hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh"):
+            self._mesh = mp.solutions.face_mesh.FaceMesh(
+                static_image_mode=False,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._backend = "solutions"
+            logger.info("PersistentFaceMesh: using legacy solutions FaceMesh")
+            return
+
+        raise RuntimeError(
+            "No MediaPipe face landmark backend available. "
+            "Install mediapipe >= 0.10.0 (Tasks API) or a legacy version with solutions."
+        )
+
+    def detect(self, image_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Return (N, 2) float32 pixel landmarks or *None* if no face."""
+        if image_bgr is None or image_bgr.size == 0:
+            return None
+        h, w = image_bgr.shape[:2]
+
+        if self._backend == "tasks_video":
+            return self._detect_tasks(image_bgr, h, w)
+        elif self._backend == "solutions":
+            return self._detect_solutions(image_bgr, h, w)
+        return None
+
+    def _detect_tasks(self, image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
+        """Detect using Tasks API FaceLandmarker in VIDEO mode."""
+        from mediapipe.tasks.python.vision.core import image as mp_image_module
+
+        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        mp_image = mp_image_module.Image(mp_image_module.ImageFormat.SRGB, rgb)
+
+        # VIDEO mode requires monotonically increasing timestamps
+        self._frame_ts_ms += 33  # ~30 FPS cadence
+        try:
+            result = self._landmarker.detect_for_video(mp_image, self._frame_ts_ms)
+        except Exception as exc:
+            logger.debug("Tasks detect_for_video failed: %s", exc)
+            return None
+
+        if not result.face_landmarks:
+            return None
+        lm_list = result.face_landmarks[0]
+        pts = np.array([[p.x * w, p.y * h] for p in lm_list], dtype=np.float32)
+        if pts.shape[0] > 468:
+            pts = pts[:468].copy()
+        return pts
+
+    def _detect_solutions(self, image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
+        """Detect using legacy solutions FaceMesh."""
+        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        res = self._mesh.process(rgb)
+        if not res.multi_face_landmarks:
+            return None
+        lm = res.multi_face_landmarks[0].landmark
+        return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+
+    def close(self) -> None:
+        """Release underlying detector resources."""
+        try:
+            if self._mesh is not None:
+                self._mesh.close()
+            if self._landmarker is not None:
+                self._landmarker.close()
+        except Exception:
+            pass
+
+
+def detect_face_landmarks_live(mesh: PersistentFaceMesh, image_bgr: np.ndarray) -> Optional[np.ndarray]:
+    """Landmark detection using a persistent :class:`PersistentFaceMesh` instance."""
+    return mesh.detect(image_bgr)
+
+
 def _landmarks_via_tasks(image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
     from mediapipe.tasks.python.vision.core import image as mp_image_module
 
@@ -94,6 +267,53 @@ def _landmarks_via_tasks(image_bgr: np.ndarray, h: int, w: int) -> Optional[np.n
     if pts.shape[0] > 468:
         pts = pts[:468].copy()
     return pts
+
+
+def _stable_ema_landmarks(raw_pts: Optional[np.ndarray], h: int, w: int) -> Optional[np.ndarray]:
+    """Temporal smoothing + confidence gating for live tracking stability."""
+    global _LM_PREV_POINTS, _LM_PREV_TIME, _LM_PREV_SHAPE
+    if raw_pts is None or raw_pts.shape[0] < 100:
+        with _LM_STATE_LOCK:
+            if _LM_PREV_POINTS is not None and _LM_PREV_SHAPE == (h, w):
+                return _LM_PREV_POINTS.copy()
+        return None
+
+    now = time.perf_counter()
+    face_scale = float(np.linalg.norm(raw_pts[133] - raw_pts[362])) if raw_pts.shape[0] > 362 else 0.0
+    min_face_scale = max(min(h, w) * 0.06, 12.0)
+    if face_scale < min_face_scale:
+        # Confidence gating: likely unstable / no true face lock.
+        with _LM_STATE_LOCK:
+            if _LM_PREV_POINTS is not None and _LM_PREV_SHAPE == (h, w):
+                return _LM_PREV_POINTS.copy()
+        return None
+
+    alpha = float(np.clip(float(os.environ.get("LIVE_LANDMARK_EMA_ALPHA", 0.72)), 0.65, 0.80))
+    with _LM_STATE_LOCK:
+        stale_state = (
+            _LM_PREV_POINTS is None
+            or _LM_PREV_SHAPE != (h, w)
+            or (now - _LM_PREV_TIME) > 1.0
+        )
+        if stale_state:
+            _LM_PREV_POINTS = raw_pts.copy()
+            _LM_PREV_TIME = now
+            _LM_PREV_SHAPE = (h, w)
+            return _LM_PREV_POINTS.copy()
+
+        prev = _LM_PREV_POINTS
+        mean_motion = float(np.mean(np.linalg.norm(raw_pts - prev, axis=1)))
+        max_allowed_jump = max(face_scale * 0.35, 8.0)
+        if mean_motion > max_allowed_jump:
+            # Reject unstable frame and keep previous stable landmarks.
+            _LM_PREV_TIME = now
+            return prev.copy()
+
+        smoothed = alpha * raw_pts + (1.0 - alpha) * prev
+        _LM_PREV_POINTS = smoothed
+        _LM_PREV_TIME = now
+        _LM_PREV_SHAPE = (h, w)
+        return smoothed.copy()
 
 
 def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
@@ -114,9 +334,10 @@ def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
         if not res.multi_face_landmarks:
             return None
         lm = res.multi_face_landmarks[0].landmark
-        return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+        raw_pts = np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+        return _stable_ema_landmarks(raw_pts, h, w)
 
-    return _landmarks_via_tasks(image_bgr, h, w)
+    return _stable_ema_landmarks(_landmarks_via_tasks(image_bgr, h, w), h, w)
 
 
 def _corners(width: int, height: int) -> np.ndarray:
@@ -267,7 +488,11 @@ def _face_scale(lm: np.ndarray) -> float:
     return float(np.linalg.norm(left_eye - right_eye))
 
 
-def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_smile(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Görev 3 Düzeltmesi: Natural Smile (Diagonal Displacement & Wide Falloff).
     Dudak köşelerini sadece dikey değil, elmacık kemiklerine doğru çapraz (yukarı ve dışa) çeker.
@@ -275,17 +500,18 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     Burun ucu, çene altı ve göz altları gibi kilit noktalar sabitlenerek yırtılma engellenir.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
             
         px = float(intensity) * 0.5
         deltas = np.zeros_like(lm)
         face_sz = _face_scale(lm)
+        yaw, _pitch, _roll = _estimate_head_pose(lm, image_bgr.shape[1], image_bgr.shape[0])
         
         # Etki Alanını Genişlet: Yanak kasları ve çevresinin harekete dahil olması için sigma büyütüldü
         sigma = face_sz * 0.25
-        
+
         # 61: Sol dudak köşesi, 291: Sağ dudak köşesi
         w_left = _gaussian_falloff(lm, 61, sigma)
         w_right = _gaussian_falloff(lm, 291, sigma)
@@ -311,7 +537,11 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
             dy_damp = 1.0 - np.exp(-0.5 * (dist_to_center_x / (half_width * 0.6)) ** 2)
             
             # Displacement uygulaması (Hem X hem Y ekseni)
-            deltas[i, 0] += (dx_left + dx_right)
+            # Head-turn compensation: reduce far-side horizontal pull for large yaw.
+            # yaw > 0 => face turned right, left side is farther and attenuated more.
+            far_left = 1.0 - 0.35 * np.clip(max(0.0, yaw) / 35.0, 0.0, 1.0)
+            far_right = 1.0 - 0.35 * np.clip(max(0.0, -yaw) / 35.0, 0.0, 1.0)
+            deltas[i, 0] += (dx_left * far_left + dx_right * far_right)
             deltas[i, 1] += (dy_left + dy_right) * dy_damp
             
         # Sabitlenecek Sınır Noktaları (Anchor Points) - Keskin bükülmeleri engeller
@@ -336,7 +566,11 @@ def apply_smile(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_eyebrow_raise(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Rigid-body eyebrow lift: BOTH the upper and lower boundary
     landmarks of each brow translate by the exact same delta,
@@ -344,7 +578,7 @@ def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     forehead prevents mesh tearing above the brow.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
         strength = _clamp_intensity(intensity)
@@ -392,14 +626,18 @@ def apply_eyebrow_raise(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_lip_widen(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Görev 1 Düzeltmesi: Lip Widen (Distance-Based Weighted Displacement).
     Dudak köşesi etrafındaki noktaları Gauss ağırlığıyla yatayda kaydırarak
     yırtılmayı (pixel tearing) engeller.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
             
@@ -427,7 +665,11 @@ def apply_lip_widen(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_face_slim(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Face slim with smooth radial contraction toward the nose tip.
     Each jaw/cheek landmark is pulled along the vector toward the
@@ -435,11 +677,12 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     decaying smoothly toward inner cheeks.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
         strength = _clamp_intensity(intensity)
         deltas = np.zeros_like(lm)
+        yaw, _pitch, _roll = _estimate_head_pose(lm, image_bgr.shape[1], image_bgr.shape[0])
 
         face_sz = _face_scale(lm)
         nose_tip = lm[1].copy()  # landmark 1 = nose tip
@@ -479,6 +722,12 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
             pull_x = direction[0] * weight * max_pull
             pull_y = direction[1] * weight * max_pull * 0.3  # dampen vertical
 
+            # Pose-aware attenuation: preserve perspective on far side.
+            is_left = lm[idx, 0] < nose_tip[0]
+            if yaw > 0 and is_left:
+                pull_x *= (1.0 - 0.35 * np.clip(yaw / 35.0, 0.0, 1.0))
+            if yaw < 0 and not is_left:
+                pull_x *= (1.0 - 0.35 * np.clip((-yaw) / 35.0, 0.0, 1.0))
             deltas[idx, 0] += pull_x
             deltas[idx, 1] += pull_y
 
@@ -501,7 +750,11 @@ def apply_face_slim(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_eye_scaling(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Görev 2 Düzeltmesi: Radial Eye Scaling (Smooth Falloff & Anchors).
     Gözleri kendi merkezlerinden orantılı şekilde büyütür/küçültür.
@@ -509,7 +762,7 @@ def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     Kaş, burun köprüsü ve yanak üstü gibi anchor noktalar KESİNLİKLE sabitlenir.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
 
@@ -565,7 +818,11 @@ def apply_eye_scaling(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
+def apply_emoji_preset(
+    image_bgr: np.ndarray,
+    emoji_name: str,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Apply predefined expression presets by chaining existing warps.
     """
@@ -575,13 +832,21 @@ def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
         out = image_bgr.copy()
 
         if preset.get("smile", 0.0) > 0:
-            out = apply_smile(out, int(round(preset["smile"] * 100)))
+            out = apply_smile(
+                out, int(round(preset["smile"] * 100)), landmarks=landmarks
+            )
         if preset.get("eyebrow_raise", 0.0) > 0:
-            out = apply_eyebrow_raise(out, int(round(preset["eyebrow_raise"] * 100)))
+            out = apply_eyebrow_raise(
+                out, int(round(preset["eyebrow_raise"] * 100)), landmarks=landmarks
+            )
         if preset.get("lip_widen", 0.0) > 0:
-            out = apply_lip_widen(out, int(round(preset["lip_widen"] * 100)))
+            out = apply_lip_widen(
+                out, int(round(preset["lip_widen"] * 100)), landmarks=landmarks
+            )
         if preset.get("eye_enlarge", 0.0) != 0:
-            out = apply_eye_scaling(out, int(round(preset["eye_enlarge"] * 100)))
+            out = apply_eye_scaling(
+                out, int(round(preset["eye_enlarge"] * 100)), landmarks=landmarks
+            )
 
         return out
     except Exception as exc:
@@ -589,7 +854,11 @@ def apply_emoji_preset(image_bgr: np.ndarray, emoji_name: str) -> np.ndarray:
         return image_bgr.copy()
 
 
-def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
+def apply_beard(
+    image_bgr: np.ndarray,
+    intensity: int,
+    landmarks: Optional[np.ndarray] = None,
+) -> np.ndarray:
     """
     Görev 5 Düzeltmesi: Ultimate Facial Hair (Multiply Blend & Normalized Mask).
     Sakal/Bıyık dokusunu fiziksel olarak koyulaştırmak için Multiply Blend kullanır.
@@ -597,7 +866,7 @@ def apply_beard(image_bgr: np.ndarray, intensity: int) -> np.ndarray:
     Alttaki deri rengini "yutmak" yerine direkt olarak cilt piksellerini karartır.
     """
     try:
-        lm = detect_face_landmarks(image_bgr)
+        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
 
