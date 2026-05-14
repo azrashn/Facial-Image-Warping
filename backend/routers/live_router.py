@@ -190,8 +190,13 @@ def _apply_filter(
             region = filter_name.split("_", 1)[1]  # lips, eyeshadow, blush
             hue = config.get("makeup_hue", 0)
             opacity = config.get("makeup_opacity", 0.5)
-            rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            lm_list = get_landmarks(preprocess_image(rgb_img))
+            # Realtime pipeline: smoothed pixel landmarks → normalize to [0,1]
+            if landmarks is not None:
+                h_f, w_f = frame.shape[:2]
+                lm_list = [[float(pt[0]) / w_f, float(pt[1]) / h_f] for pt in landmarks]
+            else:
+                rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                lm_list = get_landmarks(preprocess_image(rgb_img))
             return apply_virtual_makeup(
                 image=frame, landmarks=lm_list,
                 region=region, hue=int(hue), opacity=float(opacity),

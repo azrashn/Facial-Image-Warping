@@ -690,38 +690,21 @@ def _apply_color_with_mask(
     mask_bool = mask_float > 0.01
 
     hsv[:, :, 0][mask_bool] = (
-        hsv[:, :, 0][mask_bool] * 0.15 + hue * 0.85
+        hsv[:, :, 0][mask_bool] * 0.28 + hue * 0.72
     )
     hsv[:, :, 1][mask_bool] = np.clip(
-        hsv[:, :, 1][mask_bool] * saturation_multiplier + 95,
-        0,
-        255,
-    )
-    hsv[:, :, 2][mask_bool] = np.clip(
-        hsv[:, :, 2][mask_bool] * 1.03 + 8,
+        hsv[:, :, 1][mask_bool] * saturation_multiplier + 6,
         0,
         255,
     )
 
     colored = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    target_hsv = np.uint8([[[hue, 255, 255]]])
-    target_bgr = cv2.cvtColor(target_hsv, cv2.COLOR_HSV2BGR)[0, 0].astype(np.float32)
-    color_layer = np.empty_like(image, dtype=np.float32)
-    color_layer[:] = target_bgr
-
-    color_strength = 0.76 if opacity >= 0.45 else 0.58
-    colored = (
-        colored.astype(np.float32) * (1.0 - color_strength)
-        + color_layer * color_strength
-    )
-
     soft_mask = cv2.GaussianBlur(mask_float, (0, 0), blur_sigma)
     max_value = float(soft_mask.max())
     if normalize_mask and max_value > 0:
         soft_mask /= max_value
-    visible_opacity = float(np.clip(opacity * 1.35 + 0.12, 0.0, 1.0))
-    soft_mask = soft_mask[..., None] * visible_opacity
+    soft_mask = soft_mask[..., None] * opacity
 
     result = (
         colored.astype(np.float32) * soft_mask
@@ -806,13 +789,17 @@ def _add_blush_gradient(
 
 def apply_virtual_makeup(
     image: np.ndarray,
-    landmarks: list,
+    landmarks: list = None,
     region: str = "lip",
     hue: int = 0,
     opacity: float = 0.5,
 ) -> np.ndarray:
     """
     Virtual makeup using landmark masks + HSV color manipulation + alpha blending.
+
+    Realtime uyumluluğu: landmarks parametresi dışarıdan verilirse doğrudan
+    kullanılır (PersistentFaceMesh + EMA), verilmezse detect_face_landmarks
+    ile algılanır.
 
     region:
     - lip
@@ -821,6 +808,19 @@ def apply_virtual_makeup(
     """
     if image is None:
         raise ValueError("Input image is None.")
+
+    # ── Landmark çözümleme (tek seferlik) ─────────────────────────────
+    if landmarks is None:
+        try:
+            from modules.warping_module import detect_face_landmarks
+        except ModuleNotFoundError:
+            from backend.modules.warping_module import detect_face_landmarks
+        lm = detect_face_landmarks(image)
+        if lm is None:
+            raise ValueError("Landmarks could not be detected.")
+        # detect_face_landmarks pixel coords (N,2) → normalize to [0,1]
+        h_img, w_img = image.shape[:2]
+        landmarks = [[float(pt[0]) / w_img, float(pt[1]) / h_img] for pt in lm]
 
     if not landmarks:
         raise ValueError("Landmarks are required for makeup.")
@@ -846,9 +846,7 @@ def apply_virtual_makeup(
             raise ValueError("Not enough lip landmarks were detected.")
         cv2.fillPoly(mask, [outer_points], 1.0)
         if len(inner_points) >= 3:
-            inner_mask = np.zeros((h, w), dtype=np.float32)
-            cv2.fillPoly(inner_mask, [inner_points], 1.0)
-            mask = np.clip(mask - inner_mask * 0.72, 0.0, 1.0)
+            cv2.fillPoly(mask, [inner_points], 0.0)
         saturation_multiplier = 1.45
         blur_sigma = max(1.5, min(h, w) * 0.004)
         opacity = min(opacity, 0.75)
@@ -871,9 +869,9 @@ def apply_virtual_makeup(
         _add_eyeshadow_gradient(mask, left_eye_points, left_brow_points)
         _add_eyeshadow_gradient(mask, right_eye_points, right_brow_points)
 
-        saturation_multiplier = 1.55
-        blur_sigma = max(2.5, min(h, w) * 0.006)
-        opacity = min(opacity, 0.78)
+        saturation_multiplier = 1.65
+        blur_sigma = max(3.0, min(h, w) * 0.008)
+        opacity = min(opacity * 1.6, 0.95)
         normalize_mask = False
 
     elif region == "blush":
@@ -883,23 +881,17 @@ def apply_virtual_makeup(
         lx, ly = _landmark_to_point(left_cheek_center, w, h)
         rx, ry = _landmark_to_point(right_cheek_center, w, h)
 
-        # Estimate blush size from inter-cheek distance
-        cheek_dist = max(30, int(np.sqrt((rx - lx) ** 2 + (ry - ly) ** 2)))
-        blush_rx = max(15, int(cheek_dist * 0.32))
-        blush_ry = max(12, int(cheek_dist * 0.24))
+        radius_x = max(10.0, min(w, h) * 0.105)
+        radius_y = max(8.0, min(w, h) * 0.068)
 
-        # Draw soft ellipses directly on cheeks — no face_oval clipping needed
-        cv2.ellipse(mask, (lx, ly), (blush_rx, blush_ry), -15, 0, 360, 1.0, -1)
-        cv2.ellipse(mask, (rx, ry), (blush_rx, blush_ry), 15, 0, 360, 1.0, -1)
+        _add_blush_gradient(mask, (lx, ly), radius_x, radius_y, -10)
+        _add_blush_gradient(mask, (rx, ry), radius_x, radius_y, 10)
+        mask *= _face_oval_float_mask(landmarks, w, h)
 
-        # Soften edges with Gaussian blur
-        ksize = max(15, blush_rx * 2) | 1  # ensure odd
-        mask = cv2.GaussianBlur(mask, (ksize, ksize), ksize * 0.35)
-
-        saturation_multiplier = 1.50
-        blur_sigma = max(3.0, min(h, w) * 0.008)
-        opacity = min(opacity, 0.72)
-        normalize_mask = True
+        saturation_multiplier = 1.35
+        blur_sigma = max(5.0, min(h, w) * 0.012)
+        opacity = min(opacity * 1.5, 0.65)
+        normalize_mask = False
 
     else:
         raise ValueError("Region must be 'lip', 'blush', or 'eyeshadow'.")

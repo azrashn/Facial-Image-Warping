@@ -737,7 +737,11 @@ async def process_makeup(
 
         target_hue = _hex_color_to_hue(color, hue)
         try:
-            landmarks = _safe_landmarks_for_image(original)
+            rgb_img = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
+            landmarks = get_landmarks(preprocess_image(rgb_img))
+            if not landmarks:
+                raise ValueError("No face detected.")
+                
             processed = apply_virtual_makeup(
                 image=original,
                 landmarks=landmarks,
@@ -745,8 +749,8 @@ async def process_makeup(
                 hue=target_hue,
                 opacity=opacity,
             )
-        except HTTPException as exc:
-            logger.warning("Makeup landmarks unavailable; using approximate mask: %s", exc.detail)
+        except Exception as exc:
+            logger.warning("Makeup landmarks unavailable; using approximate mask: %s", exc)
             processed = apply_virtual_makeup_fallback(
                 image=original,
                 region=region,
