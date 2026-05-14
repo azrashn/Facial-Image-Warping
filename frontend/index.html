@@ -88,8 +88,10 @@
                         <button class="emoji-btn" id="btnPresetAlien" data-preset="alien" title="Alien">👽</button>
                         <button class="emoji-btn" id="btnPresetRobot" data-preset="robot" title="Robot">🤖</button>
                         <button class="emoji-btn" id="btnPresetClown" data-preset="clown" title="Joker">🤡</button>
-                        <button class="emoji-btn" id="btnPresetStarEyes" data-preset="star_eyes" title="Starry Gaze">🤩</button>
-                        <button class="emoji-btn" id="btnPresetHeartEyes" data-preset="heart_eyes" title="Heart-Eyes">😍</button>
+                        <button class="emoji-btn" id="btnPresetStarEyes" data-preset="star_eyes"
+                            title="Starry Gaze">🤩</button>
+                        <button class="emoji-btn" id="btnPresetHeartEyes" data-preset="heart_eyes"
+                            title="Heart-Eyes">😍</button>
                         <button class="emoji-btn" id="btnPresetCrying" data-preset="crying" title="Crying">😢</button>
                     </div>
                 </section>
@@ -116,12 +118,16 @@
                 <!-- Hair Color Panel -->
                 <section class="control-section">
                     <h3 data-i18n="hairColor">Hair Color</h3>
-                    <div class="makeup-controls" style="margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 15px;">
+                    <div class="makeup-controls"
+                        style="margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 15px;">
                         <div style="display: flex; align-items: center; width: 100%; gap: 15px;">
-                            <input type="color" id="hairColorPicker" value="#ff0000" class="custom-color-picker hair-color-circle" title="Saç Rengi Seç">
-                            <input type="range" id="hairOpacity" min="0" max="100" value="60" class="custom-range" style="flex-grow: 1;" title="Boya Yoğunluğu">
+                            <input type="color" id="hairColorPicker" value="#ff0000"
+                                class="custom-color-picker hair-color-circle" title="Saç Rengi Seç">
+                            <input type="range" id="hairOpacity" min="0" max="100" value="60" class="custom-range"
+                                style="flex-grow: 1;" title="Boya Yoğunluğu">
                         </div>
-                        <button class="op-btn" id="applyHairColorBtn" style="margin-top: 12px; width: 100%;">Apply Hair Color</button>
+                        <button class="op-btn" id="applyHairColorBtn" style="margin-top: 12px; width: 100%;">Apply Hair
+                            Color</button>
                     </div>
                 </section>
 
@@ -148,7 +154,8 @@
                             <option value="sport" data-i18n="sportStyle">Sport Wraparound</option>
                         </select>
                     </div>
-                    <button class="op-btn" id="applyGlassesBtn" style="width: 100%;" data-i18n="applyGlasses">Apply Glasses</button>
+                    <button class="op-btn" id="applyGlassesBtn" style="width: 100%;" data-i18n="applyGlasses">Apply
+                        Glasses</button>
                 </section>
 
                 <!-- Yeni Özellikler: Göz, Sakal, Yaş Karşılaştırma -->
@@ -289,7 +296,8 @@
             </nav>
 
             <!-- Multi-View Container -->
-            <div class="views-container" style="flex: 1; display: flex; flex-direction: column; position: relative; min-height: 500px; width: 100%;">
+            <div class="views-container"
+                style="flex: 1; display: flex; flex-direction: column; position: relative; min-height: 500px; width: 100%;">
 
                 <!-- 1. VISUAL VIEW (Split View / Side by Side) -->
                 <div class="view-panel active-view" id="view-visual">
@@ -328,7 +336,7 @@
 
                                     <div id="cameraPlaceholder"
                                         style="text-align: center; opacity: 0.6; padding: 20px;">
-                                        <div style="font-size: 2.5rem; margin-bottom: 8px;">📷</div>
+                                        <div style="font-size: 2.5rem; margin-bottom: 8px;"></div>
                                         <p style="margin: 0; font-weight: 500;" data-i18n="cameraOffline">Camera Offline
                                         </p>
                                     </div>
@@ -337,11 +345,17 @@
                                         style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 1; background: #000;"></video>
                                     <canvas id="cameraCanvas" style="display:none;"></canvas>
                                     <!-- Processed frame overlay for live mode -->
-                                    <img id="liveProcessedImg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 2;" alt="Processed">
+                                    <img id="liveProcessedImg"
+                                        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: none; z-index: 2;"
+                                        alt="Processed">
                                     <!-- FPS Badge (visible in live mode) -->
-                                    <span id="liveFpsBadge" style="position: absolute; top: 8px; right: 8px; font-size: 0.72rem; padding: 2px 8px; border-radius: 12px; background: rgba(0,0,0,0.6); color: #66bb6a; font-weight: 700; z-index: 5; display: none;">0 FPS</span>
+                                    <span id="liveFpsBadge"
+                                        style="position: absolute; top: 8px; right: 8px; font-size: 0.72rem; padding: 2px 8px; border-radius: 12px; background: rgba(0,0,0,0.6); color: #66bb6a; font-weight: 700; z-index: 5; display: none;">0
+                                        FPS</span>
                                     <!-- Live indicator -->
-                                    <span id="liveIndicator" style="position: absolute; top: 8px; left: 8px; font-size: 0.72rem; padding: 2px 10px; border-radius: 12px; background: rgba(255,40,40,0.85); color: white; font-weight: 700; z-index: 5; display: none; animation: livePulse 1.2s ease-in-out infinite;">● LIVE</span>
+                                    <span id="liveIndicator"
+                                        style="position: absolute; top: 8px; left: 8px; font-size: 0.72rem; padding: 2px 10px; border-radius: 12px; background: rgba(255,40,40,0.85); color: white; font-weight: 700; z-index: 5; display: none; animation: livePulse 1.2s ease-in-out infinite;">●
+                                        LIVE</span>
                                 </div>
 
                                 <!-- Camera Controls -->
@@ -349,12 +363,13 @@
                                     style="display: flex; gap: 10px; width: 100%; margin-top: 15px; justify-content: center; z-index: 2;">
                                     <button class="split-btn" id="startCameraBtn"
                                         style="flex: 1; background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); color: white; border: none;">
-                                        📷 <span data-i18n="startCamera">Start Camera</span></button>
+                                        <span data-i18n="startCamera">Start Camera</span></button>
                                     <button class="split-btn capture-mode" id="captureBtn"
                                         style="flex: 1; display: none;"><span
                                             data-i18n="capturePhoto">Capture</span></button>
                                     <button class="split-btn" id="liveBtn"
-                                        style="flex: 1; display: none; background: linear-gradient(135deg, #f85032, #e73827); color: white; border: none; font-weight: 600;">🔴 Live</button>
+                                        style="flex: 1; display: none; background: linear-gradient(135deg, #f85032, #e73827); color: white; border: none; font-weight: 600;">🔴
+                                        Live</button>
                                     <button class="split-btn stop-mode" id="stopCameraBtn"
                                         style="display: none; width: auto; padding: 0 15px;">✖</button>
                                 </div>
@@ -446,7 +461,8 @@
                             <p class="freq-title" data-i18n="origFFTPhase">Original - FFT Phase</p>
                             <p class="freq-subtitle">-π to +π</p>
                             <div class="freq-visual freq-visual-orig">
-                                <img id="origPhaseImg" src="" alt="Original Phase" style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
+                                <img id="origPhaseImg" src="" alt="Original Phase"
+                                    style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
                                 <div class="freq-center-dot" style="z-index: 2;"></div>
                             </div>
                             <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
@@ -456,7 +472,8 @@
                             <p class="freq-title" data-i18n="procFFTPhase">Processed - FFT Phase</p>
                             <p class="freq-subtitle">-π to +π</p>
                             <div class="freq-visual freq-visual-proc">
-                                <img id="procPhaseImg" src="" alt="Processed Phase" style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
+                                <img id="procPhaseImg" src="" alt="Processed Phase"
+                                    style="width: 100%; height: 100%; object-fit: cover; display: none; position: relative; z-index: 1;">
                                 <div class="freq-center-dot" style="z-index: 2;"></div>
                             </div>
                             <span class="freq-axis" data-i18n="freqHz">Frequency (Hz)</span>
@@ -478,58 +495,87 @@
 
                 <!-- 4. FFT LABORATORY VIEW -->
                 <div class="view-panel" id="view-fft-lab">
-                    <div class="fft-lab-container" style="width: 100%; height: 100%; display: flex; flex-direction: column;">
-                        
+                    <div class="fft-lab-container"
+                        style="width: 100%; height: 100%; display: flex; flex-direction: column;">
+
                         <div class="fft-subtabs" style="margin-bottom: 20px; display: flex; gap: 10px;">
-                            <button class="fft-sub-btn active" data-sub="magnitude" data-i18n="fftMagnitude" style="padding: 8px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--surface-color); color: var(--text-color); cursor: pointer; font-family: var(--font-primary);">Magnitude</button>
-                            <button class="fft-sub-btn" data-sub="phase" data-i18n="fftPhase" style="padding: 8px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: transparent; color: var(--text-color); cursor: pointer; font-family: var(--font-primary);">Phase</button>
+                            <button class="fft-sub-btn active" data-sub="magnitude" data-i18n="fftMagnitude"
+                                style="padding: 8px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--surface-color); color: var(--text-color); cursor: pointer; font-family: var(--font-primary);">Magnitude</button>
+                            <button class="fft-sub-btn" data-sub="phase" data-i18n="fftPhase"
+                                style="padding: 8px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: transparent; color: var(--text-color); cursor: pointer; font-family: var(--font-primary);">Phase</button>
                         </div>
 
                         <!-- Magnitude Sub-View -->
-                        <div id="fft-mag-view" class="fft-sub-view active-sub-view" style="width: 100%; height: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column;">
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; flex: 1; min-height: 0;">
+                        <div id="fft-mag-view" class="fft-sub-view active-sub-view"
+                            style="width: 100%; height: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column;">
+                            <div
+                                style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; flex: 1; min-height: 0;">
                                 <!-- Left side: Processed Magnitude with Selection Canvas -->
                                 <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
-                                    <h4 style="color: var(--text-color); margin-bottom: 10px;" data-i18n="procFFT">Processed - FFT Magnitude</h4>
-                                    <div class="fft-canvas-wrapper" style="position: relative; width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center;">
-                                        <img id="fftLabProcSpectrumImg" src="" alt="Processed Spectrum" style="width: 100%; height: 100%; object-fit: contain; display: none; position: absolute; top: 0; left: 0; z-index: 1;">
-                                        <p id="fftLabProcSpectrumPlaceholder" data-i18n="noDataFft" style="color: var(--text-muted); pointer-events: none; user-select: none; z-index: 0; position: absolute;">No data (Run FFT Filter)</p>
+                                    <h4 style="color: var(--text-color); margin-bottom: 10px;" data-i18n="procFFT">
+                                        Processed - FFT Magnitude</h4>
+                                    <div class="fft-canvas-wrapper"
+                                        style="position: relative; width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center;">
+                                        <img id="fftLabProcSpectrumImg" src="" alt="Processed Spectrum"
+                                            style="width: 100%; height: 100%; object-fit: contain; display: none; position: absolute; top: 0; left: 0; z-index: 1;">
+                                        <p id="fftLabProcSpectrumPlaceholder" data-i18n="noDataFft"
+                                            style="color: var(--text-muted); pointer-events: none; user-select: none; z-index: 0; position: absolute;">
+                                            No data (Run FFT Filter)</p>
                                         <!-- Interactive Overlay -->
-                                        <canvas id="fftSelectionCanvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 2;"></canvas>
+                                        <canvas id="fftSelectionCanvas"
+                                            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 2;"></canvas>
                                     </div>
                                 </div>
-                                
+
                                 <!-- Right side: Output result of selection -->
                                 <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
-                                    <h4 style="color: var(--text-color); margin-bottom: 10px;" data-i18n="selectionOutput">Selection Output</h4>
-                                    <div style="width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative;">
-                                        <img id="fftOutputImg" src="" alt="Selection Output" style="width: 100%; height: 100%; object-fit: contain; display: none;">
-                                        <p id="fftOutputPlaceholder" data-i18n="selectRegionOutput" style="color: var(--text-muted); user-select: none;">Select a region to generate output</p>
+                                    <h4 style="color: var(--text-color); margin-bottom: 10px;"
+                                        data-i18n="selectionOutput">Selection Output</h4>
+                                    <div
+                                        style="width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative;">
+                                        <img id="fftOutputImg" src="" alt="Selection Output"
+                                            style="width: 100%; height: 100%; object-fit: contain; display: none;">
+                                        <p id="fftOutputPlaceholder" data-i18n="selectRegionOutput"
+                                            style="color: var(--text-muted); user-select: none;">Select a region to
+                                            generate output</p>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Phase Sub-View -->
-                        <div id="fft-phase-view" class="fft-sub-view" style="width: 100%; height: 100%; flex: 1; min-height: 0; display: none; flex-direction: column;">
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; flex: 1; min-height: 0;">
+                        <div id="fft-phase-view" class="fft-sub-view"
+                            style="width: 100%; height: 100%; flex: 1; min-height: 0; display: none; flex-direction: column;">
+                            <div
+                                style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; flex: 1; min-height: 0;">
                                 <!-- Left side: Processed Phase with Selection Canvas -->
                                 <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
-                                    <h4 style="color: var(--text-color); margin-bottom: 10px;" data-i18n="procFFTPhase">Processed - FFT Phase</h4>
-                                    <div class="fft-canvas-wrapper" style="position: relative; width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center;">
-                                        <img id="fftLabProcPhaseImg" src="" alt="Processed Phase" style="width: 100%; height: 100%; object-fit: contain; display: none; position: absolute; top: 0; left: 0; z-index: 1;">
-                                        <p id="fftLabProcPhasePlaceholder" data-i18n="noDataFft" style="color: var(--text-muted); pointer-events: none; user-select: none; z-index: 0; position: absolute;">No data (Run FFT Filter)</p>
+                                    <h4 style="color: var(--text-color); margin-bottom: 10px;" data-i18n="procFFTPhase">
+                                        Processed - FFT Phase</h4>
+                                    <div class="fft-canvas-wrapper"
+                                        style="position: relative; width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center;">
+                                        <img id="fftLabProcPhaseImg" src="" alt="Processed Phase"
+                                            style="width: 100%; height: 100%; object-fit: contain; display: none; position: absolute; top: 0; left: 0; z-index: 1;">
+                                        <p id="fftLabProcPhasePlaceholder" data-i18n="noDataFft"
+                                            style="color: var(--text-muted); pointer-events: none; user-select: none; z-index: 0; position: absolute;">
+                                            No data (Run FFT Filter)</p>
                                         <!-- Interactive Overlay -->
-                                        <canvas id="fftPhaseCanvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 2;"></canvas>
+                                        <canvas id="fftPhaseCanvas"
+                                            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: crosshair; z-index: 2;"></canvas>
                                     </div>
                                 </div>
-                                
+
                                 <!-- Right side: Output result of selection -->
                                 <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
-                                    <h4 style="color: var(--text-color); margin-bottom: 10px;" data-i18n="selectionOutput">Selection Output</h4>
-                                    <div style="width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative;">
-                                        <img id="fftPhaseOutputImg" src="" alt="Phase Selection Output" style="width: 100%; height: 100%; object-fit: contain; display: none;">
-                                        <p id="fftPhaseOutputPlaceholder" data-i18n="selectRegionOutput" style="color: var(--text-muted); user-select: none;">Select a region to generate output</p>
+                                    <h4 style="color: var(--text-color); margin-bottom: 10px;"
+                                        data-i18n="selectionOutput">Selection Output</h4>
+                                    <div
+                                        style="width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative;">
+                                        <img id="fftPhaseOutputImg" src="" alt="Phase Selection Output"
+                                            style="width: 100%; height: 100%; object-fit: contain; display: none;">
+                                        <p id="fftPhaseOutputPlaceholder" data-i18n="selectRegionOutput"
+                                            style="color: var(--text-muted); user-select: none;">Select a region to
+                                            generate output</p>
                                     </div>
                                 </div>
                             </div>
