@@ -689,9 +689,11 @@ def _apply_color_with_mask(
 
     mask_bool = mask_float > 0.01
 
-    hsv[:, :, 0][mask_bool] = (
-        hsv[:, :, 0][mask_bool] * 0.28 + hue * 0.72
-    )
+    # Hedef rengin (hue) orijinal ten rengiyle karışıp renk tekerleğinde kaymasını
+    # (örneğin morun maviye dönmesini) önlemek için hue'yu doğrudan eşitliyoruz.
+    # Yumuşak geçiş zaten aşağıdaki BGR alpha-blend (soft_mask) ile sağlanır.
+    hsv[:, :, 0][mask_bool] = hue
+    
     hsv[:, :, 1][mask_bool] = np.clip(
         hsv[:, :, 1][mask_bool] * saturation_multiplier + 6,
         0,
