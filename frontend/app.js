@@ -17,11 +17,31 @@ document.addEventListener('DOMContentLoaded', () => {
     let liveActiveStates = {};        // stacked effects dict sent to backend
     let currentLivePreset = null;     // legacy preset tracker
 
+    // ── EMOJI EXCLUSIVITY: emojis are mutually exclusive ──
+    const _EMOJI_NAMES = new Set([
+        'alien', 'robot', 'clown', 'star_eyes', 'heart_eyes', 'crying'
+    ]);
+
     /**
      * Send a stacked state update to the live WebSocket backend.
      * value=null removes the feature; otherwise it's merged/upserted.
+     *
+     * GÖREV 1: Emojis are MUTUALLY EXCLUSIVE.
+     * If a new emoji is activated, ALL other emojis are purged first.
+     * Non-emoji features (glasses, makeup, hair, etc.) remain stackable.
      */
     function sendLiveStateUpdate(feature, value) {
+        // ── GÖREV 1: Emoji exclusivity enforcement ──
+        if (value !== null && value !== undefined && _EMOJI_NAMES.has(feature)) {
+            // Purge all other active emojis before adding the new one
+            for (const key of Object.keys(liveActiveStates)) {
+                if (_EMOJI_NAMES.has(key) && key !== feature) {
+                    delete liveActiveStates[key];
+                    console.log(`[Live] Emoji exclusivity: removed '${key}' (replaced by '${feature}')`);
+                }
+            }
+        }
+
         if (value === null || value === undefined) {
             delete liveActiveStates[feature];
         } else {
@@ -1073,11 +1093,20 @@ document.addEventListener('DOMContentLoaded', () => {
     async function applyEmojiPreset(presetName, labelKey) {
         // ── LIVE MODE: route to WebSocket ──
         if (isLiveMode) {
+            // GÖREV 1: Emojis mutually exclusive — sendLiveStateUpdate handles purging
             sendLiveStateUpdate(presetName, { intensity: 50 });
-            // Also set visual active state
-            document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
+            // Deactivate all other emoji buttons, activate this one
+            document.querySelectorAll('.emoji-btn').forEach(b => {
+                b.classList.remove('active');
+                b.classList.remove('emoji-active');
+                b.style.outline = '';
+            });
             const clickedBtn = document.querySelector(`[data-preset="${presetName}"]`);
-            if (clickedBtn) clickedBtn.classList.add('active');
+            if (clickedBtn) {
+                clickedBtn.classList.add('active');
+                clickedBtn.classList.add('emoji-active');
+                clickedBtn.style.outline = '2px solid var(--primary-color)';
+            }
             return;
         }
 
@@ -1153,9 +1182,16 @@ document.addEventListener('DOMContentLoaded', () => {
         freshClownBtn.addEventListener('click', async () => {
             // ── LIVE MODE: route to WebSocket ──
             if (isLiveMode) {
+                // GÖREV 1: Emojis mutually exclusive — sendLiveStateUpdate handles purging
                 sendLiveStateUpdate('clown', { intensity: 50 });
-                document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.emoji-btn').forEach(b => {
+                    b.classList.remove('active');
+                    b.classList.remove('emoji-active');
+                    b.style.outline = '';
+                });
                 freshClownBtn.classList.add('active');
+                freshClownBtn.classList.add('emoji-active');
+                freshClownBtn.style.outline = '2px solid var(--primary-color)';
                 return;
             }
 

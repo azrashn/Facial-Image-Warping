@@ -513,51 +513,38 @@ def apply_smile(
         sigma = face_sz * 0.25
 
         # 61: Sol dudak köşesi, 291: Sağ dudak köşesi
-        w_left = _gaussian_falloff(lm, 61, sigma)
-        w_right = _gaussian_falloff(lm, 291, sigma)
+        w_left = _gaussian_falloff(lm, 61, sigma)   # (N,)
+        w_right = _gaussian_falloff(lm, 291, sigma)  # (N,)
         
         center_x = (lm[61, 0] + lm[291, 0]) / 2.0
         half_width = abs(lm[291, 0] - lm[61, 0]) / 2.0 + 1e-6
         
         # Çapraz hareket katsayıları (Elmacık kemiklerine doğru: X'te dışarı, Y'de yukarı)
-        move_x = px * 0.6  # Dışa doğru genişleme (X ekseni)
-        move_y = px * 1.0  # Yukarı kaldırma (Y ekseni)
+        move_x = px * 0.6
+        move_y = px * 1.0
         
-        for i in range(len(lm)):
-            # Sol köşe (61) için: dx negatif (sola), dy negatif (yukarı)
-            dx_left = w_left[i] * (-move_x)
-            dy_left = w_left[i] * (-move_y)
-            
-            # Sağ köşe (291) için: dx pozitif (sağa), dy negatif (yukarı)
-            dx_right = w_right[i] * (move_x)
-            dy_right = w_right[i] * (-move_y)
-            
-            # Merkezdeki (dudak ortası) piksellerin yukarı katlanmasını (Joker efekti) önle
-            dist_to_center_x = abs(lm[i, 0] - center_x)
-            dy_damp = 1.0 - np.exp(-0.5 * (dist_to_center_x / (half_width * 0.6)) ** 2)
-            
-            # Displacement uygulaması (Hem X hem Y ekseni)
-            # Head-turn compensation: reduce far-side horizontal pull for large yaw.
-            # yaw > 0 => face turned right, left side is farther and attenuated more.
-            far_left = 1.0 - 0.35 * np.clip(max(0.0, yaw) / 35.0, 0.0, 1.0)
-            far_right = 1.0 - 0.35 * np.clip(max(0.0, -yaw) / 35.0, 0.0, 1.0)
-            deltas[i, 0] += (dx_left * far_left + dx_right * far_right)
-            deltas[i, 1] += (dy_left + dy_right) * dy_damp
+        # ── VECTORIZED: all landmarks at once ──
+        dx_left = w_left * (-move_x)
+        dy_left = w_left * (-move_y)
+        dx_right = w_right * move_x
+        dy_right = w_right * (-move_y)
+        
+        dist_to_center_x = np.abs(lm[:, 0] - center_x)
+        dy_damp = 1.0 - np.exp(-0.5 * (dist_to_center_x / (half_width * 0.6)) ** 2)
+        
+        far_left = 1.0 - 0.35 * float(np.clip(max(0.0, yaw) / 35.0, 0.0, 1.0))
+        far_right = 1.0 - 0.35 * float(np.clip(max(0.0, -yaw) / 35.0, 0.0, 1.0))
+        
+        deltas[:, 0] += dx_left * far_left + dx_right * far_right
+        deltas[:, 1] += (dy_left + dy_right) * dy_damp
             
         # Sabitlenecek Sınır Noktaları (Anchor Points) - Keskin bükülmeleri engeller
         anchor_points = [
-            # Burun Ucu ve Çevresi
             1, 4, 5, 19, 94,
-            # Göz Altları
             111, 117, 118, 119, 340, 346, 347, 348,
-            # Çene Altı ve Dış Hatlar
             152, 148, 176, 149, 150, 377, 400, 378, 379, 365
         ]
-        
-        for idx in anchor_points:
-            deltas[idx] = 0.0
-            
-        # Anchor noktalarını korumak için, çok düşük (ihmal edilebilir) hareketleri tam 0'a çekiyoruz
+        deltas[anchor_points] = 0.0
         deltas[np.abs(deltas) < 0.1] = 0.0
             
         return _prepare_warp(image_bgr, lm, deltas)
@@ -609,12 +596,10 @@ def apply_eyebrow_raise(
         w_r = _gaussian_falloff(lm, right_center_idx, sigma_fg)
 
         forehead_falloff = lift * 0.4
-        for i in range(len(lm)):
-            # Only apply to points ABOVE the brow (lower y value)
-            if lm[i, 1] < lm[left_center_idx, 1]:
-                deltas[i, 1] -= w_l[i] * forehead_falloff
-            if lm[i, 1] < lm[right_center_idx, 1]:
-                deltas[i, 1] -= w_r[i] * forehead_falloff
+        # ── VECTORIZED: forehead points above brows ──
+        above_left = lm[:, 1] < lm[left_center_idx, 1]
+        above_right = lm[:, 1] < lm[right_center_idx, 1]
+        deltas[:, 1] -= (above_left * w_l + above_right * w_r) * forehead_falloff
 
         # Zero-out the brow indices from falloff so they keep exact rigid delta
         for idx in all_brow:
@@ -651,13 +636,8 @@ def apply_lip_widen(
         w_left = _gaussian_falloff(lm, 61, sigma)
         w_right = _gaussian_falloff(lm, 291, sigma)
         
-        for i in range(len(lm)):
-            # Lip Widen: dy=0, dx yatayda genişler
-            # Sol köşe (61) dışa (-x)
-            deltas[i, 0] += w_left[i] * (-px)
-            
-            # Sağ köşe (291) dışa (+x)
-            deltas[i, 0] += w_right[i] * (px)
+        # ── VECTORIZED: all landmarks at once ──
+        deltas[:, 0] += w_left * (-px) + w_right * px
             
         return _prepare_warp(image_bgr, lm, deltas)
     except Exception as exc:
@@ -695,54 +675,52 @@ def apply_face_slim(
             162, 21, 54, 103, 67, 109
         ]
 
-        # Compute max distance from nose tip among jaw points
-        jaw_positions = lm[jaw_contour]
-        jaw_vecs = jaw_positions - nose_tip
-        jaw_dists = np.linalg.norm(jaw_vecs, axis=1)
+        # ── VECTORIZED jaw displacement ──
+        jaw_positions = lm[jaw_contour]  # (J, 2)
+        jaw_vecs = jaw_positions - nose_tip  # (J, 2)
+        jaw_dists = np.linalg.norm(jaw_vecs, axis=1)  # (J,)
         max_jaw_dist = float(np.max(jaw_dists)) if np.max(jaw_dists) > 1e-3 else 1.0
-
         max_pull = face_sz * 0.10 * strength
 
-        for i, idx in enumerate(jaw_contour):
-            vec = lm[idx] - nose_tip
-            dist = float(np.linalg.norm(vec))
-            if dist < 1e-3:
-                continue
+        # Normalized distance & weight for each jaw point
+        norm_dist = jaw_dists / max_jaw_dist  # (J,)
+        weight = norm_dist ** 2  # (J,)
 
-            # Radial falloff: strongest at outer jaw, zero at nose tip
-            #   normalized_dist in [0, 1] where 1 = outermost jaw point
-            normalized_dist = dist / max_jaw_dist
+        # Direction toward nose (unit vectors), guarded against zero-length
+        safe_dists = np.maximum(jaw_dists, 1e-3)  # (J,)
+        direction = -jaw_vecs / safe_dists[:, np.newaxis]  # (J, 2)
 
-            # Smooth cubic falloff for natural contour
-            weight = normalized_dist ** 2
+        # Pull: horizontal full, vertical damped
+        pull_x = direction[:, 0] * weight * max_pull
+        pull_y = direction[:, 1] * weight * max_pull * 0.3
 
-            # Pull direction: unit vector from point toward nose tip
-            direction = -vec / dist  # toward nose
-            # Only take the horizontal component to avoid vertical squish
-            pull_x = direction[0] * weight * max_pull
-            pull_y = direction[1] * weight * max_pull * 0.3  # dampen vertical
+        # Pose-aware attenuation
+        is_left = jaw_positions[:, 0] < nose_tip[0]
+        if yaw > 0:
+            atten = 1.0 - 0.35 * float(np.clip(yaw / 35.0, 0.0, 1.0))
+            pull_x[is_left] *= atten
+        if yaw < 0:
+            atten = 1.0 - 0.35 * float(np.clip((-yaw) / 35.0, 0.0, 1.0))
+            pull_x[~is_left] *= atten
 
-            # Pose-aware attenuation: preserve perspective on far side.
-            is_left = lm[idx, 0] < nose_tip[0]
-            if yaw > 0 and is_left:
-                pull_x *= (1.0 - 0.35 * np.clip(yaw / 35.0, 0.0, 1.0))
-            if yaw < 0 and not is_left:
-                pull_x *= (1.0 - 0.35 * np.clip((-yaw) / 35.0, 0.0, 1.0))
-            deltas[idx, 0] += pull_x
-            deltas[idx, 1] += pull_y
+        # Skip near-zero jaw points
+        valid = jaw_dists > 1e-3
+        jaw_arr = np.array(jaw_contour)
+        deltas[jaw_arr[valid], 0] += pull_x[valid]
+        deltas[jaw_arr[valid], 1] += pull_y[valid]
 
-        # Gaussian falloff to neighboring non-jaw landmarks for mesh smoothness
+        # ── VECTORIZED Gaussian falloff to neighboring non-jaw landmarks ──
         sigma_spread = face_sz * 0.15
         jaw_set = set(jaw_contour)
-        for anchor_idx in jaw_contour:
-            if abs(deltas[anchor_idx, 0]) < 1e-6 and abs(deltas[anchor_idx, 1]) < 1e-6:
-                continue
-            w = _gaussian_falloff(lm, anchor_idx, sigma_spread)
-            for i in range(len(lm)):
-                if i in jaw_set:
-                    continue  # don't double-apply to jaw points
-                deltas[i, 0] += w[i] * deltas[anchor_idx, 0] * 0.3
-                deltas[i, 1] += w[i] * deltas[anchor_idx, 1] * 0.3
+        non_jaw_mask = np.ones(len(lm), dtype=bool)
+        non_jaw_mask[jaw_contour] = False
+
+        # For each active jaw anchor, compute falloff to all non-jaw points at once
+        active_jaw = jaw_arr[valid & (np.abs(pull_x) > 1e-6) | (np.abs(pull_y) > 1e-6)]
+        for idx in active_jaw:
+            w = _gaussian_falloff(lm, idx, sigma_spread)  # (N,)
+            deltas[non_jaw_mask, 0] += w[non_jaw_mask] * deltas[idx, 0] * 0.3
+            deltas[non_jaw_mask, 1] += w[non_jaw_mask] * deltas[idx, 1] * 0.3
 
         return _prepare_warp(image_bgr, lm, deltas)
     except Exception as exc:
@@ -787,59 +765,57 @@ def apply_eye_scaling(
         center_left = np.mean(lm[left_eye_ring], axis=0)
         center_right = np.mean(lm[right_eye_ring], axis=0)
 
-        # Influence radius — how far from the eye center the warp reaches
-        # Proportional to inter-eye distance for resolution independence
+        # Influence radius
         radius = face_sz * 0.32
-
-        # Distortion strength — barrel (positive k) enlarges, pincushion (neg) shrinks
         k = factor * 0.45
 
-        # Build the remap coordinate arrays
-        # Start from identity mapping
-        map_x = np.arange(w, dtype=np.float32)[np.newaxis, :].repeat(h, axis=0)
-        map_y = np.arange(h, dtype=np.float32)[:, np.newaxis].repeat(w, axis=1)
+        # ── ROI-based processing: compute bounding box around BOTH eyes ──
+        # Pad by radius + margin to capture full distortion field
+        pad = int(radius + 8)
+        roi_x0 = max(0, int(min(center_left[0], center_right[0]) - radius - pad))
+        roi_y0 = max(0, int(min(center_left[1], center_right[1]) - radius - pad))
+        roi_x1 = min(w, int(max(center_left[0], center_right[0]) + radius + pad))
+        roi_y1 = min(h, int(max(center_left[1], center_right[1]) + radius + pad))
+        roi_w = roi_x1 - roi_x0
+        roi_h = roi_y1 - roi_y0
+        if roi_w < 4 or roi_h < 4:
+            return image_bgr.copy()
+
+        # Build small ROI-sized remap maps (identity within ROI)
+        map_x = (np.arange(roi_w, dtype=np.float32) + roi_x0)[np.newaxis, :].repeat(roi_h, axis=0)
+        map_y = (np.arange(roi_h, dtype=np.float32) + roi_y0)[:, np.newaxis].repeat(roi_w, axis=1)
 
         for center in [center_left, center_right]:
             cx, cy = float(center[0]), float(center[1])
 
-            # Compute distance from each pixel to the eye center
             dx = map_x - cx
             dy = map_y - cy
             r = np.sqrt(dx * dx + dy * dy)
 
-            # Mask: only pixels within the influence radius
             inside = r < radius
             if not np.any(inside):
                 continue
 
-            # Normalized radius [0, 1] within influence zone
             r_norm = np.zeros_like(r)
             r_norm[inside] = r[inside] / radius
-
-            # Radial distortion: r_new = r * (1 + k * (1 - (r/R)^2))
-            # This smoothly transitions from max distortion at center to zero at edge
             scale = np.ones_like(r)
             scale[inside] = 1.0 + k * (1.0 - r_norm[inside] ** 2)
-
-            # Inverse mapping: to find where each destination pixel came from
-            # For barrel distortion (enlarging), we need inverse mapping
-            # dst(x,y) = src(x', y') where (x',y') is the undistorted position
-            # So we compute: source = center + (dst - center) / scale
             inv_scale = np.ones_like(r)
             inv_scale[inside] = 1.0 / scale[inside]
 
-            new_dx = dx * inv_scale
-            new_dy = dy * inv_scale
+            map_x[inside] = cx + (dx * inv_scale)[inside]
+            map_y[inside] = cy + (dy * inv_scale)[inside]
 
-            map_x[inside] = cx + new_dx[inside]
-            map_y[inside] = cy + new_dy[inside]
-
-        # Apply the remap
-        result = cv2.remap(
+        # Remap only the ROI crop
+        roi_result = cv2.remap(
             image_bgr, map_x, map_y,
             interpolation=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_REFLECT_101,
         )
+
+        # Paste back
+        result = image_bgr.copy()
+        result[roi_y0:roi_y1, roi_x0:roi_x1] = roi_result
 
         return result
     except Exception as exc:
