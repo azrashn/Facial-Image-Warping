@@ -110,7 +110,7 @@ def _line(canvas, mask, p1, p2, color, thick, alpha=255):
     cv2.line(mask, (int(p1[0]), int(p1[1])), (int(p2[0]), int(p2[1])), alpha, thick, cv2.LINE_AA)
 
 
-def _fill_poly(canvas, mask, pts, color, alpha=200):
+def _fill_poly(canvas, mask, pts, color, alpha=255):
     ip = pts.astype(np.int32)
     cv2.fillPoly(canvas, [ip], color, cv2.LINE_AA)
     cv2.fillPoly(mask, [ip], alpha, cv2.LINE_AA)
@@ -703,11 +703,11 @@ def _normalize_model_id(model_id: str) -> str:
 
 def apply_glasses(image, landmarks, model_id="aviator"):
     """
-    Rasterize procedural or sprite-backed glasses overlay with soft alpha fringe.
-    Models attempt ``backend/assets/glasses/<kind>/<kind>_model.png`` first.
+    Rasterize procedural or sprite-backed glasses overlay with correct alpha.
 
-    Accepts legacy IDs such as sunglasses / reading plus new aliases classic,
-    kemik, horn-rimmed, cat_eye / cateye, futuristic, sport, retro, square, etc.
+    Frame regions (mask >= 250) are composited at FULL opacity so solid frames
+    (black, metal, acetate) never show the face bleeding through.
+    Lens regions (mask < 250) use their actual alpha for tinted transparency.
     """
     h, w = image.shape[:2]
     if image.size == 0 or not landmarks or len(landmarks) < 468:
@@ -718,8 +718,15 @@ def apply_glasses(image, landmarks, model_id="aviator"):
     frame = image.copy()
     _, overlay, mask = draw_fn(frame, landmarks, w, h)
 
-    alpha = np.clip(mask.astype(np.float32) / 255.0, 0.0, 1.0)
-    a3 = np.stack([alpha, alpha, alpha], axis=2)
+    # Build alpha channel:
+    #   - Frame pixels (mask >= 250) → alpha = 1.0 (fully opaque, no face bleed)
+    #   - Lens/semi-transparent pixels → preserve original alpha ratio
+    alpha = mask.astype(np.float32) / 255.0
+    # Enforce full opacity on solid frame regions
+    alpha[mask >= 250] = 1.0
+    alpha = np.clip(alpha, 0.0, 1.0)
+
+    a3 = alpha[:, :, np.newaxis]  # (h, w, 1) broadcasts to (h, w, 3)
     frame_f = frame.astype(np.float32)
     over_f = overlay.astype(np.float32)
     blended = frame_f * (1.0 - a3) + over_f * a3

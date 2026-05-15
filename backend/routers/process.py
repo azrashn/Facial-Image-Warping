@@ -2740,40 +2740,203 @@ async def process_clown_transformation(image: UploadFile = File(...)):
 @router.websocket("/process/ws_live")
 async def process_ws_live(websocket: WebSocket):
     """
-    WebSocket Optimization & Frame Skipping (Task 3)
-    Instantly discard old work if processing > 33ms.
+    Overhauled Live WebSocket router using Layered Pipeline (Stacking) logic.
+    Multiple effects run simultaneously on the same frame.
     """
     await websocket.accept()
     logger.info("process_ws_live connected.")
     
     import time
     import asyncio
-    from backend.utils.threaded_stream import ThreadedWebcam
-    stream = ThreadedWebcam().start()
-    
-    time.sleep(0.5)
-    last_process_time = 0.0
+    import json
+    import base64
     
     try:
+        from modules.warping_module import (
+            apply_smile, apply_lip_widen, apply_face_slim, apply_eye_scaling,
+            apply_beard, detect_face_landmarks
+        )
+        from modules.hair_module import apply_hair_color
+        from modules.glasses_module import apply_glasses
+        from modules.frequency_module import apply_virtual_makeup
+        from modules.frequency_module import apply_cartoon_filter, apply_fft_filter
+    except ModuleNotFoundError:
+        from backend.modules.warping_module import (
+            apply_smile, apply_lip_widen, apply_face_slim, apply_eye_scaling,
+            apply_beard, detect_face_landmarks
+        )
+        from backend.modules.hair_module import apply_hair_color
+        from backend.modules.glasses_module import apply_glasses
+        from backend.modules.frequency_module import apply_virtual_makeup
+        from backend.modules.frequency_module import apply_cartoon_filter, apply_fft_filter
+
+    active_states = {
+        "smile": 0.0,
+        "lip_widen": 0.0,
+        "face_slim": 0.0,
+        "eye_scaling": 0.0,
+        "hair_color": None,        # string like "255,0,0"
+        "hair_intensity": 0.6,
+        "makeup_lips": None,       # int hue
+        "makeup_opacity": 0.5,
+        "beard": None,             # string "beard" or "goatee"
+        "beard_intensity": 50.0,
+        "glasses": None,           # string "aviator"
+        "emoji": None,             # string "clown", "alien"
+        "show_landmarks": False,
+        "cartoon": False,
+        "fft": 0.0
+    }
+
+    def _draw_landmarks(img, lm_array):
+        if lm_array is not None:
+            for pt in lm_array:
+                cv2.circle(img, (int(pt[0]), int(pt[1])), 1, (0, 255, 0), -1)
+        return img
+
+    last_fps_time = time.perf_counter()
+    fps_frame_count = 0
+    fps = 0.0
+
+    try:
         while True:
-            start_t = time.perf_counter()
-            
-            if start_t - last_process_time < 0.033:
-                await asyncio.sleep(0.005)
+            raw_msg = await websocket.receive_text()
+            try:
+                msg = json.loads(raw_msg)
+            except json.JSONDecodeError:
                 continue
-                
-            frame = stream.read()
-            if frame is None:
-                await asyncio.sleep(0.01)
+
+            msg_type = msg.get("type", "")
+
+            if msg_type == "config":
+                # Handle single filter legacy format if sent
+                f = msg.get("filter")
+                if f:
+                    if f in ["smile", "lip_widen", "face_slim", "eye_scaling"]:
+                        active_states[f] = msg.get("intensity", 50.0)
+                    elif f == "hair_color":
+                        active_states["hair_color"] = msg.get("hair_color", "255,0,0")
+                        active_states["hair_intensity"] = msg.get("hair_intensity", 0.6)
+                    elif f.startswith("makeup_"):
+                        active_states["makeup_lips"] = msg.get("makeup_hue", 0)
+                        active_states["makeup_opacity"] = msg.get("makeup_opacity", 0.5)
+                    elif f == "beard":
+                        active_states["beard"] = msg.get("beard_type", "beard")
+                        active_states["beard_intensity"] = msg.get("intensity", 50.0)
+                    elif f == "glasses":
+                        active_states["glasses"] = msg.get("glasses_type", "aviator")
+                    elif f in ["alien", "robot", "clown", "star_eyes", "heart_eyes", "crying"]:
+                        active_states["emoji"] = f
+                    elif f == "cartoon":
+                        active_states["cartoon"] = True
+
+                # Handle explicit toggles in the payload (UI sliders mapping directly)
+                for key in active_states:
+                    if key in msg:
+                        active_states[key] = msg[key]
+
+                # Special case: if UI sends nested makeup
+                if "makeup_hue" in msg: active_states["makeup_lips"] = msg["makeup_hue"]
+                if "makeup_opacity" in msg: active_states["makeup_opacity"] = msg["makeup_opacity"]
+                if "glasses_type" in msg: active_states["glasses"] = msg["glasses_type"]
+                if "beard_type" in msg: active_states["beard"] = msg["beard_type"]
+
+                logger.info(f"Live config updated active_states: {active_states}")
+                await websocket.send_json({"type": "status", "message": "Config applied"})
                 continue
+
+            elif msg_type == "frame":
+                start_t = time.perf_counter()
+                frame_data = msg.get("data", "")
                 
-            last_process_time = time.perf_counter()
-            process_dur = last_process_time - start_t
-            
-            encoded = f"data:image/jpeg;base64,{encode_image_to_base64(frame)}"
-            await websocket.send_json({"image_b64": encoded, "fps": 1.0/max(process_dur, 0.033)})
-            
+                # Decode base64 frame
+                if "," in frame_data:
+                    frame_data = frame_data.split(",", 1)[1]
+                try:
+                    raw = base64.b64decode(frame_data)
+                    arr = np.frombuffer(raw, dtype=np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                except Exception:
+                    frame = None
+
+                if frame is None:
+                    continue
+
+                # Detect landmarks once for the baseline frame
+                landmarks = detect_face_landmarks(frame)
+                result = frame.copy()
+                
+                if landmarks is not None:
+                    # Stage 1: Geometric Warps
+                    if active_states.get("eye_scaling"):
+                        result = apply_eye_scaling(result, float(active_states["eye_scaling"]), landmarks=landmarks)
+                        landmarks = detect_face_landmarks(result) or landmarks
+                    if active_states.get("smile"):
+                        result = apply_smile(result, float(active_states["smile"]), landmarks=landmarks)
+                        landmarks = detect_face_landmarks(result) or landmarks
+                    if active_states.get("lip_widen"):
+                        result = apply_lip_widen(result, float(active_states["lip_widen"]), landmarks=landmarks)
+                        landmarks = detect_face_landmarks(result) or landmarks
+                    if active_states.get("face_slim"):
+                        result = apply_face_slim(result, float(active_states["face_slim"]), landmarks=landmarks)
+                        landmarks = detect_face_landmarks(result) or landmarks
+
+                    # Stage 2: Color/Texture Overlays
+                    if active_states.get("hair_color"):
+                        result = apply_hair_color(result, active_states["hair_color"], float(active_states["hair_intensity"]))
+                    if active_states.get("makeup_lips") is not None:
+                        h_f, w_f = result.shape[:2]
+                        norm_lms = [[float(pt[0]) / w_f, float(pt[1]) / h_f] for pt in landmarks]
+                        result = apply_virtual_makeup(
+                            image=result, landmarks=norm_lms, region="lips",
+                            hue=int(active_states["makeup_lips"]), opacity=float(active_states["makeup_opacity"])
+                        )
+                    if active_states.get("beard"):
+                        result = apply_beard(result, float(active_states["beard_intensity"]), landmarks=landmarks)
+
+                    # Stage 3: AR Assets
+                    if active_states.get("glasses"):
+                        h_f, w_f = result.shape[:2]
+                        norm_lms = [[float(pt[0]) / w_f, float(pt[1]) / h_f] for pt in landmarks]
+                        result = apply_glasses(result, norm_lms, active_states["glasses"])
+                        
+                    if active_states.get("emoji"):
+                        emoji_name = active_states["emoji"]
+                        if emoji_name in _EMOJI_PRESETS_MAP:
+                            result = _EMOJI_PRESETS_MAP[emoji_name](result)
+
+                    # Stage 4: Debug Overlays
+                    if active_states.get("show_landmarks"):
+                        result = _draw_landmarks(result, landmarks)
+
+                if active_states.get("cartoon"):
+                    result = apply_cartoon_filter(result)
+                if active_states.get("fft", 0.0) > 0.0:
+                    result, _ = apply_fft_filter(result, float(active_states["fft"]))
+
+                # FPS tracking
+                fps_frame_count += 1
+                now = time.perf_counter()
+                if now - last_fps_time >= 1.0:
+                    fps = fps_frame_count / (now - last_fps_time)
+                    fps_frame_count = 0
+                    last_fps_time = now
+
+                # Encode to send back
+                _, buf = cv2.imencode(".jpg", result, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                b64 = base64.b64encode(buf).decode("ascii")
+                encoded = f"data:image/jpeg;base64,{b64}"
+
+                await websocket.send_json({
+                    "type": "frame",
+                    "data": encoded,
+                    "fps": round(fps, 1),
+                    "face_detected": landmarks is not None
+                })
+
+    except asyncio.CancelledError:
+        pass
     except Exception as exc:
-        logger.error(f"process_ws_live error: {exc}")
+        logger.error(f"process_ws_live error: {exc}", exc_info=True)
     finally:
-        stream.stop()
+        logger.info("process_ws_live disconnected.")

@@ -246,9 +246,11 @@ async def live_websocket(ws: WebSocket):
     Client protocol (JSON messages):
       -> { "type": "frame", "data": "<base64 jpeg>" }
       -> { "type": "config", "filter": "smile", "intensity": 50, ... }
+      -> { "action": "update_live_state", "active_states": { "glasses": {...}, "smile": {...} } }
 
       <- { "type": "frame", "data": "<base64 jpeg>", "fps": 25.3, "face_detected": true }
       <- { "type": "status", "message": "..." }
+      <- { "type": "state_ack", "active_states": [...] }
     """
     await ws.accept()
     logger.info("Live WebSocket connected")
@@ -256,7 +258,12 @@ async def live_websocket(ws: WebSocket):
     mesh = await _get_face_mesh()
     smoother = _BrowserSmoother(alpha=0.7)
 
-    # Connection state — full config dict
+    # ── Stacked active_states dictionary ──
+    # Keys are feature names (e.g. "glasses", "smile", "makeup_lips")
+    # Values are parameter dicts for that feature
+    active_states: dict[str, dict] = {}
+
+    # Legacy single-filter config (kept for backward compatibility)
     current_config = {
         "filter": "none",
         "intensity": 50,
@@ -283,23 +290,46 @@ async def live_websocket(ws: WebSocket):
                 continue
 
             msg_type = msg.get("type", "")
+            msg_action = msg.get("action", "")
 
-            # -- Config update --
+            # ── NEW: Stacked state update ──
+            if msg_action == "update_live_state":
+                incoming = msg.get("active_states", {})
+                # Merge: null/None values → remove, otherwise upsert
+                for feature, params in incoming.items():
+                    if params is None:
+                        active_states.pop(feature, None)
+                    else:
+                        active_states[feature] = params if isinstance(params, dict) else {"value": params}
+                logger.info("Live active_states updated: %s", list(active_states.keys()))
+                await ws.send_json({
+                    "type": "state_ack",
+                    "active_states": list(active_states.keys()),
+                })
+                continue
+
+            # ── Legacy config update (backward compat) ──
             if msg_type == "config":
                 changed = False
                 for key in current_config:
                     if key in msg and msg[key] != current_config[key]:
                         current_config[key] = msg[key]
                         changed = True
+                # Auto-migrate legacy config into active_states
+                filt = current_config.get("filter", "none")
+                if filt and filt != "none":
+                    active_states = {filt: dict(current_config)}
+                elif not filt or filt == "none":
+                    active_states.clear()
                 if changed:
-                    logger.info("Live config updated: %s", current_config)
+                    logger.info("Live config updated (legacy): %s", current_config)
                     await ws.send_json({
                         "type": "status",
                         "message": f"Config: {current_config['filter']}, Intensity: {current_config['intensity']}%",
                     })
                 continue
 
-            # -- Frame processing --
+            # ── Frame processing ──
             if msg_type == "frame":
                 frame_data = msg.get("data", "")
                 frame = _decode_frame(frame_data)
@@ -310,7 +340,7 @@ async def live_websocket(ws: WebSocket):
                 result, face_detected = await asyncio.get_event_loop().run_in_executor(
                     None,
                     _process_frame_sync,
-                    frame, mesh, smoother, current_config,
+                    frame, mesh, smoother, active_states,
                 )
 
                 # FPS calculation
@@ -339,13 +369,33 @@ async def live_websocket(ws: WebSocket):
         logger.info("Live WebSocket session ended (frames: %d)", frame_count)
 
 
+def _feature_to_config(feature: str, params: dict) -> dict:
+    """Convert a feature name + params into a config dict for _apply_filter."""
+    config = dict(params)  # copy
+    # Map feature name → filter name expected by _apply_filter
+    _FEATURE_TO_FILTER = {
+        "smile": "smile", "eyebrow": "eyebrow_raise", "lip": "lip_widen",
+        "slim": "face_slim", "eye_scale": "eye_scaling",
+        "beard": "beard",
+        "alien": "alien", "robot": "robot", "clown": "clown",
+        "star_eyes": "star_eyes", "heart_eyes": "heart_eyes", "crying": "crying",
+        "makeup_lips": "makeup_lips", "makeup_eyeshadow": "makeup_eyeshadow",
+        "makeup_blush": "makeup_blush",
+        "glasses": "glasses", "hair_color": "hair_color",
+        "aging": "aging", "deaging": "deaging", "cartoon": "cartoon",
+    }
+    config["filter"] = _FEATURE_TO_FILTER.get(feature, feature)
+    config.setdefault("intensity", 50)
+    return config
+
+
 def _process_frame_sync(
     frame: np.ndarray,
     mesh: PersistentFaceMesh,
     smoother: _BrowserSmoother,
-    config: dict,
+    active_states: dict,
 ) -> tuple[np.ndarray, bool]:
-    """Synchronous frame processing (runs in thread pool)."""
+    """Synchronous frame processing — applies ALL active states sequentially."""
     # 1. Detect landmarks
     raw_landmarks = mesh.detect(frame)
 
@@ -353,12 +403,17 @@ def _process_frame_sync(
     smoothed = smoother.smooth(raw_landmarks)
     face_detected = smoothed is not None
 
-    # 3. Apply filter
-    filter_name = config.get("filter", "none")
-    if face_detected and filter_name != "none":
-        result = _apply_filter(frame, smoothed, config)
-    else:
-        result = frame
+    # 3. Apply all stacked filters sequentially
+    if not active_states or not face_detected:
+        return frame, face_detected
+
+    result = frame
+    for feature, params in active_states.items():
+        try:
+            config = _feature_to_config(feature, params)
+            result = _apply_filter(result, smoothed, config)
+        except Exception as exc:
+            logger.warning("Stacked filter '%s' failed: %s", feature, exc)
 
     return result, face_detected
 

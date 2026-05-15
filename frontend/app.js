@@ -11,6 +11,57 @@ document.addEventListener('DOMContentLoaded', () => {
     let operationHistory = [];
     let previousMetrics = null; // stores last metrics for delta computation
 
+    // --- LIVE MODE STATE (outer scope so ALL handlers can check) ---
+    let isLiveMode = false;           // true when WebSocket live stream is active
+    let _liveWsRef = null;            // reference to the live WebSocket
+    let liveActiveStates = {};        // stacked effects dict sent to backend
+    let currentLivePreset = null;     // legacy preset tracker
+
+    /**
+     * Send a stacked state update to the live WebSocket backend.
+     * value=null removes the feature; otherwise it's merged/upserted.
+     */
+    function sendLiveStateUpdate(feature, value) {
+        if (value === null || value === undefined) {
+            delete liveActiveStates[feature];
+        } else {
+            liveActiveStates[feature] = value;
+        }
+        if (_liveWsRef && _liveWsRef.readyState === WebSocket.OPEN) {
+            _liveWsRef.send(JSON.stringify({
+                action: 'update_live_state',
+                active_states: liveActiveStates,
+            }));
+            console.log('[Live] State update sent:', Object.keys(liveActiveStates));
+        }
+        // Update the active states chip bar
+        renderLiveStatesBar();
+    }
+
+    /** Render active live effects as removable chips */
+    function renderLiveStatesBar() {
+        let bar = document.getElementById('liveStatesBar');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'liveStatesBar';
+            bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;min-height:0;';
+            const cameraColumn = document.getElementById('cameraColumn');
+            if (cameraColumn) cameraColumn.appendChild(bar);
+        }
+        const keys = Object.keys(liveActiveStates);
+        if (!isLiveMode || keys.length === 0) {
+            bar.innerHTML = '';
+            bar.style.display = 'none';
+            return;
+        }
+        bar.style.display = 'flex';
+        bar.innerHTML = keys.map(k => `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;background:rgba(102,126,234,0.25);border:1px solid rgba(102,126,234,0.5);font-size:0.75rem;color:#c5ceff;cursor:default;">${k}<button onclick="window._removeLiveState('${k}')" style="background:none;border:none;color:#ff6b6b;cursor:pointer;font-size:0.85rem;padding:0 2px;line-height:1;">✕</button></span>`).join('');
+    }
+    // Global hook for chip removal
+    window._removeLiveState = function(feature) {
+        sendLiveStateUpdate(feature, null);
+    };
+
     // Default User Settings
     let currentLang = 'EN';
     let isDarkMode = true;
@@ -859,6 +910,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     applyBtn.addEventListener('click', async () => {
+        // ── LIVE MODE: route geometric warps to WebSocket ──
+        if (isLiveMode) {
+            const warpOps = new Set(['smile', 'eyebrow', 'lip', 'slim']);
+            if (warpOps.has(selectedOperation)) {
+                sendLiveStateUpdate(selectedOperation, { intensity: Number(intensitySlider.value) });
+                return;
+            }
+        }
+
         if (!uploadedFile || !currentOriginalImage) return;
 
         const isAgeEstimation = selectedOperation === 'age_estimation';
@@ -1011,6 +1071,16 @@ document.addEventListener('DOMContentLoaded', () => {
     ];
 
     async function applyEmojiPreset(presetName, labelKey) {
+        // ── LIVE MODE: route to WebSocket ──
+        if (isLiveMode) {
+            sendLiveStateUpdate(presetName, { intensity: 50 });
+            // Also set visual active state
+            document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
+            const clickedBtn = document.querySelector(`[data-preset="${presetName}"]`);
+            if (clickedBtn) clickedBtn.classList.add('active');
+            return;
+        }
+
         if (!currentOriginalImage) return;
 
         // Highlight the clicked button
@@ -1081,6 +1151,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const freshClownBtn = document.getElementById('btnPresetClown');
 
         freshClownBtn.addEventListener('click', async () => {
+            // ── LIVE MODE: route to WebSocket ──
+            if (isLiveMode) {
+                sendLiveStateUpdate('clown', { intensity: 50 });
+                document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
+                freshClownBtn.classList.add('active');
+                return;
+            }
+
             if (!uploadedFile || !currentOriginalImage) return;
 
             document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('active'));
@@ -1153,9 +1231,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (applyMakeupBtn) {
         applyMakeupBtn.addEventListener('click', async () => {
+            const region = makeupRegion.value || 'lips';
+            const featureKey = `makeup_${region}`;
+            currentLivePreset = featureKey;
+            selectedOperation = featureKey;
+
+            // ── LIVE MODE: route to WebSocket ──
+            if (isLiveMode) {
+                const hue = hexToOpenCVHue(makeupColor.value);
+                const opacity = Number(makeupOpacity.value) / 100.0;
+                sendLiveStateUpdate(featureKey, { makeup_hue: hue, makeup_opacity: opacity, intensity: 50 });
+                return;
+            }
+
             if (!uploadedFile || !currentOriginalImage) return;
-            currentLivePreset = `makeup_${makeupRegion.value}`;
-            selectedOperation = currentLivePreset;
 
             const hueValue = hexToOpenCVHue(makeupColor.value);
 
@@ -1248,9 +1337,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const cartoonBtn = document.getElementById('cartoonBtn');
     if (cartoonBtn) {
         cartoonBtn.addEventListener('click', async () => {
-            if (!uploadedFile || !currentOriginalImage) return;
             selectedOperation = 'cartoon';
             currentLivePreset = 'cartoon';
+
+            // ── LIVE MODE: route to WebSocket ──
+            if (isLiveMode) {
+                sendLiveStateUpdate('cartoon', { intensity: 50 });
+                return;
+            }
+
+            if (!uploadedFile || !currentOriginalImage) return;
 
             const formData = new FormData();
             formData.append('image', uploadedFile);
@@ -1313,9 +1409,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Göz Büyütme/Küçültme Event
     if (eyeSizeBtn) {
         eyeSizeBtn.addEventListener('click', async () => {
-            if (!uploadedFile || !currentOriginalImage) return;
             selectedOperation = 'eye_scale';
             currentLivePreset = 'eye_scale';
+
+            // ── LIVE MODE: route to WebSocket ──
+            if (isLiveMode) {
+                sendLiveStateUpdate('eye_scale', { intensity: Number(eyeSizeSlider.value) });
+                return;
+            }
+
+            if (!uploadedFile || !currentOriginalImage) return;
             const formData = new FormData();
             formData.append('image', uploadedFile);
             formData.append('scale', eyeSizeSlider.value);
@@ -1350,6 +1453,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Sakal/Bıyık Event
     if (beardBtn) {
         beardBtn.addEventListener('click', async () => {
+            // ── LIVE MODE: route to WebSocket ──
+            if (isLiveMode) {
+                sendLiveStateUpdate('beard', {
+                    beard_type: beardSelect.value,
+                    beard_darkness: Number(beardDarknessSlider.value),
+                    intensity: Number(beardDarknessSlider.value),
+                });
+                return;
+            }
+
             if (!uploadedFile || !currentOriginalImage) return;
             const formData = new FormData();
             formData.append('image', uploadedFile);
@@ -1443,6 +1556,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (applyGlassesBtn) {
         applyGlassesBtn.addEventListener('click', async () => {
+            // ── LIVE MODE: route to WebSocket ──
+            if (isLiveMode) {
+                sendLiveStateUpdate('glasses', { glasses_type: glassesSelect.value });
+                selectedOperation = 'glasses';
+                return;
+            }
+
             if (!uploadedFile || !currentOriginalImage) return;
 
             const formData = new FormData();
@@ -1688,6 +1808,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (applyHairColorBtn) {
         applyHairColorBtn.addEventListener('click', async () => {
+            // ── LIVE MODE: route to WebSocket ──
+            if (isLiveMode) {
+                const hex = (hairColorPicker?.value || '#ff0000').replace('#', '');
+                const r = parseInt(hex.substring(0, 2), 16);
+                const g = parseInt(hex.substring(2, 4), 16);
+                const b = parseInt(hex.substring(4, 6), 16);
+                const intensity = Number(hairOpacity?.value || 60) / 100.0;
+                sendLiveStateUpdate('hair_color', { hair_color: `${r},${g},${b}`, hair_intensity: intensity });
+                selectedOperation = 'hair_color';
+                return;
+            }
+
             if (!uploadedFile || !currentOriginalImage) {
                 alert(i18n[currentLang]?.uploadWait || 'Please upload an image first.');
                 return;
@@ -2014,12 +2146,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const analysisState = { lastError: null };
         const uiState = { isLiveIndicatorError: false };
         let cameraStream = null;
-        let isLiveMode = false;
+        // NOTE: isLiveMode and currentLivePreset are declared in outer scope
         let liveRafId = null;
         let liveProcessing = false;
         let liveFrameCount = 0;
         let liveFpsTimer = null;
-        let currentLivePreset = null;
 
         let _lastBlobUrl = null;      // for memory management (revoke old blob URLs)
         let _liveErrorCount = 0;      // consecutive error counter
@@ -2032,6 +2163,9 @@ document.addEventListener('DOMContentLoaded', () => {
         let _liveWs = null;           // WebSocket connection for live mode
         let _wsReady = false;         // WebSocket open state
         let _wsPendingFrame = false;  // throttle: waiting for server response
+
+        // Sync the WS ref to outer scope so sendLiveStateUpdate() can use it
+        function _syncWsRef() { _liveWsRef = _liveWs; }
 
         // ── Profiling helper ────────────────────────────────────────────
         function _profileLog(label, startMs) {
@@ -2205,6 +2339,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const wsUrl = API_BASE.replace('http', 'ws') + '/live/ws';
             _liveWs = new WebSocket(wsUrl);
             _wsReady = false;
+            _syncWsRef();
 
             _liveWs.onopen = () => {
                 _wsReady = true;
@@ -2254,6 +2389,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log('[Live] WebSocket closed');
                 _wsReady = false;
                 _liveWs = null;
+                _syncWsRef();
             };
 
             // True end-to-end FPS counter (counts only rendered frames)
@@ -2376,6 +2512,10 @@ document.addEventListener('DOMContentLoaded', () => {
             liveIndicator.style.display = 'none';
             liveFpsBadge.textContent = '0 FPS';
             if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
+            // Clear stacked states on stop
+            liveActiveStates = {};
+            renderLiveStatesBar();
+            _syncWsRef();
             console.log('[Live] Stopped');
         }
 
@@ -2410,16 +2550,21 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!_wsReady || !_liveWs) return;
             if (_wsPendingFrame) return; // throttle: wait for server to respond
 
-            const preset = getCurrentLivePreset();
-            const liveConfig = _buildLiveConfig(preset);
+            // If stacked states are active, they're already sent via sendLiveStateUpdate().
+            // Only use legacy config path when no stacked states exist.
+            const hasStackedStates = Object.keys(liveActiveStates).length > 0;
 
-            // Send config update
-            _liveWs.send(JSON.stringify(liveConfig));
+            if (!hasStackedStates) {
+                const preset = getCurrentLivePreset();
+                const liveConfig = _buildLiveConfig(preset);
+                // Send legacy config update
+                _liveWs.send(JSON.stringify(liveConfig));
 
-            if (!liveConfig.filter || liveConfig.filter === 'none') {
-                liveProcessedImg.style.display = 'none';
-                liveFrameCount++;
-                return;
+                if (!liveConfig.filter || liveConfig.filter === 'none') {
+                    liveProcessedImg.style.display = 'none';
+                    liveFrameCount++;
+                    return;
+                }
             }
 
             try {
@@ -2487,10 +2632,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (wasActive) {
                     currentLivePreset = null;
                     btn.style.outline = '';
+                    // ── LIVE MODE: remove emoji from stacked state ──
+                    if (isLiveMode && btn.dataset.preset) {
+                        sendLiveStateUpdate(btn.dataset.preset, null);
+                    }
                 } else {
                     btn.classList.add('emoji-active');
                     currentLivePreset = btn.dataset.preset;
                     btn.style.outline = '2px solid var(--primary-color)';
+                    // ── LIVE MODE: add emoji to stacked state ──
+                    if (isLiveMode && btn.dataset.preset) {
+                        sendLiveStateUpdate(btn.dataset.preset, { intensity: 50 });
+                    }
                 }
 
                 document.querySelectorAll('.emoji-btn:not(.emoji-active)').forEach(b => {

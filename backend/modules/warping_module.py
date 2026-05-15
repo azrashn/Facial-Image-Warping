@@ -756,63 +756,92 @@ def apply_eye_scaling(
     landmarks: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Görev 2 Düzeltmesi: Radial Eye Scaling (Smooth Falloff & Anchors).
-    Gözleri kendi merkezlerinden orantılı şekilde büyütür/küçültür.
-    Geniş bir Gauss ağırlığı (falloff) kullanarak çevresel piksellerin yırtılmasını önler.
-    Kaş, burun köprüsü ve yanak üstü gibi anchor noktalar KESİNLİKLE sabitlenir.
+    Radial Eye Scaling via cv2.remap — true geometric pixel distortion.
+
+    Uses localized barrel (enlarge) / pincushion (shrink) distortion centered
+    on each eye.  Every pixel around the eye is smoothly displaced along
+    radial vectors so the deformation is seamless — no ghosting, no hard edges.
+
+    The distortion field is computed per-pixel using:
+        r' = r * (1 + k * (1 - (r/R)^2))     for r <= R
+        r' = r                                  for r > R
+    where k is the distortion strength and R is the influence radius.
     """
     try:
         lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr
 
+        # factor: positive = enlarge, negative = shrink
         factor = max(-1.0, min(1.0, float(intensity) / 100.0))
-        deltas = np.zeros_like(lm)
+        if abs(factor) < 0.01:
+            return image_bgr.copy()
+
+        h, w = image_bgr.shape[:2]
         face_sz = _face_scale(lm)
 
+        # Eye landmark rings for center computation
         left_eye_ring = [33, 133, 160, 158, 153, 144, 159, 145]
         right_eye_ring = [362, 263, 387, 385, 380, 373, 386, 374]
 
         center_left = np.mean(lm[left_eye_ring], axis=0)
         center_right = np.mean(lm[right_eye_ring], axis=0)
 
-        # Yumuşak geçiş için Gauss sigma (etki alanı)
-        sigma = face_sz * 0.12
+        # Influence radius — how far from the eye center the warp reaches
+        # Proportional to inter-eye distance for resolution independence
+        radius = face_sz * 0.32
 
-        def custom_falloff(points, center, sig):
-            dists = np.linalg.norm(points - center, axis=1)
-            return np.exp(-0.5 * (dists / max(sig, 1e-6)) ** 2)
+        # Distortion strength — barrel (positive k) enlarges, pincushion (neg) shrinks
+        k = factor * 0.45
 
-        w_left = custom_falloff(lm, center_left, sigma)
-        w_right = custom_falloff(lm, center_right, sigma)
+        # Build the remap coordinate arrays
+        # Start from identity mapping
+        map_x = np.arange(w, dtype=np.float32)[np.newaxis, :].repeat(h, axis=0)
+        map_y = np.arange(h, dtype=np.float32)[:, np.newaxis].repeat(w, axis=1)
 
-        for i in range(len(lm)):
-            disp_left = (lm[i] - center_left) * factor * w_left[i]
-            disp_right = (lm[i] - center_right) * factor * w_right[i]
-            deltas[i] += disp_left + disp_right
+        for center in [center_left, center_right]:
+            cx, cy = float(center[0]), float(center[1])
 
-        # Sınırlandırma (Anchor Points) - kesinlikle hareket etmeyecek bölgeler
-        anchor_points = [
-            # Kaşlar (Eyebrows)
-            70, 63, 105, 66, 107, 46, 53, 52, 65, 55,
-            300, 293, 334, 296, 336, 276, 283, 282, 295, 285,
-            # Burun köprüsü (Nose bridge)
-            168, 6, 197, 195, 5, 4,
-            # Elmacık kemiği üstü (Upper cheekbones)
-            116, 117, 118, 119, 100, 101, 345, 346, 347, 348, 329, 330,
-            # Dış hatlar / Çene (Jaw / Outer contour)
-            10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
-            361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
-            176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
-            162, 21, 54, 103, 67, 109
-        ]
-        for idx in anchor_points:
-            deltas[idx] = 0.0
+            # Compute distance from each pixel to the eye center
+            dx = map_x - cx
+            dy = map_y - cy
+            r = np.sqrt(dx * dx + dy * dy)
 
-        # Anchor noktalarını korumak için, çok düşük (ihmal edilebilir) hareketleri tam 0'a çekiyoruz
-        deltas[np.abs(deltas) < 0.1] = 0.0
+            # Mask: only pixels within the influence radius
+            inside = r < radius
+            if not np.any(inside):
+                continue
 
-        return _prepare_warp(image_bgr, lm, deltas)
+            # Normalized radius [0, 1] within influence zone
+            r_norm = np.zeros_like(r)
+            r_norm[inside] = r[inside] / radius
+
+            # Radial distortion: r_new = r * (1 + k * (1 - (r/R)^2))
+            # This smoothly transitions from max distortion at center to zero at edge
+            scale = np.ones_like(r)
+            scale[inside] = 1.0 + k * (1.0 - r_norm[inside] ** 2)
+
+            # Inverse mapping: to find where each destination pixel came from
+            # For barrel distortion (enlarging), we need inverse mapping
+            # dst(x,y) = src(x', y') where (x',y') is the undistorted position
+            # So we compute: source = center + (dst - center) / scale
+            inv_scale = np.ones_like(r)
+            inv_scale[inside] = 1.0 / scale[inside]
+
+            new_dx = dx * inv_scale
+            new_dy = dy * inv_scale
+
+            map_x[inside] = cx + new_dx[inside]
+            map_y[inside] = cy + new_dy[inside]
+
+        # Apply the remap
+        result = cv2.remap(
+            image_bgr, map_x, map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
+
+        return result
     except Exception as exc:
         logger.error("apply_eye_scaling failed: %s – returning original image", exc)
         return image_bgr.copy()
