@@ -78,7 +78,7 @@ _LIVE_STABLE_LANDMARKS: dict[str, np.ndarray] = {}
 
 WARP_OPS = {"smile", "eyebrow", "lip", "slim"}
 AGE_OPS = {"aging", "deaging", "age", "deage", "fft"}
-MAKEUP_OPS = {"makeup_lips", "makeup_eyeshadow", "makeup_blush"}
+MAKEUP_OPS = {"makeup_lips", "makeup_eyeshadow", "makeup_blush", "makeup_eyeliner", "makeup_mascara"}
 
 
 def _hex_color_to_hue(color: str | None, fallback: int = 0) -> int:
@@ -1394,11 +1394,63 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100) -> np.ndarray
 
 
 # ── 2. ROBOT PRESET ──────────────────────────────────────────────────────────
-def _apply_robot(image: np.ndarray) -> np.ndarray:
+def _pixel_landmarks_to_normalized(landmarks: np.ndarray, width: int, height: int) -> list[dict[str, float]]:
+    return [
+        {"x": float(pt[0]) / max(width, 1), "y": float(pt[1]) / max(height, 1)}
+        for pt in landmarks
+    ]
+
+
+def _face_pose_axes(lm: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float]:
+    left_eye = lm[33] if len(lm) > 33 else lm[0]
+    right_eye = lm[263] if len(lm) > 263 else lm[-1]
+    chin = lm[152] if len(lm) > 152 else lm.mean(axis=0)
+    forehead = lm[10] if len(lm) > 10 else lm.mean(axis=0)
+
+    x_axis = right_eye - left_eye
+    x_norm = float(np.linalg.norm(x_axis))
+    if x_norm < 1.0:
+        x_axis = np.array([1.0, 0.0], dtype=np.float32)
+    else:
+        x_axis = x_axis / x_norm
+
+    y_axis = np.array([-x_axis[1], x_axis[0]], dtype=np.float32)
+    if float(np.dot(y_axis, chin - ((left_eye + right_eye) * 0.5))) < 0:
+        y_axis = -y_axis
+
+    center = (left_eye + right_eye + chin + forehead) * 0.25
+    face_width = max(float(np.linalg.norm(lm[454] - lm[234])) if len(lm) > 454 else x_norm * 2.2, 1.0)
+    face_height = max(float(np.linalg.norm(chin - forehead)), face_width * 1.15)
+    return center.astype(np.float32), x_axis.astype(np.float32), y_axis.astype(np.float32), face_width, face_height
+
+
+def _estimate_face_yaw(lm: np.ndarray) -> float:
+    if len(lm) <= 454:
+        return 0.0
+    left_side = lm[234]
+    right_side = lm[454]
+    nose = lm[1] if len(lm) > 1 else lm[4]
+    face_w = max(float(np.linalg.norm(right_side - left_side)), 1.0)
+    face_mid_x = (left_side[0] + right_side[0]) * 0.5
+    return float(np.clip((nose[0] - face_mid_x) / face_w, -0.6, 0.6))
+
+
+def _pose_point(
+    center: np.ndarray,
+    x_axis: np.ndarray,
+    y_axis: np.ndarray,
+    local_x: float,
+    local_y: float,
+) -> tuple[int, int]:
+    pt = center + x_axis * local_x + y_axis * local_y
+    return int(round(pt[0])), int(round(pt[1]))
+
+
+def _apply_robot(image: np.ndarray, landmarks: np.ndarray | None = None) -> np.ndarray:
     """🤖 Robot: square jaw warp + silver overlay + yellow eyes + red antennas."""
     out = image.copy()
     h, w = out.shape[:2]
-    lm = detect_face_landmarks(out)
+    lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(out)
     if lm is None:
         cx, cy = w // 2, h // 2
         face_w = int(w * 0.42)
@@ -1465,8 +1517,7 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
 
     # Extended mask + metallic gray skin.
     try:
-        prep = preprocess_image(cv2.cvtColor(warped, cv2.COLOR_BGR2RGB))
-        wlms = get_landmarks(prep)
+        wlms = _pixel_landmarks_to_normalized(dst, w, h)
         mask = _create_extended_face_mask(warped, wlms, 0.35)
     except Exception:
         mask = np.ones((h,w), np.float32)*0.4
@@ -1500,30 +1551,25 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
     tinted += scan_mask[..., None] * np.array([12.0, 7.0, 2.0], dtype=np.float32)
     tinted = np.clip(tinted, 0, 255).astype(np.uint8)
 
-    face_box_pts = lm.astype(np.int32)
-    fx, fy, fw, fh = cv2.boundingRect(face_box_pts)
-    pad_x = int(fw * 0.06)
-    pad_y = int(fh * 0.08)
-    panel_x0 = max(0, fx + pad_x)
-    panel_y0 = max(0, fy - pad_y)
-    panel_x1 = min(w - 1, fx + fw - pad_x)
-    panel_y1 = min(h - 1, fy + fh + int(fh * 0.04))
     seam_color = (38, 42, 48)
-
-    forehead_y = panel_y0 + int((panel_y1 - panel_y0) * 0.20)
+    pose_center, x_axis, y_axis, pose_w, pose_h = _face_pose_axes(dst)
+    panel_w = pose_w * 0.84
+    panel_top = -pose_h * 0.56
+    panel_bottom = pose_h * 0.58
+    forehead_y = panel_top + (panel_bottom - panel_top) * 0.22
     cv2.line(
         tinted,
-        (panel_x0 + int(fw * 0.10), forehead_y),
-        (panel_x1 - int(fw * 0.10), forehead_y),
+        _pose_point(pose_center, x_axis, y_axis, -panel_w * 0.38, forehead_y),
+        _pose_point(pose_center, x_axis, y_axis, panel_w * 0.38, forehead_y),
         seam_color,
         max(1, int(face_sz * 0.010)),
         cv2.LINE_AA,
     )
-    for x_plate in [panel_x0 + int(fw * 0.18), panel_x1 - int(fw * 0.18)]:
+    for x_plate in (-panel_w * 0.30, panel_w * 0.30):
         cv2.line(
             tinted,
-            (x_plate, forehead_y),
-            (x_plate, panel_y0 + int(fh * 0.05)),
+            _pose_point(pose_center, x_axis, y_axis, x_plate, forehead_y),
+            _pose_point(pose_center, x_axis, y_axis, x_plate, panel_top + pose_h * 0.08),
             seam_color,
             max(1, int(face_sz * 0.008)),
             cv2.LINE_AA,
@@ -1536,7 +1582,7 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
         162, 21, 54, 103, 67, 109,
     ]
     outline = np.array(
-        [lm[idx] for idx in face_outline_idx if idx < len(lm)],
+        [dst[idx] for idx in face_outline_idx if idx < len(dst)],
         dtype=np.int32,
     )
     if len(outline) >= 3:
@@ -1549,12 +1595,20 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
             cv2.LINE_AA,
         )
 
-    for ear_idx, tilt in [(234, -0.35), (454, 0.35)]:
-        if ear_idx < len(lm):
-            ex, ey = lm[ear_idx].astype(int)
+    yaw = _estimate_face_yaw(dst)
+    antenna_specs = [(234, -0.35), (454, 0.35)]
+    if yaw > 0.08:
+        antenna_specs = [(234, -0.35)]
+    elif yaw < -0.08:
+        antenna_specs = [(454, 0.35)]
+
+    for ear_idx, tilt in antenna_specs:
+        if ear_idx < len(dst):
+            ex, ey = dst[ear_idx].astype(int)
             antenna_len = int(face_sz * 0.42)
-            tip_x = int(ex + tilt * face_sz)
-            tip_y = max(0, int(ey - antenna_len))
+            tip = dst[ear_idx] - y_axis * antenna_len + x_axis * (tilt * face_sz)
+            tip_x = int(np.clip(tip[0], 0, w - 1))
+            tip_y = int(np.clip(tip[1], 0, h - 1))
             cv2.line(
                 tinted,
                 (int(ex), int(ey)),

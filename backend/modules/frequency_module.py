@@ -789,6 +789,105 @@ def _add_blush_gradient(
     mask[:] = np.maximum(mask, gaussian)
 
 
+def _add_eye_line_mask(
+    mask: np.ndarray,
+    points: np.ndarray,
+    thickness: int,
+    wing: bool = False,
+) -> None:
+    if len(points) < 2:
+        return
+    pts = points.astype(np.int32)
+    cv2.polylines(mask, [pts], False, 1.0, thickness, cv2.LINE_AA)
+    if wing and len(pts) >= 2:
+        p0 = pts[0]
+        p1 = pts[1]
+        direction = p0 - p1
+        norm = float(np.linalg.norm(direction))
+        if norm > 1.0:
+            wing_tip = p0 + (direction / norm * thickness * 2.4).astype(np.int32)
+            cv2.line(mask, tuple(p0), tuple(wing_tip), 1.0, max(1, thickness - 1), cv2.LINE_AA)
+
+
+def _apply_dark_mask(
+    image: np.ndarray,
+    mask: np.ndarray,
+    opacity: float,
+    blur_sigma: float,
+    color_bgr: tuple[int, int, int] = (8, 8, 10),
+) -> np.ndarray:
+    opacity = float(np.clip(opacity, 0.0, 1.0))
+    mask_float = mask.astype(np.float32)
+    if mask_float.max() > 1.0:
+        mask_float /= 255.0
+    soft_mask = np.clip(mask_float, 0.0, 1.0)
+    if blur_sigma > 0:
+        soft_mask = cv2.GaussianBlur(soft_mask, (0, 0), blur_sigma)
+    max_value = float(soft_mask.max())
+    if max_value > 0:
+        soft_mask /= max_value
+    soft_mask = soft_mask[..., None] * opacity
+    dark = np.full_like(image, color_bgr, dtype=np.float32)
+    result = image.astype(np.float32) * (1.0 - soft_mask) + dark * soft_mask
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def _line_color_from_hue(hue: int) -> tuple[int, int, int]:
+    hue = int(np.clip(hue, 0, 179))
+    hsv = np.uint8([[[hue, 185, 68]]])
+    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
+    return int(bgr[0]), int(bgr[1]), int(bgr[2])
+
+
+def _draw_tapered_lash(
+    mask: np.ndarray,
+    start: np.ndarray,
+    direction: np.ndarray,
+    length: float,
+    thickness: int,
+    curve: float,
+) -> None:
+    norm = float(np.linalg.norm(direction))
+    if norm < 1.0:
+        return
+    direction = direction / norm
+    perp = np.array([-direction[1], direction[0]], dtype=np.float32)
+    p0 = start.astype(np.float32)
+    p1 = p0 + direction * length * 0.55 + perp * curve
+    p2 = p0 + direction * length + perp * curve * 1.35
+
+    prev = p0
+    steps = 8
+    for i in range(1, steps + 1):
+        t = i / steps
+        pt = ((1.0 - t) ** 2 * p0) + (2.0 * (1.0 - t) * t * p1) + (t ** 2 * p2)
+        local_thickness = max(1, int(round(thickness * (1.0 - t * 0.80))))
+        alpha = max(0.18, 0.82 - t * 0.58)
+        cv2.line(mask, tuple(prev.astype(int)), tuple(pt.astype(int)), alpha, local_thickness, cv2.LINE_AA)
+        prev = pt
+
+
+def _sample_polyline(points: np.ndarray, count: int) -> np.ndarray:
+    if len(points) < 2:
+        return points.astype(np.float32)
+    pts = points.astype(np.float32)
+    segs = pts[1:] - pts[:-1]
+    seg_lens = np.linalg.norm(segs, axis=1)
+    total = float(seg_lens.sum())
+    if total < 1.0:
+        return pts
+
+    samples = []
+    distances = np.linspace(0.0, total, count)
+    cumulative = np.concatenate([[0.0], np.cumsum(seg_lens)])
+    for dist in distances:
+        seg_idx = int(np.searchsorted(cumulative, dist, side="right") - 1)
+        seg_idx = min(max(seg_idx, 0), len(segs) - 1)
+        local = (dist - cumulative[seg_idx]) / max(seg_lens[seg_idx], 1e-6)
+        samples.append(pts[seg_idx] + segs[seg_idx] * local)
+    return np.array(samples, dtype=np.float32)
+
+
 def apply_virtual_makeup(
     image: np.ndarray,
     landmarks: list = None,
@@ -807,6 +906,8 @@ def apply_virtual_makeup(
     - lip
     - blush
     - eyeshadow
+    - eyeliner
+    - mascara
     """
     if image is None:
         raise ValueError("Input image is None.")
@@ -895,8 +996,61 @@ def apply_virtual_makeup(
         opacity = min(opacity * 1.5, 0.65)
         normalize_mask = False
 
+    elif region == "eyeliner":
+        left_upper = [33, 246, 161, 160, 159, 158, 157, 173, 133]
+        right_upper = [362, 398, 384, 385, 386, 387, 388, 466, 263]
+        left_lower = [33, 7, 163, 144, 145, 153, 154, 155, 133]
+        right_lower = [362, 382, 381, 380, 374, 373, 390, 249, 263]
+
+        thickness = max(1, int(min(h, w) * 0.006))
+        for idxs, wing in ((left_upper, True), (right_upper, True), (left_lower, False), (right_lower, False)):
+            pts = _normalized_landmarks_to_points(landmarks, idxs, w, h)
+            _add_eye_line_mask(mask, pts, thickness, wing=wing)
+        return _apply_dark_mask(
+            image=image,
+            mask=mask,
+            opacity=min(opacity * 1.45, 0.90),
+            blur_sigma=max(0.7, min(h, w) * 0.0022),
+            color_bgr=_line_color_from_hue(hue),
+        )
+
+    elif region == "mascara":
+        lash_groups = [
+            [33, 246, 161, 160, 159, 158, 157, 173, 133],
+            [362, 398, 384, 385, 386, 387, 388, 466, 263],
+        ]
+        thickness = 1
+        base_lash_len = max(4.0, min(h, w) * 0.018)
+        for eye_i, idxs in enumerate(lash_groups):
+            pts = _normalized_landmarks_to_points(landmarks, idxs, w, h)
+            if len(pts) < 3:
+                continue
+            center = pts.mean(axis=0)
+            eye_width = max(float(np.ptp(pts[:, 0])), 1.0)
+            samples = _sample_polyline(pts, max(21, int(eye_width / 3.2)))
+            for lash_i, pt in enumerate(samples[1:-1], start=1):
+                lateral = (pt[0] - center[0]) / eye_width
+                up_direction = pt - center
+                up_direction[1] -= max(2.0, min(h, w) * 0.018)
+                outer_boost = 0.64 + 0.24 * min(abs(lateral) * 2.0, 1.0)
+                natural_jitter = 0.90 + 0.08 * ((lash_i % 4) - 1.5)
+                length = base_lash_len * outer_boost * natural_jitter
+                curve = base_lash_len * lateral * (0.10 if eye_i == 0 else -0.10)
+                _draw_tapered_lash(mask, pt, up_direction, length, thickness, curve)
+
+            lid_mask = np.zeros((h, w), dtype=np.float32)
+            _add_eye_line_mask(lid_mask, pts, max(1, thickness), wing=False)
+            mask[:] = np.maximum(mask, lid_mask * 0.12)
+        return _apply_dark_mask(
+            image=image,
+            mask=mask,
+            opacity=min(opacity * 0.86, 0.58),
+            blur_sigma=max(0.10, min(h, w) * 0.00035),
+            color_bgr=_line_color_from_hue(hue),
+        )
+
     else:
-        raise ValueError("Region must be 'lip', 'blush', or 'eyeshadow'.")
+        raise ValueError("Region must be 'lip', 'blush', 'eyeshadow', 'eyeliner', or 'mascara'.")
 
     return _apply_color_with_mask(
         image=image,
@@ -970,8 +1124,38 @@ def apply_virtual_makeup_fallback(
         blur_sigma = max(3.0, min(h, w) * 0.014)
         opacity = min(opacity, 0.58)
 
+    elif region == "eyeliner":
+        eye_y = y + int(fh * 0.39)
+        eye_dx = int(fw * 0.18)
+        eye_w = max(12, int(fw * 0.16))
+        thickness = max(1, int(min(h, w) * 0.006))
+        cv2.line(mask, (x + fw // 2 - eye_dx - eye_w, eye_y), (x + fw // 2 - eye_dx + eye_w, eye_y), 1.0, thickness, cv2.LINE_AA)
+        cv2.line(mask, (x + fw // 2 + eye_dx - eye_w, eye_y), (x + fw // 2 + eye_dx + eye_w, eye_y), 1.0, thickness, cv2.LINE_AA)
+        return _apply_dark_mask(image, mask, min(opacity * 1.35, 0.85), max(0.8, min(h, w) * 0.0025), _line_color_from_hue(hue))
+
+    elif region == "mascara":
+        eye_y = y + int(fh * 0.37)
+        eye_dx = int(fw * 0.18)
+        eye_w = max(10, int(fw * 0.14))
+        lash_len = max(3, int(fh * 0.023))
+        thickness = 1
+        for cx in (x + fw // 2 - eye_dx, x + fw // 2 + eye_dx):
+            for i, offset in enumerate(np.linspace(-eye_w, eye_w, 23)):
+                px = int(cx + offset)
+                curve = float(offset) * 0.025
+                local_len = lash_len * (0.76 + 0.08 * (i % 4))
+                _draw_tapered_lash(
+                    mask,
+                    np.array([px, eye_y], dtype=np.float32),
+                    np.array([curve, -local_len], dtype=np.float32),
+                    local_len,
+                    thickness,
+                    curve,
+                )
+        return _apply_dark_mask(image, mask, min(opacity * 0.86, 0.58), max(0.10, min(h, w) * 0.00035), _line_color_from_hue(hue))
+
     else:
-        raise ValueError("Region must be 'lip', 'blush', or 'eyeshadow'.")
+        raise ValueError("Region must be 'lip', 'blush', 'eyeshadow', 'eyeliner', or 'mascara'.")
 
     return _apply_color_with_mask(
         image=image,

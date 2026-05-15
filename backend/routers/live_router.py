@@ -46,6 +46,7 @@ try:
         apply_fft_filter,
         apply_cartoon_filter,
         apply_virtual_makeup,
+        apply_virtual_makeup_fallback,
     )
     from modules.input_module import get_landmarks, preprocess_image
 except ModuleNotFoundError:
@@ -65,6 +66,7 @@ except ModuleNotFoundError:
         apply_fft_filter,
         apply_cartoon_filter,
         apply_virtual_makeup,
+        apply_virtual_makeup_fallback,
     )
     from backend.modules.input_module import get_landmarks, preprocess_image
 
@@ -183,6 +185,8 @@ def _apply_filter(
             presets_map = _get_emoji_presets_map()
             fn = presets_map.get(filter_name)
             if fn:
+                if filter_name == "robot":
+                    return fn(frame, landmarks=landmarks)
                 return fn(frame)
 
         # ── Makeup ──
@@ -191,16 +195,25 @@ def _apply_filter(
             hue = config.get("makeup_hue", 0)
             opacity = config.get("makeup_opacity", 0.5)
             # Realtime pipeline: smoothed pixel landmarks → normalize to [0,1]
-            if landmarks is not None:
-                h_f, w_f = frame.shape[:2]
-                lm_list = [[float(pt[0]) / w_f, float(pt[1]) / h_f] for pt in landmarks]
-            else:
-                rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                lm_list = get_landmarks(preprocess_image(rgb_img))
-            return apply_virtual_makeup(
-                image=frame, landmarks=lm_list,
-                region=region, hue=int(hue), opacity=float(opacity),
-            )
+            try:
+                if landmarks is not None:
+                    h_f, w_f = frame.shape[:2]
+                    lm_list = [[float(pt[0]) / w_f, float(pt[1]) / h_f] for pt in landmarks]
+                else:
+                    rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    lm_list = get_landmarks(preprocess_image(rgb_img))
+                return apply_virtual_makeup(
+                    image=frame, landmarks=lm_list,
+                    region=region, hue=int(hue), opacity=float(opacity),
+                )
+            except Exception as exc:
+                logger.debug("Live makeup landmark path failed; using fallback: %s", exc)
+                return apply_virtual_makeup_fallback(
+                    image=frame,
+                    region=region,
+                    hue=int(hue),
+                    opacity=float(opacity),
+                )
 
         # ── Glasses ──
         elif filter_name == "glasses":
@@ -353,7 +366,7 @@ async def live_websocket(ws: WebSocket):
                     fps_frame_count = 0
                     last_fps_time = now
 
-                encoded = _encode_frame(result, quality=75)
+                encoded = _encode_frame(result, quality=94)
                 await ws.send_json({
                     "type": "frame",
                     "data": encoded,
@@ -380,7 +393,8 @@ def _feature_to_config(feature: str, params: dict) -> dict:
         "alien": "alien", "robot": "robot", "clown": "clown",
         "star_eyes": "star_eyes", "heart_eyes": "heart_eyes", "crying": "crying",
         "makeup_lips": "makeup_lips", "makeup_eyeshadow": "makeup_eyeshadow",
-        "makeup_blush": "makeup_blush",
+        "makeup_blush": "makeup_blush", "makeup_eyeliner": "makeup_eyeliner",
+        "makeup_mascara": "makeup_mascara",
         "glasses": "glasses", "hair_color": "hair_color",
         "aging": "aging", "deaging": "deaging", "cartoon": "cartoon",
     }
@@ -403,15 +417,20 @@ def _process_frame_sync(
     smoothed = smoother.smooth(raw_landmarks)
     face_detected = smoothed is not None
 
-    # 3. Apply all stacked filters sequentially
-    if not active_states or not face_detected:
+    # 3. Apply all stacked filters sequentially. Makeup has an approximate
+    # fallback, so it should not flash off during brief landmark misses.
+    has_makeup = any(str(feature).startswith("makeup_") for feature in active_states)
+    if not active_states or (not face_detected and not has_makeup):
         return frame, face_detected
 
     result = frame
     for feature, params in active_states.items():
         try:
             config = _feature_to_config(feature, params)
-            result = _apply_filter(result, smoothed, config)
+            filter_landmarks = smoothed
+            if raw_landmarks is None and str(feature).startswith("makeup_"):
+                filter_landmarks = None
+            result = _apply_filter(result, filter_landmarks, config)
         except Exception as exc:
             logger.warning("Stacked filter '%s' failed: %s", feature, exc)
 

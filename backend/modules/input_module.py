@@ -340,16 +340,13 @@ def get_landmarks(image: np.ndarray) -> list[dict[str, float]]:
     if landmarks is None:
         try:
             from mediapipe.tasks.python.vision import FaceLandmarker
-            from mediapipe.tasks.python.vision.core import image as mp_image_module
 
             if _TASK_LANDMARKER_INPUT is None:
                 _TASK_LANDMARKER_INPUT = FaceLandmarker.create_from_model_path(
                     _get_landmark_model_path()
                 )
 
-            mp_img = mp_image_module.Image(
-                mp_image_module.ImageFormat.SRGB, image
-            )
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
             result = _TASK_LANDMARKER_INPUT.detect(mp_img)
 
             if result.face_landmarks:

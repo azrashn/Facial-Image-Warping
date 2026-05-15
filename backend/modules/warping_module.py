@@ -208,10 +208,8 @@ class PersistentFaceMesh:
 
     def _detect_tasks(self, image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
         """Detect using Tasks API FaceLandmarker in VIDEO mode."""
-        from mediapipe.tasks.python.vision.core import image as mp_image_module
-
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        mp_image = mp_image_module.Image(mp_image_module.ImageFormat.SRGB, rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
         # VIDEO mode requires monotonically increasing timestamps
         self._frame_ts_ms += 33  # ~30 FPS cadence
@@ -255,10 +253,8 @@ def detect_face_landmarks_live(mesh: PersistentFaceMesh, image_bgr: np.ndarray) 
 
 
 def _landmarks_via_tasks(image_bgr: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
-    from mediapipe.tasks.python.vision.core import image as mp_image_module
-
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    mp_image = mp_image_module.Image(mp_image_module.ImageFormat.SRGB, rgb)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
     result = _get_tasks_face_landmarker().detect(mp_image)
     if not result.face_landmarks:
         return None

@@ -14,23 +14,36 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- LIVE MODE STATE (outer scope so ALL handlers can check) ---
     let isLiveMode = false;           // true when WebSocket live stream is active
     let _liveWsRef = null;            // reference to the live WebSocket
-    let liveActiveStates = {};        // stacked effects dict sent to backend
+    let liveActiveStates = {};        // single active live effect sent to backend
     let currentLivePreset = null;     // legacy preset tracker
+    const LIVE_FEATURE_KEYS = [
+        'smile', 'eyebrow', 'lip', 'slim', 'eye_scale', 'beard',
+        'alien', 'robot', 'clown', 'star_eyes', 'heart_eyes', 'crying',
+        'makeup_lips', 'makeup_eyeshadow', 'makeup_blush', 'makeup_eyeliner', 'makeup_mascara',
+        'glasses', 'hair_color', 'aging', 'deaging', 'cartoon', 'fft',
+        'eyebrow_raise', 'lip_widen', 'face_slim', 'eye_scaling',
+    ];
 
     /**
-     * Send a stacked state update to the live WebSocket backend.
-     * value=null removes the feature; otherwise it's merged/upserted.
+     * Send a live state update to the WebSocket backend.
+     * value=null removes the feature; otherwise it becomes the only active effect.
      */
     function sendLiveStateUpdate(feature, value) {
+        const payload = {};
+
         if (value === null || value === undefined) {
             delete liveActiveStates[feature];
+            payload[feature] = null;
         } else {
+            LIVE_FEATURE_KEYS.forEach(key => { payload[key] = null; });
+            liveActiveStates = {};
             liveActiveStates[feature] = value;
+            payload[feature] = value;
         }
         if (_liveWsRef && _liveWsRef.readyState === WebSocket.OPEN) {
             _liveWsRef.send(JSON.stringify({
                 action: 'update_live_state',
-                active_states: liveActiveStates,
+                active_states: payload,
             }));
             console.log('[Live] State update sent:', Object.keys(liveActiveStates));
         }
@@ -134,6 +147,8 @@ document.addEventListener('DOMContentLoaded', () => {
             makeupLips: "Dudaklar",
             makeupEyeshadow: "Göz Farı",
             makeupBlush: "Allık",
+            makeupEyeliner: "Eyeliner",
+            makeupMascara: "Rimel",
             applyMakeup: "Uygula",
             // Filters & Camera
             cartoonFilter: "Karikatür Filtresi",
@@ -238,6 +253,8 @@ document.addEventListener('DOMContentLoaded', () => {
             makeupLips: "Lips",
             makeupEyeshadow: "Eyeshadow",
             makeupBlush: "Blush",
+            makeupEyeliner: "Eyeliner",
+            makeupMascara: "Mascara",
             applyMakeup: "Apply",
             // Filters & Camera
             cartoonFilter: "Cartoon Filter",
@@ -2163,6 +2180,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let _liveWs = null;           // WebSocket connection for live mode
         let _wsReady = false;         // WebSocket open state
         let _wsPendingFrame = false;  // throttle: waiting for server response
+        const _LIVE_JPEG_QUALITY = 0.94;
 
         // Sync the WS ref to outer scope so sendLiveStateUpdate() can use it
         function _syncWsRef() { _liveWsRef = _liveWs; }
@@ -2188,7 +2206,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function encodeFrameMainThread() {
-            return Promise.resolve(cameraCanvas.toDataURL('image/jpeg', 0.65));
+            return Promise.resolve(cameraCanvas.toDataURL('image/jpeg', _LIVE_JPEG_QUALITY));
         }
 
         function encodeFrameOffThread() {
@@ -2212,7 +2230,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         bitmap,
                         width: cameraCanvas.width,
                         height: cameraCanvas.height,
-                        quality: 0.65,
+                        quality: _LIVE_JPEG_QUALITY,
                     }, [bitmap]);
                 } catch (err) {
                     reject(err);
@@ -2417,7 +2435,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 'star_eyes': 'star_eyes', 'heart_eyes': 'heart_eyes', 'crying': 'crying',
                 // Makeup
                 'makeup_lips': 'makeup_lips', 'makeup_eyeshadow': 'makeup_eyeshadow',
-                'makeup_blush': 'makeup_blush',
+                'makeup_blush': 'makeup_blush', 'makeup_eyeliner': 'makeup_eyeliner',
+                'makeup_mascara': 'makeup_mascara',
                 // Glasses
                 'glasses': 'glasses',
                 // Hair
@@ -2616,6 +2635,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     'aging', 'deaging', 'fft', 'cartoon',
                     'eye_scale', 'beard',
                     'makeup_lips', 'makeup_eyeshadow', 'makeup_blush',
+                    'makeup_eyeliner', 'makeup_mascara',
                     'glasses', 'hair_color',
                 ]);
                 if (allowedLiveOps.has(selectedOperation)) return selectedOperation;
@@ -2685,12 +2705,30 @@ document.addEventListener('DOMContentLoaded', () => {
         if (makeupRegionSelect) {
             makeupRegionSelect.addEventListener('change', () => {
                 if (isLiveMode && selectedOperation?.startsWith('makeup_')) {
+                    const previousMakeupOp = selectedOperation;
                     const region = makeupRegionSelect.value || 'lips';
                     selectedOperation = `makeup_${region}`;
+                    if (previousMakeupOp && previousMakeupOp !== selectedOperation) {
+                        sendLiveStateUpdate(previousMakeupOp, null);
+                    }
+                    const hue = hexToOpenCVHue(document.getElementById('makeupColor')?.value || '#ff0000');
+                    const opacity = Number(document.getElementById('makeupOpacity')?.value || 50) / 100.0;
+                    sendLiveStateUpdate(selectedOperation, { makeup_hue: hue, makeup_opacity: opacity, intensity: 50 });
                     console.log('[Live] Makeup region changed to:', selectedOperation);
                 }
             });
         }
+
+        [document.getElementById('makeupColor'), document.getElementById('makeupOpacity')].forEach(control => {
+            if (!control) return;
+            control.addEventListener('input', () => {
+                if (isLiveMode && selectedOperation?.startsWith('makeup_')) {
+                    const hue = hexToOpenCVHue(document.getElementById('makeupColor')?.value || '#ff0000');
+                    const opacity = Number(document.getElementById('makeupOpacity')?.value || 50) / 100.0;
+                    sendLiveStateUpdate(selectedOperation, { makeup_hue: hue, makeup_opacity: opacity, intensity: 50 });
+                }
+            });
+        });
 
         // Wire glasses dropdown to push config immediately in live mode
         const liveGlassesSelect = document.getElementById('glassesSelect');
