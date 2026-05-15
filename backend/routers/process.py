@@ -5,7 +5,7 @@ import threading
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket
 from pydantic import BaseModel
 
 try:
@@ -1310,15 +1310,16 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100) -> np.ndarray
         c_right = lm[right_eye_pts].mean(axis=0)
 
         eye_scale = 0.8
-        sigma = face_sz * 0.20
+        sigma = max(face_sz * 0.20, 1e-6)
 
-        for i in range(len(lm)):
-            d_left  = lm[i] - c_left
-            d_right = lm[i] - c_right
-            w_left  = np.exp(-0.5 * (np.linalg.norm(d_left)  / max(sigma, 1e-6)) ** 2)
-            w_right = np.exp(-0.5 * (np.linalg.norm(d_right) / max(sigma, 1e-6)) ** 2)
-            deltas[i] += d_left  * eye_scale * w_left
-            deltas[i] += d_right * eye_scale * w_right
+        d_left = lm - c_left
+        d_right = lm - c_right
+        
+        w_left = np.exp(-0.5 * (np.linalg.norm(d_left, axis=1) / sigma) ** 2)[:, np.newaxis]
+        w_right = np.exp(-0.5 * (np.linalg.norm(d_right, axis=1) / sigma) ** 2)[:, np.newaxis]
+        
+        deltas += d_left * eye_scale * w_left
+        deltas += d_right * eye_scale * w_right
 
         fixed = [10, 338, 297, 332, 284, 251, 389, 356, 454,
                  1, 4, 5, 168, 6, 197, 195]
@@ -1491,8 +1492,9 @@ def _apply_robot(image: np.ndarray) -> np.ndarray:
     stripe_period = max(5, int(face_sz * 0.035))
     stripe_height = max(1, stripe_period // 3)
     scan_mask = np.zeros((h, w), dtype=np.float32)
-    for y in range(0, h, stripe_period):
-        scan_mask[y:y + stripe_height, :] = 1.0
+    y_indices = np.arange(h)
+    mask_rows = (y_indices % stripe_period) < stripe_height
+    scan_mask[mask_rows, :] = 1.0
     scan_mask = cv2.GaussianBlur(scan_mask * mask, (0, 0), 0.65)
     tinted = tinted - scan_mask[..., None] * 34.0
     tinted += scan_mask[..., None] * np.array([12.0, 7.0, 2.0], dtype=np.float32)
@@ -2734,3 +2736,44 @@ async def process_clown_transformation(image: UploadFile = File(...)):
     except Exception as exc:
         logger.exception("process_clown_transformation.failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+@router.websocket("/process/ws_live")
+async def process_ws_live(websocket: WebSocket):
+    """
+    WebSocket Optimization & Frame Skipping (Task 3)
+    Instantly discard old work if processing > 33ms.
+    """
+    await websocket.accept()
+    logger.info("process_ws_live connected.")
+    
+    import time
+    import asyncio
+    from backend.utils.threaded_stream import ThreadedWebcam
+    stream = ThreadedWebcam().start()
+    
+    time.sleep(0.5)
+    last_process_time = 0.0
+    
+    try:
+        while True:
+            start_t = time.perf_counter()
+            
+            if start_t - last_process_time < 0.033:
+                await asyncio.sleep(0.005)
+                continue
+                
+            frame = stream.read()
+            if frame is None:
+                await asyncio.sleep(0.01)
+                continue
+                
+            last_process_time = time.perf_counter()
+            process_dur = last_process_time - start_t
+            
+            encoded = f"data:image/jpeg;base64,{encode_image_to_base64(frame)}"
+            await websocket.send_json({"image_b64": encoded, "fps": 1.0/max(process_dur, 0.033)})
+            
+    except Exception as exc:
+        logger.error(f"process_ws_live error: {exc}")
+    finally:
+        stream.stop()
