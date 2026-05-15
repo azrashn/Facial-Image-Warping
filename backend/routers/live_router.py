@@ -9,12 +9,6 @@ Architecture:
 Endpoints:
   WS   /live/ws          Realtime frame processing WebSocket
   GET  /live/status       Pipeline health check
-
-Performance Optimizations (GÖREV 1-4):
-  - OpenCL acceleration via cv2.ocl.setUseOpenCL(True)
-  - Frame budget enforcement: drop frames if processing > 30ms
-  - Non-blocking WebSocket sends
-  - ROI-based filter execution for local effects (makeup, eyes)
 """
 
 from __future__ import annotations
@@ -32,15 +26,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
 
-# ── GÖREV 3: Enable OpenCL acceleration for GPU-backed cv2 operations ──
-cv2.ocl.setUseOpenCL(True)
-_ocl_status = cv2.ocl.useOpenCL()
-logger.info("OpenCL acceleration: %s", "ENABLED" if _ocl_status else "DISABLED")
-
 router = APIRouter(prefix="/live", tags=["live"])
-
-# Frame budget: 30 FPS = ~33ms per frame.  Drop if processing exceeds this.
-_FRAME_BUDGET_MS = 33.0
 
 # -- Import warping module (dual-path) --
 try:
@@ -162,104 +148,6 @@ def _encode_frame(img: np.ndarray, quality: int = 70) -> str:
     return f"data:image/jpeg;base64,{b64}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# GÖREV 1: ROI-Based Makeup Application
-# ══════════════════════════════════════════════════════════════════════════════
-
-# MediaPipe landmark indices for ROI bounding boxes
-_LIP_INDICES = [
-    61, 146, 91, 181, 84, 17, 314, 405, 321, 375,
-    291, 409, 270, 269, 267, 0, 37, 39, 40, 185,
-]
-_EYE_INDICES_LEFT = [33, 246, 161, 160, 159, 158, 157, 173, 133]
-_EYE_INDICES_RIGHT = [362, 398, 384, 385, 386, 387, 388, 466, 263]
-_BROW_INDICES_LEFT = [55, 65, 52, 53, 46, 70, 63, 105, 66, 107]
-_BROW_INDICES_RIGHT = [285, 295, 282, 283, 276, 300, 293, 334, 296, 336]
-_CHEEK_INDICES = [205, 425, 123, 352, 116, 345]
-
-
-def _roi_bbox_from_landmarks(
-    landmarks_px: np.ndarray,
-    indices: list[int],
-    h: int, w: int,
-    pad_factor: float = 0.4,
-) -> tuple[int, int, int, int]:
-    """Compute padded bounding box (x0, y0, x1, y1) from landmark pixel coords."""
-    pts = landmarks_px[indices]
-    x_min, y_min = pts.min(axis=0)
-    x_max, y_max = pts.max(axis=0)
-    pad_x = (x_max - x_min) * pad_factor
-    pad_y = (y_max - y_min) * pad_factor
-    x0 = max(0, int(x_min - pad_x))
-    y0 = max(0, int(y_min - pad_y))
-    x1 = min(w, int(x_max + pad_x))
-    y1 = min(h, int(y_max + pad_y))
-    return x0, y0, x1, y1
-
-
-def _apply_makeup_roi(
-    frame: np.ndarray,
-    landmarks_px: np.ndarray,
-    region: str,
-    hue: int,
-    opacity: float,
-) -> np.ndarray:
-    """
-    GÖREV 1: ROI-based makeup — crop region around the target feature,
-    apply makeup only on the small crop, paste back.
-    """
-    h, w = frame.shape[:2]
-
-    # Determine which landmarks define the ROI
-    if region in ("lip", "lips"):
-        roi_indices = _LIP_INDICES
-        pad = 0.5
-    elif region == "eyeshadow":
-        roi_indices = (_EYE_INDICES_LEFT + _EYE_INDICES_RIGHT +
-                       _BROW_INDICES_LEFT + _BROW_INDICES_RIGHT)
-        pad = 0.4
-    elif region == "blush":
-        roi_indices = _CHEEK_INDICES
-        pad = 0.8
-    else:
-        # Fallback to full-frame
-        lm_list = [[float(pt[0]) / w, float(pt[1]) / h] for pt in landmarks_px]
-        return apply_virtual_makeup(
-            image=frame, landmarks=lm_list,
-            region=region, hue=int(hue), opacity=float(opacity),
-        )
-
-    # Filter valid indices
-    valid = [i for i in roi_indices if i < len(landmarks_px)]
-    if len(valid) < 3:
-        return frame
-
-    x0, y0, x1, y1 = _roi_bbox_from_landmarks(landmarks_px, valid, h, w, pad)
-    roi_w, roi_h = x1 - x0, y1 - y0
-    if roi_w < 8 or roi_h < 8:
-        return frame
-
-    # Crop
-    roi = frame[y0:y1, x0:x1].copy()
-
-    # Shift landmarks into ROI coordinate space and normalize
-    roi_lm = landmarks_px.copy()
-    roi_lm[:, 0] -= x0
-    roi_lm[:, 1] -= y0
-    lm_list = [[float(pt[0]) / roi_w, float(pt[1]) / roi_h] for pt in roi_lm]
-
-    # Apply makeup on small crop only
-    roi_result = apply_virtual_makeup(
-        image=roi, landmarks=lm_list,
-        region=region, hue=int(hue), opacity=float(opacity),
-    )
-
-    # Paste back
-    result = frame.copy()
-    result[y0:y1, x0:x1] = roi_result
-    return result
-
-
 def _apply_filter(
     frame: np.ndarray,
     landmarks: Optional[np.ndarray],
@@ -297,21 +185,22 @@ def _apply_filter(
             if fn:
                 return fn(frame)
 
-        # ── GÖREV 1: ROI-based Makeup ──
+        # ── Makeup ──
         elif filter_name.startswith("makeup_"):
-            region = filter_name.split("_", 1)[1]
+            region = filter_name.split("_", 1)[1]  # lips, eyeshadow, blush
             hue = config.get("makeup_hue", 0)
             opacity = config.get("makeup_opacity", 0.5)
+            # Realtime pipeline: smoothed pixel landmarks → normalize to [0,1]
             if landmarks is not None:
-                return _apply_makeup_roi(frame, landmarks, region, hue, opacity)
+                h_f, w_f = frame.shape[:2]
+                lm_list = [[float(pt[0]) / w_f, float(pt[1]) / h_f] for pt in landmarks]
             else:
-                # Fallback: detect landmarks and use full-frame
                 rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 lm_list = get_landmarks(preprocess_image(rgb_img))
-                return apply_virtual_makeup(
-                    image=frame, landmarks=lm_list,
-                    region=region, hue=int(hue), opacity=float(opacity),
-                )
+            return apply_virtual_makeup(
+                image=frame, landmarks=lm_list,
+                region=region, hue=int(hue), opacity=float(opacity),
+            )
 
         # ── Glasses ──
         elif filter_name == "glasses":
@@ -391,10 +280,6 @@ async def live_websocket(ws: WebSocket):
     last_fps_time = time.perf_counter()
     fps_frame_count = 0
 
-    # ── GÖREV 4: Frame drop tracking ──
-    _processing = False
-    _last_frame_data: Optional[str] = None
-
     try:
         while True:
             raw_msg = await ws.receive_text()
@@ -410,19 +295,6 @@ async def live_websocket(ws: WebSocket):
             # ── NEW: Stacked state update ──
             if msg_action == "update_live_state":
                 incoming = msg.get("active_states", {})
-
-                # ── GÖREV 3: HARD STATE RESET for emoji exclusivity ──
-                # Emojis are mutually exclusive.  If ANY emoji key arrives,
-                # purge ALL other emoji keys from active_states FIRST.
-                _EMOJI_KEYS = {"alien", "robot", "clown", "star_eyes", "heart_eyes", "crying"}
-                incoming_emojis = {k for k in incoming if k in _EMOJI_KEYS and incoming[k] is not None}
-                if incoming_emojis:
-                    # Remove all old emoji keys from current state
-                    for old_emoji in list(active_states.keys()):
-                        if old_emoji in _EMOJI_KEYS:
-                            del active_states[old_emoji]
-                            logger.info("GÖREV 3: Purged stale emoji state '%s'", old_emoji)
-
                 # Merge: null/None values → remove, otherwise upsert
                 for feature, params in incoming.items():
                     if params is None:
@@ -460,18 +332,8 @@ async def live_websocket(ws: WebSocket):
             # ── Frame processing ──
             if msg_type == "frame":
                 frame_data = msg.get("data", "")
-
-                # ── GÖREV 4: Frame dropping — if still processing, store latest and skip ──
-                if _processing:
-                    _last_frame_data = frame_data
-                    continue
-
-                _processing = True
-                t_start = time.perf_counter()
-
                 frame = _decode_frame(frame_data)
                 if frame is None:
-                    _processing = False
                     continue
 
                 # Run heavy processing in a thread
@@ -492,45 +354,12 @@ async def live_websocket(ws: WebSocket):
                     last_fps_time = now
 
                 encoded = _encode_frame(result, quality=75)
-
-                # ── GÖREV 4: Non-blocking send ──
-                try:
-                    await ws.send_json({
-                        "type": "frame",
-                        "data": encoded,
-                        "fps": round(fps, 1),
-                        "face_detected": face_detected,
-                    })
-                except Exception:
-                    pass
-
-                _processing = False
-
-                # ── GÖREV 4: If frames were dropped, grab the latest ──
-                if _last_frame_data is not None:
-                    latest = _last_frame_data
-                    _last_frame_data = None
-                    # Process latest frame immediately (skip stale ones)
-                    latest_frame = _decode_frame(latest)
-                    if latest_frame is not None:
-                        _processing = True
-                        result2, face2 = await asyncio.get_event_loop().run_in_executor(
-                            None,
-                            _process_frame_sync,
-                            latest_frame, mesh, smoother, active_states,
-                        )
-                        fps_frame_count += 1
-                        encoded2 = _encode_frame(result2, quality=75)
-                        try:
-                            await ws.send_json({
-                                "type": "frame",
-                                "data": encoded2,
-                                "fps": round(fps, 1),
-                                "face_detected": face2,
-                            })
-                        except Exception:
-                            pass
-                        _processing = False
+                await ws.send_json({
+                    "type": "frame",
+                    "data": encoded,
+                    "fps": round(fps, 1),
+                    "face_detected": face_detected,
+                })
 
     except WebSocketDisconnect:
         logger.info("Live WebSocket disconnected")
@@ -597,5 +426,4 @@ async def live_status():
     return {
         "ready": _face_mesh is not None,
         "backend": _face_mesh._backend if _face_mesh else None,
-        "opencl": cv2.ocl.useOpenCL(),
     }
