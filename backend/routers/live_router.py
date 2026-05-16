@@ -181,13 +181,14 @@ def _apply_filter(
             return apply_emoji_preset(frame, emoji_name, landmarks=landmarks)
 
         # ── Emoji Presets from process.py (alien, robot, clown etc.) ──
+        # All presets receive the pre-smoothed landmarks from the live
+        # pipeline so they skip redundant MediaPipe detection and track
+        # with zero jitter — same architecture as _apply_robot.
         elif filter_name in ("alien", "robot", "clown", "star_eyes", "heart_eyes", "crying"):
             presets_map = _get_emoji_presets_map()
             fn = presets_map.get(filter_name)
             if fn:
-                if filter_name == "robot":
-                    return fn(frame, landmarks=landmarks)
-                return fn(frame)
+                return fn(frame, landmarks=landmarks)
 
         # ── Makeup ──
         elif filter_name.startswith("makeup_"):

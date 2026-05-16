@@ -67,27 +67,27 @@ def _get_filter_fn(name: str):
     # Import from process.py where the preset functions live
     try:
         from routers.process import (
-            _apply_alien,
+            apply_alien_emoji,
             _apply_robot,
-            _apply_clown,
+            apply_clown_emoji,
             _apply_star_eyes,
             _apply_heart_eyes,
             _apply_crying,
         )
     except ModuleNotFoundError:
         from backend.routers.process import (
-            _apply_alien,
+            apply_alien_emoji,
             _apply_robot,
-            _apply_clown,
+            apply_clown_emoji,
             _apply_star_eyes,
             _apply_heart_eyes,
             _apply_crying,
         )
 
     registry = {
-        "alien": _apply_alien,
+        "alien": apply_alien_emoji,
         "robot": _apply_robot,
-        "clown": _apply_clown,
+        "clown": apply_clown_emoji,
         "star_eyes": _apply_star_eyes,
         "heart_eyes": _apply_heart_eyes,
         "crying": _apply_crying,

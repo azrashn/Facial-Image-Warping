@@ -1264,7 +1264,7 @@ def _apply_green_tint_hsv(
     return np.clip(blended, 0, 255).astype(np.uint8)
 
 
-def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100) -> np.ndarray:
+def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np.ndarray | None = None) -> np.ndarray:
     """
     👽 Uzaylı filtresi:
     - Ters üçgen kafa (çene ince, alın geniş)
@@ -1274,7 +1274,9 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100) -> np.ndarray
     try:
         h, w = image_bgr.shape[:2]
 
-        lm = detect_face_landmarks(image_bgr)
+        # Use pre-calculated landmarks from the live router if provided;
+        # otherwise fall back to local detection (static image path).
+        lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr.copy()
 
@@ -1715,7 +1717,7 @@ def _apply_robot(image: np.ndarray, landmarks: np.ndarray | None = None) -> np.n
 
 
 # ── 3. CLOWN PRESET ──────────────────────────────────────────────────────────
-def apply_clown_emoji(image_bgr: np.ndarray, intensity: int = 100) -> np.ndarray:
+def apply_clown_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np.ndarray | None = None) -> np.ndarray:
     """
     🤡 Joker tarzı palyaço:
     - Beyaz yüz boyası
@@ -1728,7 +1730,9 @@ def apply_clown_emoji(image_bgr: np.ndarray, intensity: int = 100) -> np.ndarray
     try:
         h, w = image_bgr.shape[:2]
 
-        lm = detect_face_landmarks(image_bgr)
+        # Use pre-calculated landmarks from the live router if provided;
+        # otherwise fall back to local detection (static image path).
+        lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr.copy()
 
@@ -1868,11 +1872,13 @@ def _place_star_masks(image: np.ndarray, landmarks) -> np.ndarray:
     return out
 
 
-def _apply_star_eyes(image: np.ndarray) -> np.ndarray:
+def _apply_star_eyes(image: np.ndarray, landmarks: np.ndarray | None = None) -> np.ndarray:
     """🤩 Star Eyes: subtle smile + warm tint + EAR-reactive glowing stars."""
     out = image.copy()
     h, w = out.shape[:2]
-    lm = detect_face_landmarks(out)
+    # Use pre-calculated landmarks from the live router if provided;
+    # otherwise fall back to local detection (static image path).
+    lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(out)
     if lm is None:
         return out
     face_sz = _face_scale(lm)
@@ -2069,11 +2075,13 @@ def _place_heart_masks(image: np.ndarray, landmarks) -> np.ndarray:
     return result
 
 
-def _apply_heart_eyes(image: np.ndarray) -> np.ndarray:
+def _apply_heart_eyes(image: np.ndarray, landmarks: np.ndarray | None = None) -> np.ndarray:
     """😍 Heart-Eyes: brow raise/widen + blush effect + red lips + neon heart overlays."""
     out = image.copy()
     h, w = out.shape[:2]
-    lm = detect_face_landmarks(out)
+    # Use pre-calculated landmarks from the live router if provided;
+    # otherwise fall back to local detection (static image path).
+    lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(out)
     if lm is None:
         return out
     face_sz = _face_scale(lm)
@@ -2383,7 +2391,7 @@ def _apply_refraction_tears(
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def _apply_crying(image: np.ndarray) -> np.ndarray:
+def _apply_crying(image: np.ndarray, landmarks: np.ndarray | None = None) -> np.ndarray:
     """😢 Crying v2 — DSP-Aware Refraction Tears + Eye Redness.
 
     Pipeline
@@ -2395,7 +2403,9 @@ def _apply_crying(image: np.ndarray) -> np.ndarray:
     """
     out = image.copy()
     h, w = out.shape[:2]
-    lm = _get_stable_landmarks("crying", out)
+    # Use pre-calculated landmarks from the live router if provided;
+    # otherwise fall back to the stable-landmarks caching path.
+    lm = landmarks.astype(np.float32).copy() if landmarks is not None else _get_stable_landmarks("crying", out)
     if lm is None:
         return out
     face_sz = _face_scale(lm)
