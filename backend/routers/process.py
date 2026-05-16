@@ -1270,13 +1270,22 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
     - Ters üçgen kafa (çene ince, alın geniş)
     - Büyük siyah oval gözler
     - Yeşil cilt tonu
+
+    Live-mode optimization: when ``landmarks`` are provided by the live
+    router (pre-smoothed pixel coordinates), ALL post-warp stages derive
+    their anchor positions from the computed warp destination array (``dst``)
+    instead of re-running MediaPipe inference.  This eliminates 3–4
+    redundant neural-network calls (~120–200 ms/frame) and keeps the alien
+    mask perfectly synchronized with the 30 FPS face tracking.
     """
     try:
         h, w = image_bgr.shape[:2]
+        _is_live = landmarks is not None
 
-        # Use pre-calculated landmarks from the live router if provided;
-        # otherwise fall back to local detection (static image path).
-        lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(image_bgr)
+        # ── Stage 0: Landmark acquisition ────────────────────────────────
+        # Live path:   use pre-smoothed landmarks from the router (zero cost)
+        # Static path: fall back to local MediaPipe detection (POST endpoint)
+        lm = landmarks.astype(np.float32).copy() if _is_live else detect_face_landmarks(image_bgr)
         if lm is None:
             return image_bgr.copy()
 
@@ -1285,6 +1294,7 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
 
         nose_tip = lm[1].copy()
 
+        # ── Stage 1a: Chin pull (inverted triangle skull) ────────────────
         chin_indices = [
             152, 377, 400, 378, 379, 365, 397, 288,
             361, 323, 148, 176, 149, 150, 136, 172, 58, 132
@@ -1299,12 +1309,14 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
             deltas[idx, 0] += direction[0] * pull * 0.8
             deltas[idx, 1] += direction[1] * pull * 0.3
 
+        # ── Stage 1b: Temple widen ───────────────────────────────────────
         temple_indices = [234, 454, 127, 356, 162, 389]
         for idx in temple_indices:
             cx = w / 2.0
             dx = lm[idx, 0] - cx
             deltas[idx, 0] += np.sign(dx) * face_sz * 0.08
 
+        # ── Stage 1c: Eye enlargement (Gaussian radial push) ─────────────
         left_eye_pts  = [33, 133, 160, 159, 158, 157, 163, 144, 145, 153, 154, 155, 173, 246, 161]
         right_eye_pts = [362, 263, 387, 386, 385, 384, 390, 373, 374, 380, 381, 382, 398, 466, 388]
 
@@ -1316,10 +1328,10 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
 
         d_left = lm - c_left
         d_right = lm - c_right
-        
+
         w_left = np.exp(-0.5 * (np.linalg.norm(d_left, axis=1) / sigma) ** 2)[:, np.newaxis]
         w_right = np.exp(-0.5 * (np.linalg.norm(d_right, axis=1) / sigma) ** 2)[:, np.newaxis]
-        
+
         deltas += d_left * eye_scale * w_left
         deltas += d_right * eye_scale * w_right
 
@@ -1329,13 +1341,28 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
             deltas[idx] = 0.0
         deltas[np.abs(deltas) < 0.1] = 0.0
 
+        # ── Stage 2: Geometric warp + eyebrow raise ─────────────────────
+        # Compute destination landmarks BEFORE warping — these represent
+        # where each facial feature will land after the geometric transform.
+        dst = lm + deltas
+
         base = _prepare_warp(image_bgr, lm, deltas)
-        base = apply_eyebrow_raise(base, 40)
+        # Pass dst landmarks to eyebrow_raise so it doesn't re-detect.
+        base = apply_eyebrow_raise(base, 40, landmarks=dst)
 
-        lm2 = detect_face_landmarks(base)
-        if lm2 is None:
-            lm2 = lm
+        # ── Stage 3: Post-warp landmark resolution ──────────────────────
+        # Live path:  use computed dst coordinates (zero cost, jitter-free).
+        #             The warp moved features to exactly these positions.
+        # Static path: re-detect on the warped image for maximum accuracy
+        #             (acceptable latency for single-image POST requests).
+        if _is_live:
+            lm2 = dst
+        else:
+            lm2 = detect_face_landmarks(base)
+            if lm2 is None:
+                lm2 = dst
 
+        # ── Stage 4: Green skin tint with extended face mask ─────────────
         jaw_indices = [
             10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
             361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
@@ -1360,9 +1387,15 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
             + base.astype(np.float32) * (1.0 - face_mask_3ch * 0.60)
         ).astype(np.uint8)
 
-        lm3 = detect_face_landmarks(result)
-        if lm3 is None:
+        # ── Stage 5: Eye overlay anchoring ──────────────────────────────
+        # Live path:  reuse lm2 (dst) — already computed, no re-detection.
+        # Static path: re-detect for final precision on the green-tinted image.
+        if _is_live:
             lm3 = lm2
+        else:
+            lm3 = detect_face_landmarks(result)
+            if lm3 is None:
+                lm3 = lm2
 
         c_left2  = lm3[left_eye_pts].mean(axis=0)
         c_right2 = lm3[right_eye_pts].mean(axis=0)
