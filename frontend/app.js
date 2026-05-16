@@ -550,6 +550,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Toggles
     toggleLandmarks.addEventListener('change', (e) => {
+        // ── LIVE MODE: send show_landmarks as independent toggle ──
+        if (isLiveMode && _liveWsRef && _liveWsRef.readyState === WebSocket.OPEN) {
+            _liveWsRef.send(JSON.stringify({
+                action: 'update_live_state',
+                active_states: { show_landmarks: e.target.checked ? { enabled: true } : null },
+            }));
+            console.log('[Live] show_landmarks:', e.target.checked);
+        }
         if (e.target.checked && currentOriginalImage) {
             generateLandmarks();
             landmarksSvg.style.display = 'block';
@@ -1257,7 +1265,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isLiveMode) {
                 const hue = hexToOpenCVHue(makeupColor.value);
                 const opacity = Number(makeupOpacity.value) / 100.0;
-                sendLiveStateUpdate(featureKey, { makeup_hue: hue, makeup_opacity: opacity, intensity: 50 });
+                sendLiveStateUpdate(featureKey, { makeup_hue: hue, makeup_opacity: opacity, makeup_color: makeupColor.value, intensity: 50 });
                 return;
             }
 
@@ -2711,9 +2719,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (previousMakeupOp && previousMakeupOp !== selectedOperation) {
                         sendLiveStateUpdate(previousMakeupOp, null);
                     }
-                    const hue = hexToOpenCVHue(document.getElementById('makeupColor')?.value || '#ff0000');
+                    const hexVal = document.getElementById('makeupColor')?.value || '#ff0000';
+                    const hue = hexToOpenCVHue(hexVal);
                     const opacity = Number(document.getElementById('makeupOpacity')?.value || 50) / 100.0;
-                    sendLiveStateUpdate(selectedOperation, { makeup_hue: hue, makeup_opacity: opacity, intensity: 50 });
+                    sendLiveStateUpdate(selectedOperation, { makeup_hue: hue, makeup_opacity: opacity, makeup_color: hexVal, intensity: 50 });
                     console.log('[Live] Makeup region changed to:', selectedOperation);
                 }
             });
@@ -2723,9 +2732,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!control) return;
             control.addEventListener('input', () => {
                 if (isLiveMode && selectedOperation?.startsWith('makeup_')) {
-                    const hue = hexToOpenCVHue(document.getElementById('makeupColor')?.value || '#ff0000');
+                    const hexVal = document.getElementById('makeupColor')?.value || '#ff0000';
+                    const hue = hexToOpenCVHue(hexVal);
                     const opacity = Number(document.getElementById('makeupOpacity')?.value || 50) / 100.0;
-                    sendLiveStateUpdate(selectedOperation, { makeup_hue: hue, makeup_opacity: opacity, intensity: 50 });
+                    sendLiveStateUpdate(selectedOperation, { makeup_hue: hue, makeup_opacity: opacity, makeup_color: hexVal, intensity: 50 });
                 }
             });
         });

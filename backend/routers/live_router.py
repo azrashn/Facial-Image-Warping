@@ -28,6 +28,30 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/live", tags=["live"])
 
+
+def _hex_to_opencv_hue(hex_str: str) -> int:
+    """Parse '#RRGGBB' hex color to OpenCV HSV hue (0-179)."""
+    hex_str = hex_str.lstrip("#")
+    if len(hex_str) < 6:
+        return 0
+    r = int(hex_str[0:2], 16) / 255.0
+    g = int(hex_str[2:4], 16) / 255.0
+    b = int(hex_str[4:6], 16) / 255.0
+    max_c = max(r, g, b)
+    min_c = min(r, g, b)
+    d = max_c - min_c
+    if d < 1e-6:
+        h = 0.0
+    elif max_c == r:
+        h = 60.0 * (((g - b) / d) % 6)
+    elif max_c == g:
+        h = 60.0 * ((b - r) / d + 2)
+    else:
+        h = 60.0 * ((r - g) / d + 4)
+    if h < 0:
+        h += 360.0
+    return int(round(h / 2.0))  # OpenCV hue range 0-179
+
 # -- Import warping module (dual-path) --
 try:
     from modules.warping_module import (
@@ -194,6 +218,10 @@ def _apply_filter(
         elif filter_name.startswith("makeup_"):
             region = filter_name.split("_", 1)[1]  # lips, eyeshadow, blush
             hue = config.get("makeup_hue", 0)
+            # Use makeup_color hex string (more reliable) if provided
+            makeup_color_hex = config.get("makeup_color", "")
+            if makeup_color_hex and isinstance(makeup_color_hex, str) and len(makeup_color_hex) >= 4:
+                hue = _hex_to_opencv_hue(makeup_color_hex)
             opacity = config.get("makeup_opacity", 0.5)
             # Realtime pipeline: smoothed pixel landmarks → normalize to [0,1]
             try:
@@ -404,6 +432,20 @@ def _feature_to_config(feature: str, params: dict) -> dict:
     return config
 
 
+def _draw_landmarks_overlay(
+    frame: np.ndarray,
+    landmarks: np.ndarray,
+) -> np.ndarray:
+    """Draw 468 face mesh landmark points on the frame."""
+    out = frame.copy()
+    color = (0, 255, 200)  # bright cyan-green
+    radius = max(1, int(min(out.shape[:2]) * 0.003))
+    for pt in landmarks:
+        x, y = int(round(pt[0])), int(round(pt[1]))
+        cv2.circle(out, (x, y), radius, color, -1, cv2.LINE_AA)
+    return out
+
+
 def _process_frame_sync(
     frame: np.ndarray,
     mesh: PersistentFaceMesh,
@@ -411,6 +453,11 @@ def _process_frame_sync(
     active_states: dict,
 ) -> tuple[np.ndarray, bool]:
     """Synchronous frame processing — applies ALL active states sequentially."""
+    # 0. Extract show_landmarks — independent toggle, NOT a filter.
+    show_landmarks = "show_landmarks" in active_states
+    # Build filter-only states (exclude show_landmarks)
+    filter_states = {k: v for k, v in active_states.items() if k != "show_landmarks"}
+
     # 1. Detect landmarks
     raw_landmarks = mesh.detect(frame)
 
@@ -420,12 +467,20 @@ def _process_frame_sync(
 
     # 3. Apply all stacked filters sequentially. Makeup has an approximate
     # fallback, so it should not flash off during brief landmark misses.
-    has_makeup = any(str(feature).startswith("makeup_") for feature in active_states)
-    if not active_states or (not face_detected and not has_makeup):
+    has_makeup = any(str(feature).startswith("makeup_") for feature in filter_states)
+    if not filter_states and not show_landmarks:
+        if not face_detected:
+            return frame, face_detected
+        # No filters but show_landmarks is on → skip to step 4
+        if show_landmarks and smoothed is not None:
+            return _draw_landmarks_overlay(frame, smoothed), face_detected
+        return frame, face_detected
+
+    if not face_detected and not has_makeup and not show_landmarks:
         return frame, face_detected
 
     result = frame
-    for feature, params in active_states.items():
+    for feature, params in filter_states.items():
         try:
             config = _feature_to_config(feature, params)
             filter_landmarks = smoothed
@@ -434,6 +489,10 @@ def _process_frame_sync(
             result = _apply_filter(result, filter_landmarks, config)
         except Exception as exc:
             logger.warning("Stacked filter '%s' failed: %s", feature, exc)
+
+    # 4. Draw landmarks AFTER all filters (on top of everything)
+    if show_landmarks and smoothed is not None:
+        result = _draw_landmarks_overlay(result, smoothed)
 
     return result, face_detected
 
