@@ -173,7 +173,7 @@ class Renderer:
         cv2.rectangle(bar_overlay, (0, h - bar_h), (w, h), self.COLOR_BG, -1)
         cv2.addWeighted(bar_overlay, 0.75, display, 0.25, 0, display)
 
-        instructions = "1-6: Filters | 7-9: Emoji | 0: Off | W/S: Intensity | L: Landmarks | B: BBox | P: Screenshot | F: Fullscreen"
+        instructions = "1-6: Filters | 7-9: Emoji | X: FaceSwap | G: Load | H: Clear | 0: Off | W/S: Intensity | P: Screenshot"
         cv2.putText(
             display, instructions,
             (pad, h - int(8 * scale)),

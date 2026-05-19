@@ -3,12 +3,15 @@ main_live.py — Entry point for the Realtime Snapchat-style Facial Filter Engin
 
 Pipeline:
   webcam (threaded) → frame capture → landmark tracking → temporal smoothing
-  → geometric warp → rendering → display
+  → geometric warp → output
 
 Keyboard Controls:
   1-6  : Individual geometric filters
   7-9  : Emoji expression presets
   0    : No filter
+  X    : Face Swap mode
+  G    : Load source face image (file dialog)
+  H    : Clear source face
   W/↑  : Increase intensity (+10)
   S/↓  : Decrease intensity (-10)
   L    : Toggle landmark visualization
@@ -55,6 +58,7 @@ FILTER_DISPLAY_NAMES: dict[str, str] = {
     "emoji_happy":      "Emoji: Happy",
     "emoji_surprised":  "Emoji: Surprised",
     "emoji_joyful":     "Emoji: Joyful",
+    "face_swap":        "Face Swap",
 }
 
 # ── Key constants (Windows cv2.waitKeyEx codes) ──
@@ -69,7 +73,7 @@ def _print_banner() -> None:
     """Print startup banner with keyboard controls."""
     banner = """
 +----------------------------------------------------------+
-|        Realtime Facial Filter Engine v2.0                 |
+|        Realtime Facial Filter Engine v3.0                 |
 |        Snapchat-style Mesh-Based Geometric Warping        |
 +----------------------------------------------------------+
 |  Filters:                                                 |
@@ -77,6 +81,11 @@ def _print_banner() -> None:
 |    4: Face Slim    5: Eye Enlarge     6: Beard             |
 |    7: Emoji Happy  8: Emoji Surprised 9: Emoji Joyful     |
 |    0: None (original)                                     |
+|                                                           |
+|  Face Swap:                                               |
+|    X        : Activate Face Swap filter                   |
+|    G        : Load source face image (file dialog)        |
+|    H        : Clear source face                           |
 |                                                           |
 |  Controls:                                                |
 |    W / UP   : Increase intensity (+10)                    |
@@ -156,6 +165,11 @@ def main() -> None:
 
             # Render UI overlay and display
             display_name = FILTER_DISPLAY_NAMES.get(filter_type, filter_type)
+            # Append source face indicator when face swap is active/loaded
+            if engine.source_face_loaded:
+                display_name += "  [SRC ✓]" if filter_type == "face_swap" else ""
+            elif filter_type == "face_swap":
+                display_name += "  [NO SRC]"
             display_frame = renderer.draw_overlay(
                 frame=processed_frame,
                 fps=fps_counter.get_smooth_fps(),
@@ -196,6 +210,46 @@ def main() -> None:
                 filter_type = "emoji_joyful"
             elif key == ord("0"):
                 filter_type = "none"
+
+            # Face swap controls
+            elif key in (ord("x"), ord("X")):
+                filter_type = "face_swap"
+                if not engine.source_face_loaded:
+                    logger.info("Face Swap selected — press G to load a source face")
+                else:
+                    logger.info("Face Swap activated")
+            elif key in (ord("g"), ord("G")):
+                # Open file dialog to load source face
+                try:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    file_path = filedialog.askopenfilename(
+                        title="Select Source Face Image",
+                        filetypes=[
+                            ("Image files", "*.jpg *.jpeg *.png *.webp *.bmp"),
+                            ("All files", "*.*"),
+                        ],
+                    )
+                    root.destroy()
+                    if file_path:
+                        ok = engine.load_source_face_from_path(file_path)
+                        if ok:
+                            logger.info("Source face loaded: %s", file_path)
+                            filter_type = "face_swap"
+                        else:
+                            logger.warning("No face detected in selected image")
+                    else:
+                        logger.info("File dialog cancelled")
+                except Exception as e:
+                    logger.error("File dialog failed: %s", e)
+            elif key in (ord("h"), ord("H")):
+                engine.clear_source_face()
+                if filter_type == "face_swap":
+                    filter_type = "none"
+                logger.info("Source face cleared")
 
             # Intensity control
             elif key in (KEY_UP_ARROW, KEY_UP_ARROW_LINUX, ord("w"), ord("W")):

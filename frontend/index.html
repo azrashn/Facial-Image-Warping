@@ -76,8 +76,8 @@
                         <button class="op-btn" data-op="aging" data-i18n="aging">Aging</button>
                         <button class="op-btn" data-op="deaging" data-i18n="deaging">De-Aging</button>
                         <button class="op-btn" data-op="fft" data-i18n="fftFilter">FFT Filter</button>
-                        <button class="op-btn" data-op="age_estimation" data-i18n="ageEstimation">Age
-                            Estimation</button>
+                        <button class="op-btn" data-op="age_estimation" data-i18n="ageEstimation">Age Estimation</button>
+                        <button class="op-btn" data-op="face_swap" data-i18n="faceSwap">Face Swap</button>
                     </div>
                 </section>
 
@@ -205,7 +205,73 @@
                     </div>
                 </section>
 
+                <!-- Realtime Face Swap Section -->
+                <section class="control-section" id="faceSwapSection" style="display: none;">
+                    <h3 data-i18n="realtimeFaceSwap">Realtime Face Swap</h3>
+                    
+                    <!-- Upload Face Button & Preview -->
+                    <div style="margin-bottom: 15px;">
+                        <input type="file" id="faceSwapUpload" accept="image/*" hidden>
+                        <button class="op-btn" id="faceSwapUploadBtn" style="width: 100%; margin-bottom: 10px;" data-i18n="uploadSourceFace">Upload Source Face</button>
+                        
+                        <div id="faceSwapPreviewContainer" style="display: none; position: relative; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 5px; text-align: center;">
+                            <img id="faceSwapPreviewImg" src="" alt="Source Face" style="max-width: 100%; max-height: 120px; object-fit: contain; border-radius: var(--radius-sm);">
+                            <button class="remove-btn" id="removeFaceSwapImgBtn" style="position: absolute; top: 5px; right: 5px; z-index: 10;">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
+                            </button>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 5px;" id="faceSwapLoadedStatus" data-i18n="sourceFaceLoaded">Source loaded</div>
+                        </div>
+                    </div>
 
+                    <!-- Webcam Controls -->
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                        <button class="op-btn" id="fsStartWebcamBtn" style="flex: 1;" data-i18n="startWebcam">Start Webcam</button>
+                        <button class="op-btn stop-mode" id="fsStopWebcamBtn" style="flex: 1; display: none;" data-i18n="stopWebcam">Stop Webcam</button>
+                    </div>
+
+                    <!-- Enable Face Swap Toggle -->
+                    <div class="toggle-row" style="margin-bottom: 15px;">
+                        <span data-i18n="enableFaceSwap">Enable Face Swap</span>
+                        <label class="switch">
+                            <input type="checkbox" id="enableFaceSwapToggle">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+
+                    <!-- Blend Strength Slider -->
+                    <div style="margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                            <span data-i18n="blendStrength">Blend Strength</span>
+                            <span id="fsBlendVal">50%</span>
+                        </div>
+                        <input type="range" id="fsBlendSlider" min="0" max="100" value="50" class="custom-range">
+                    </div>
+
+                    <!-- Stability Slider -->
+                    <div style="margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                            <span data-i18n="stability">Stability</span>
+                            <span id="fsStabilityVal">70%</span>
+                        </div>
+                        <input type="range" id="fsStabilitySlider" min="0" max="100" value="70" class="custom-range">
+                    </div>
+
+                    <!-- Mask Softness Slider -->
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                            <span data-i18n="maskSoftness">Mask Softness</span>
+                            <span id="fsSoftnessVal">30%</span>
+                        </div>
+                        <input type="range" id="fsSoftnessSlider" min="0" max="100" value="30" class="custom-range">
+                    </div>
+
+                    <!-- Screenshot Button -->
+                    <button class="op-btn capture-mode" id="fsScreenshotBtn" style="width: 100%; display: none;" data-i18n="captureScreenshot">Capture Screenshot</button>
+
+                </section>
 
                 <!-- Sliders -->
                 <section class="control-section">

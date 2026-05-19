@@ -73,6 +73,12 @@ try:
         apply_virtual_makeup_fallback,
     )
     from modules.input_module import get_landmarks, preprocess_image
+    from modules.face_swap_module import (
+        SourceFaceCache,
+        realtime_face_swap,
+        load_source_face,
+        FaceSwapError,
+    )
 except ModuleNotFoundError:
     from backend.modules.warping_module import (
         PersistentFaceMesh,
@@ -93,6 +99,12 @@ except ModuleNotFoundError:
         apply_virtual_makeup_fallback,
     )
     from backend.modules.input_module import get_landmarks, preprocess_image
+    from backend.modules.face_swap_module import (
+        SourceFaceCache,
+        realtime_face_swap,
+        load_source_face,
+        FaceSwapError,
+    )
 
 # Emoji presets from process.py (lazy import to avoid circular)
 def _get_emoji_presets_map():
@@ -269,6 +281,14 @@ def _apply_filter(
         elif filter_name == "cartoon":
             return apply_cartoon_filter(frame)
 
+        # ── Face Swap ──
+        elif filter_name == "face_swap":
+            source_cache = config.get("_source_cache")
+            if source_cache and isinstance(source_cache, SourceFaceCache) and source_cache.is_loaded:
+                return realtime_face_swap(frame, landmarks, source_cache)
+            else:
+                logger.debug("Face swap: no source cache in config")
+
         else:
             logger.debug("Unknown live filter: %s", filter_name)
 
@@ -304,6 +324,9 @@ async def live_websocket(ws: WebSocket):
     # Keys are feature names (e.g. "glasses", "smile", "makeup_lips")
     # Values are parameter dicts for that feature
     active_states: dict[str, dict] = {}
+
+    # ── Per-connection face swap source cache ──
+    source_cache = SourceFaceCache()
 
     # Legacy single-filter config (kept for backward compatibility)
     current_config = {
@@ -347,6 +370,44 @@ async def live_websocket(ws: WebSocket):
                 await ws.send_json({
                     "type": "state_ack",
                     "active_states": list(active_states.keys()),
+                    "source_face_loaded": source_cache.is_loaded,
+                })
+                continue
+
+            # ── Face swap source upload ──
+            if msg_action == "load_source_face":
+                src_data = msg.get("data", "")
+                try:
+                    if "," in src_data:
+                        src_data = src_data.split(",", 1)[1]
+                    src_bytes = base64.b64decode(src_data)
+                    source_cache.load_from_bytes(src_bytes)
+                    await ws.send_json({
+                        "type": "status",
+                        "message": "Source face loaded successfully",
+                        "source_face_loaded": True,
+                    })
+                except FaceSwapError as exc:
+                    await ws.send_json({
+                        "type": "error",
+                        "message": f"Source face load failed: {exc}",
+                        "source_face_loaded": False,
+                    })
+                except Exception as exc:
+                    await ws.send_json({
+                        "type": "error",
+                        "message": f"Invalid source image: {exc}",
+                        "source_face_loaded": False,
+                    })
+                continue
+
+            if msg_action == "clear_source_face":
+                source_cache.clear()
+                active_states.pop("face_swap", None)
+                await ws.send_json({
+                    "type": "status",
+                    "message": "Source face cleared",
+                    "source_face_loaded": False,
                 })
                 continue
 
@@ -382,7 +443,7 @@ async def live_websocket(ws: WebSocket):
                 result, face_detected = await asyncio.get_event_loop().run_in_executor(
                     None,
                     _process_frame_sync,
-                    frame, mesh, smoother, active_states,
+                    frame, mesh, smoother, active_states, source_cache,
                 )
 
                 # FPS calculation
@@ -426,6 +487,7 @@ def _feature_to_config(feature: str, params: dict) -> dict:
         "makeup_mascara": "makeup_mascara",
         "glasses": "glasses", "hair_color": "hair_color",
         "aging": "aging", "deaging": "deaging", "cartoon": "cartoon",
+        "face_swap": "face_swap",
     }
     config["filter"] = _FEATURE_TO_FILTER.get(feature, feature)
     config.setdefault("intensity", 50)
@@ -451,6 +513,7 @@ def _process_frame_sync(
     mesh: PersistentFaceMesh,
     smoother: _BrowserSmoother,
     active_states: dict,
+    source_cache: SourceFaceCache = None,
 ) -> tuple[np.ndarray, bool]:
     """Synchronous frame processing — applies ALL active states sequentially."""
     # 0. Extract show_landmarks — independent toggle, NOT a filter.
@@ -483,6 +546,9 @@ def _process_frame_sync(
     for feature, params in filter_states.items():
         try:
             config = _feature_to_config(feature, params)
+            # Inject source cache for face swap filter
+            if feature == "face_swap" and source_cache is not None:
+                config["_source_cache"] = source_cache
             filter_landmarks = smoothed
             if raw_landmarks is None and str(feature).startswith("makeup_"):
                 filter_landmarks = None
