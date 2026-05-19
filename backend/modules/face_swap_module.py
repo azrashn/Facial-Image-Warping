@@ -18,12 +18,13 @@ FACE_OVAL_INDICES = [
     162, 21, 54, 103, 67, 109,
 ]
 
-# Inner mouth (lip interior) landmarks for mouth occlusion mask.
-# These trace the inside edge of the lips so that the target's real
-# mouth void (teeth, tongue, shadow) is preserved over the warped source.
-INNER_MOUTH_INDICES = [
-    78, 191, 80, 81, 82, 13, 312, 311, 310, 415,
-    308, 324, 318, 402, 317, 14, 87, 178, 88, 95,
+# MediaPipe Inner Lip Contour — exact ordered loop for cv2.fillPoly.
+# Traces the inner edge of the lips (the teeth/void boundary), NOT the
+# outer lip surface.  Using an ordered contour with fillPoly avoids the
+# convexHull inflation that causes double-lip / smudge artifacts.
+INNER_LIP_INDICES = [
+    78, 95, 88, 178, 87, 14, 317, 402, 318, 324,
+    308, 415, 310, 311, 312, 13, 82, 81, 80, 191,
 ]
 
 class FaceSwapError(Exception):
@@ -254,41 +255,41 @@ class FaceSwapEngine:
         # MOUTH OCCLUSION PASS
         # After seamlessClone blends skin tones, we restore the target's
         # real inner-mouth pixels (teeth, tongue, shadow) on top.
-        # Math:  result = target * mouth_alpha + swapped * (1 - mouth_alpha)
+        #
+        # Pipeline:
+        #   1. Extract the EXACT inner-lip contour from target landmarks
+        #      (ordered loop → fillPoly, NOT convexHull which inflates)
+        #   2. Gentle Gaussian feather (5×5) for seamless edge transition
+        #   3. Alpha blend:  result = target×α + swapped×(1−α)
+        #      where α=1 inside mouth → real teeth/tongue shown
         # ══════════════════════════════════════════════════════════════════
         try:
             n_lm = len(target_landmarks)
-            inner_mouth_pts = np.array(
-                [target_landmarks[i] for i in INNER_MOUTH_INDICES if i < n_lm],
+            inner_lip_pts = np.array(
+                [target_landmarks[i] for i in INNER_LIP_INDICES if i < n_lm],
                 dtype=np.int32,
             )
-            if len(inner_mouth_pts) >= 6:
-                # Shift to ROI coordinates
-                inner_mouth_roi = inner_mouth_pts - np.array([x_min, y_min], dtype=np.int32)
+            if len(inner_lip_pts) >= 10:
+                # Shift to ROI-local coordinates
+                inner_lip_roi = inner_lip_pts - np.array([x_min, y_min], dtype=np.int32)
 
-                # Build mouth mask (white = mouth interior)
+                # Build precise mouth mask using the ordered contour (no convexHull!)
                 mouth_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
-                cv2.fillConvexPoly(mouth_mask, cv2.convexHull(inner_mouth_roi), 255)
+                cv2.fillPoly(mouth_mask, [inner_lip_roi], 255)
 
-                # Feather edges with Gaussian blur for smooth transition
-                blur_k = max(7, (min(w_roi, h_roi) // 30) | 1)  # ensure odd
-                mouth_mask = cv2.GaussianBlur(mouth_mask, (blur_k, blur_k), blur_k * 0.4)
+                # Gentle Gaussian feather — small kernel keeps mask tight to
+                # the inner lip edge without bleeding onto lip tissue.
+                mouth_mask_f = mouth_mask.astype(np.float32) / 255.0
+                mouth_mask_f = cv2.GaussianBlur(mouth_mask_f, (5, 5), 1.5)
 
-                # Erode slightly so the lip boundary stays from the swap
-                erode_k = max(3, min(w_roi, h_roi) // 50)
-                erode_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_k, erode_k))
-                mouth_mask = cv2.erode(mouth_mask, erode_el, iterations=1)
-                mouth_mask = cv2.GaussianBlur(mouth_mask, (blur_k, blur_k), blur_k * 0.3)
-
-                # Alpha blend: where mouth_mask is white → use target_roi (real mouth)
-                alpha = mouth_mask.astype(np.float32) / 255.0
-                alpha_3 = alpha[..., np.newaxis]
+                # Alpha blend: where mask ≈ 1 → use target_roi (real mouth)
+                alpha_3 = mouth_mask_f[..., np.newaxis]  # (H, W, 1)
                 blended_roi = (
                     target_roi.astype(np.float32) * alpha_3
                     + blended_roi.astype(np.float32) * (1.0 - alpha_3)
                 )
                 blended_roi = np.clip(blended_roi, 0, 255).astype(np.uint8)
-                logger.debug("[FACE_SWAP] Mouth occlusion applied (%d inner-mouth pts)", len(inner_mouth_pts))
+                logger.debug("[FACE_SWAP] Mouth occlusion applied (%d inner-lip pts)", len(inner_lip_pts))
         except Exception as exc:
             logger.warning("[FACE_SWAP] Mouth occlusion pass failed (non-fatal): %s", exc)
 
