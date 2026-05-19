@@ -73,12 +73,7 @@ try:
         apply_virtual_makeup_fallback,
     )
     from modules.input_module import get_landmarks, preprocess_image
-    from modules.face_swap_module import (
-        SourceFaceCache,
-        realtime_face_swap,
-        load_source_face,
-        FaceSwapError,
-    )
+    from modules.face_swap_module import face_swap_engine, FaceSwapError
 except ModuleNotFoundError:
     from backend.modules.warping_module import (
         PersistentFaceMesh,
@@ -99,12 +94,7 @@ except ModuleNotFoundError:
         apply_virtual_makeup_fallback,
     )
     from backend.modules.input_module import get_landmarks, preprocess_image
-    from backend.modules.face_swap_module import (
-        SourceFaceCache,
-        realtime_face_swap,
-        load_source_face,
-        FaceSwapError,
-    )
+    from backend.modules.face_swap_module import face_swap_engine, FaceSwapError
 
 # Emoji presets from process.py (lazy import to avoid circular)
 def _get_emoji_presets_map():
@@ -283,11 +273,10 @@ def _apply_filter(
 
         # ── Face Swap ──
         elif filter_name == "face_swap":
-            source_cache = config.get("_source_cache")
-            if source_cache and isinstance(source_cache, SourceFaceCache) and source_cache.is_loaded:
-                return realtime_face_swap(frame, landmarks, source_cache)
+            if face_swap_engine.is_loaded:
+                return face_swap_engine.apply_face_swap(frame, landmarks)
             else:
-                logger.debug("Face swap: no source cache in config")
+                logger.debug("Face swap: face_swap_engine not loaded")
 
         else:
             logger.debug("Unknown live filter: %s", filter_name)
@@ -325,8 +314,7 @@ async def live_websocket(ws: WebSocket):
     # Values are parameter dicts for that feature
     active_states: dict[str, dict] = {}
 
-    # ── Per-connection face swap source cache ──
-    source_cache = SourceFaceCache()
+    # SourceFaceCache is now handled globally by face_swap_engine
 
     # Legacy single-filter config (kept for backward compatibility)
     current_config = {
@@ -370,39 +358,14 @@ async def live_websocket(ws: WebSocket):
                 await ws.send_json({
                     "type": "state_ack",
                     "active_states": list(active_states.keys()),
-                    "source_face_loaded": source_cache.is_loaded,
+                    "source_face_loaded": face_swap_engine.is_loaded,
                 })
                 continue
 
             # ── Face swap source upload ──
-            if msg_action == "load_source_face":
-                src_data = msg.get("data", "")
-                try:
-                    if "," in src_data:
-                        src_data = src_data.split(",", 1)[1]
-                    src_bytes = base64.b64decode(src_data)
-                    source_cache.load_from_bytes(src_bytes)
-                    await ws.send_json({
-                        "type": "status",
-                        "message": "Source face loaded successfully",
-                        "source_face_loaded": True,
-                    })
-                except FaceSwapError as exc:
-                    await ws.send_json({
-                        "type": "error",
-                        "message": f"Source face load failed: {exc}",
-                        "source_face_loaded": False,
-                    })
-                except Exception as exc:
-                    await ws.send_json({
-                        "type": "error",
-                        "message": f"Invalid source image: {exc}",
-                        "source_face_loaded": False,
-                    })
-                continue
-
+            # Handled via HTTP POST now, but we keep clear_source_face fallback if used
             if msg_action == "clear_source_face":
-                source_cache.clear()
+                face_swap_engine.is_loaded = False
                 active_states.pop("face_swap", None)
                 await ws.send_json({
                     "type": "status",
@@ -443,7 +406,7 @@ async def live_websocket(ws: WebSocket):
                 result, face_detected = await asyncio.get_event_loop().run_in_executor(
                     None,
                     _process_frame_sync,
-                    frame, mesh, smoother, active_states, source_cache,
+                    frame, mesh, smoother, active_states,
                 )
 
                 # FPS calculation
@@ -513,7 +476,6 @@ def _process_frame_sync(
     mesh: PersistentFaceMesh,
     smoother: _BrowserSmoother,
     active_states: dict,
-    source_cache: SourceFaceCache = None,
 ) -> tuple[np.ndarray, bool]:
     """Synchronous frame processing — applies ALL active states sequentially."""
     # 0. Extract show_landmarks — independent toggle, NOT a filter.
@@ -546,9 +508,6 @@ def _process_frame_sync(
     for feature, params in filter_states.items():
         try:
             config = _feature_to_config(feature, params)
-            # Inject source cache for face swap filter
-            if feature == "face_swap" and source_cache is not None:
-                config["_source_cache"] = source_cache
             filter_landmarks = smoothed
             if raw_landmarks is None and str(feature).startswith("makeup_"):
                 filter_landmarks = None

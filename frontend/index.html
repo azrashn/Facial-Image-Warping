@@ -208,28 +208,31 @@
                 <!-- Realtime Face Swap Section -->
                 <section class="control-section" id="faceSwapSection" style="display: none;">
                     <h3 data-i18n="realtimeFaceSwap">Realtime Face Swap</h3>
-                    
-                    <!-- Upload Face Button & Preview -->
+                    <!-- Mini Drop Zone for Source Face -->
                     <div style="margin-bottom: 15px;">
                         <input type="file" id="faceSwapUpload" accept="image/*" hidden>
-                        <button class="op-btn" id="faceSwapUploadBtn" style="width: 100%; margin-bottom: 10px;" data-i18n="uploadSourceFace">Upload Source Face</button>
                         
-                        <div id="faceSwapPreviewContainer" style="display: none; position: relative; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 5px; text-align: center;">
-                            <img id="faceSwapPreviewImg" src="" alt="Source Face" style="max-width: 100%; max-height: 120px; object-fit: contain; border-radius: var(--radius-sm);">
-                            <button class="remove-btn" id="removeFaceSwapImgBtn" style="position: absolute; top: 5px; right: 5px; z-index: 10;">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                        <div id="fsMiniDropZone" style="border: 2px dashed var(--border-color); border-radius: var(--radius-md); padding: 15px 10px; text-align: center; cursor: pointer; transition: all 0.3s ease; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 80px; background: rgba(0,0,0,0.2);">
+                            
+                            <!-- Initial Upload State -->
+                            <div id="fsUploadState" style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted);">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
                                 </svg>
-                            </button>
-                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 5px;" id="faceSwapLoadedStatus" data-i18n="sourceFaceLoaded">Source loaded</div>
-                        </div>
-                    </div>
+                                <span style="font-size: 0.8rem; color: var(--text-color);" data-i18n="uploadSourceFace">Upload Source Face</span>
+                                <span style="font-size: 0.7rem; color: var(--text-muted);">Click or drop</span>
+                            </div>
 
-                    <!-- Webcam Controls -->
-                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                        <button class="op-btn" id="fsStartWebcamBtn" style="flex: 1;" data-i18n="startWebcam">Start Webcam</button>
-                        <button class="op-btn stop-mode" id="fsStopWebcamBtn" style="flex: 1; display: none;" data-i18n="stopWebcam">Stop Webcam</button>
+                            <!-- Preview State -->
+                            <div id="fsPreviewState" style="display: none; position: relative; width: 100%;">
+                                <img id="faceSwapPreviewImg" src="" alt="Source Face" style="max-width: 60px; max-height: 60px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary-color); box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                                <div style="font-size: 0.75rem; color: var(--success-color); margin-top: 8px; font-weight: 500;" id="faceSwapLoadedStatus" data-i18n="sourceFaceLoaded">Source loaded</div>
+                                
+                                <button class="remove-btn" id="removeFaceSwapImgBtn" style="position: absolute; top: -5px; right: -5px; width: 20px; height: 20px; font-size: 10px; display: flex; align-items: center; justify-content: center;">✕</button>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Enable Face Swap Toggle -->
@@ -267,9 +270,6 @@
                         </div>
                         <input type="range" id="fsSoftnessSlider" min="0" max="100" value="30" class="custom-range">
                     </div>
-
-                    <!-- Screenshot Button -->
-                    <button class="op-btn capture-mode" id="fsScreenshotBtn" style="width: 100%; display: none;" data-i18n="captureScreenshot">Capture Screenshot</button>
 
                 </section>
 

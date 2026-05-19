@@ -2804,20 +2804,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // =========================================================================
     (function initFaceSwap() {
         const fsUploadInput = document.getElementById('faceSwapUpload');
-        const fsUploadBtn = document.getElementById('faceSwapUploadBtn');
-        const fsPreviewContainer = document.getElementById('faceSwapPreviewContainer');
+        const fsMiniDropZone = document.getElementById('fsMiniDropZone');
+        const fsUploadState = document.getElementById('fsUploadState');
+        const fsPreviewState = document.getElementById('fsPreviewState');
         const fsPreviewImg = document.getElementById('faceSwapPreviewImg');
         const removeFsImgBtn = document.getElementById('removeFaceSwapImgBtn');
         const fsLoadedStatus = document.getElementById('faceSwapLoadedStatus');
 
-        const fsStartWebcamBtn = document.getElementById('fsStartWebcamBtn');
-        const fsStopWebcamBtn = document.getElementById('fsStopWebcamBtn');
         const fsEnableToggle = document.getElementById('enableFaceSwapToggle');
         
         const fsBlendSlider = document.getElementById('fsBlendSlider');
         const fsStabilitySlider = document.getElementById('fsStabilitySlider');
         const fsSoftnessSlider = document.getElementById('fsSoftnessSlider');
-        const fsScreenshotBtn = document.getElementById('fsScreenshotBtn');
 
         let sourceFaceLoaded = false;
         let fsSourceFile = null;
@@ -2827,95 +2825,98 @@ document.addEventListener('DOMContentLoaded', () => {
         if (fsStabilitySlider) fsStabilitySlider.addEventListener('input', (e) => document.getElementById('fsStabilityVal').textContent = e.target.value + '%');
         if (fsSoftnessSlider) fsSoftnessSlider.addEventListener('input', (e) => document.getElementById('fsSoftnessVal').textContent = e.target.value + '%');
 
-        // Upload Source Face
-        if (fsUploadBtn && fsUploadInput) {
-            fsUploadBtn.addEventListener('click', () => fsUploadInput.click());
-            
-            fsUploadInput.addEventListener('change', async (e) => {
-                if (e.target.files.length > 0) {
-                    const file = e.target.files[0];
-                    if (!file.type.startsWith('image/')) return;
-                    
-                    fsSourceFile = file;
-                    
-                    // Show preview
-                    const reader = new FileReader();
-                    reader.onload = (ev) => {
-                        fsPreviewImg.src = ev.target.result;
-                        fsPreviewContainer.style.display = 'block';
-                        fsLoadedStatus.textContent = "Uploading...";
-                    };
-                    reader.readAsDataURL(file);
-
-                    // API: POST /api/face-swap/upload-source
-                    const formData = new FormData();
-                    formData.append('source', file);
-
-                    try {
-                        const response = await fetch(`${API_BASE}/face-swap/upload-source`, {
-                            method: 'POST',
-                            body: formData
-                        });
-                        if (!response.ok) {
-                            const errPayload = await response.json().catch(() => ({}));
-                            throw new Error(errPayload.detail || 'Upload failed');
-                        }
-                        
-                        sourceFaceLoaded = true;
-                        fsLoadedStatus.textContent = "Source loaded successfully";
-                        fsLoadedStatus.style.color = "#4ade80"; // Green success
-                    } catch (err) {
-                        console.error('[Face Swap] Source upload error:', err);
-                        fsLoadedStatus.textContent = `Error: ${err.message || 'Upload failed'}`;
-                        fsLoadedStatus.style.color = "#ef4444"; // Red error
-                        
-                        // Handle backend unavailable by showing warning but keep preview
-                        if (err.message.includes('fetch') || err.message.includes('Network')) {
-                            fsLoadedStatus.textContent = "Backend unavailable";
-                        }
-                    }
+        // Drop Zone UI Handlers
+        if (fsMiniDropZone && fsUploadInput) {
+            fsMiniDropZone.addEventListener('click', (e) => {
+                if (e.target !== removeFsImgBtn) {
+                    fsUploadInput.click();
                 }
             });
+
+            fsMiniDropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                fsMiniDropZone.style.backgroundColor = 'rgba(102, 126, 234, 0.1)';
+                fsMiniDropZone.style.borderColor = 'var(--primary-color)';
+            });
+
+            fsMiniDropZone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                fsMiniDropZone.style.backgroundColor = 'rgba(0,0,0,0.2)';
+                fsMiniDropZone.style.borderColor = 'var(--border-color)';
+            });
+
+            fsMiniDropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                fsMiniDropZone.style.backgroundColor = 'rgba(0,0,0,0.2)';
+                fsMiniDropZone.style.borderColor = 'var(--border-color)';
+                if (e.dataTransfer.files.length > 0) {
+                    handleSourceUpload(e.dataTransfer.files[0]);
+                }
+            });
+
+            fsUploadInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    handleSourceUpload(e.target.files[0]);
+                }
+            });
+        }
+
+        async function handleSourceUpload(file) {
+            if (!file.type.startsWith('image/')) return;
+            
+            fsSourceFile = file;
+            
+            // Show preview
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                fsPreviewImg.src = ev.target.result;
+                fsUploadState.style.display = 'none';
+                fsPreviewState.style.display = 'block';
+                fsLoadedStatus.textContent = "Uploading...";
+                fsLoadedStatus.style.color = "var(--text-color)";
+            };
+            reader.readAsDataURL(file);
+
+            // API: POST /api/face-swap/upload-source
+            const formData = new FormData();
+            formData.append('source', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/face-swap/upload-source`, {
+                    method: 'POST',
+                    body: formData
+                });
+                if (!response.ok) {
+                    const errPayload = await response.json().catch(() => ({}));
+                    throw new Error(errPayload.detail || 'Upload failed');
+                }
+                
+                sourceFaceLoaded = true;
+                fsLoadedStatus.textContent = "Ready!";
+                fsLoadedStatus.style.color = "var(--success-color)";
+            } catch (err) {
+                console.error('[Face Swap] Source upload error:', err);
+                fsLoadedStatus.textContent = `Error`;
+                fsLoadedStatus.style.color = "var(--error-color)";
+                
+                // Handle backend unavailable by showing warning but keep preview
+                if (err.message.includes('fetch') || err.message.includes('Network')) {
+                    fsLoadedStatus.textContent = "Backend offline";
+                }
+            }
         }
 
         if (removeFsImgBtn) {
-            removeFsImgBtn.addEventListener('click', () => {
+            removeFsImgBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 fsSourceFile = null;
                 sourceFaceLoaded = false;
                 fsUploadInput.value = "";
-                fsPreviewContainer.style.display = 'none';
+                fsPreviewState.style.display = 'none';
+                fsUploadState.style.display = 'flex';
                 if (fsEnableToggle) fsEnableToggle.checked = false;
-            });
-        }
-
-        // Webcam controls mapping
-        if (fsStartWebcamBtn) {
-            fsStartWebcamBtn.addEventListener('click', () => {
-                // Trigger the main start camera logic
-                const mainStartCam = document.getElementById('startCameraBtn');
-                if (mainStartCam) mainStartCam.click();
-                
-                fsStartWebcamBtn.style.display = 'none';
-                fsStopWebcamBtn.style.display = 'inline-block';
-                fsScreenshotBtn.style.display = 'inline-block';
-            });
-        }
-
-        if (fsStopWebcamBtn) {
-            fsStopWebcamBtn.addEventListener('click', () => {
-                // Trigger the main stop camera logic
-                const mainStopCam = document.getElementById('stopCameraBtn');
-                if (mainStopCam) mainStopCam.click();
-                
-                // Also send stop face swap command
-                if (fsEnableToggle && fsEnableToggle.checked) {
-                    fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' }).catch(() => {});
-                    fsEnableToggle.checked = false;
-                }
-
-                fsStopWebcamBtn.style.display = 'none';
-                fsScreenshotBtn.style.display = 'none';
-                fsStartWebcamBtn.style.display = 'inline-block';
+                // If live face swap was active, we should also stop it.
+                fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' }).catch(() => {});
             });
         }
 
@@ -3022,12 +3023,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }, true); // Use capture phase so it runs first
         }
 
-        if (fsScreenshotBtn) {
-            fsScreenshotBtn.addEventListener('click', () => {
-                const captureBtn = document.getElementById('captureBtn');
-                if (captureBtn) captureBtn.click();
-            });
-        }
 
         // Live Mode specific slider listeners
         [fsBlendSlider, fsStabilitySlider, fsSoftnessSlider].forEach(slider => {
