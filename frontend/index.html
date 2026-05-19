@@ -76,8 +76,8 @@
                         <button class="op-btn" data-op="aging" data-i18n="aging">Aging</button>
                         <button class="op-btn" data-op="deaging" data-i18n="deaging">De-Aging</button>
                         <button class="op-btn" data-op="fft" data-i18n="fftFilter">FFT Filter</button>
-                        <button class="op-btn" data-op="age_estimation" data-i18n="ageEstimation">Age
-                            Estimation</button>
+                        <button class="op-btn" data-op="age_estimation" data-i18n="ageEstimation">Age Estimation</button>
+                        <button class="op-btn" data-op="face_swap" data-i18n="faceSwap">Face Swap</button>
                     </div>
                 </section>
 
@@ -205,7 +205,73 @@
                     </div>
                 </section>
 
+                <!-- Realtime Face Swap Section -->
+                <section class="control-section" id="faceSwapSection" style="display: none;">
+                    <h3 data-i18n="realtimeFaceSwap">Realtime Face Swap</h3>
+                    <!-- Mini Drop Zone for Source Face -->
+                    <div style="margin-bottom: 15px;">
+                        <input type="file" id="faceSwapUpload" accept="image/*" hidden>
+                        
+                        <div id="fsMiniDropZone" style="border: 2px dashed var(--border-color); border-radius: var(--radius-md); padding: 15px 10px; text-align: center; cursor: pointer; transition: all 0.3s ease; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 80px; background: rgba(0,0,0,0.2);">
+                            
+                            <!-- Initial Upload State -->
+                            <div id="fsUploadState" style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted);">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                <span style="font-size: 0.8rem; color: var(--text-color);" data-i18n="uploadSourceFace">Upload Source Face</span>
+                                <span style="font-size: 0.7rem; color: var(--text-muted);">Click or drop</span>
+                            </div>
 
+                            <!-- Preview State -->
+                            <div id="fsPreviewState" style="display: none; position: relative; width: 100%;">
+                                <img id="faceSwapPreviewImg" src="" alt="Source Face" style="max-width: 60px; max-height: 60px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary-color); box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                                <div style="font-size: 0.75rem; color: var(--success-color); margin-top: 8px; font-weight: 500;" id="faceSwapLoadedStatus" data-i18n="sourceFaceLoaded">Source loaded</div>
+                                
+                                <button class="remove-btn" id="removeFaceSwapImgBtn" style="position: absolute; top: -5px; right: -5px; width: 20px; height: 20px; font-size: 10px; display: flex; align-items: center; justify-content: center;">✕</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Enable Face Swap Toggle -->
+                    <div class="toggle-row" style="margin-bottom: 15px;">
+                        <span data-i18n="enableFaceSwap">Enable Face Swap</span>
+                        <label class="switch">
+                            <input type="checkbox" id="enableFaceSwapToggle">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+
+                    <!-- Blend Strength Slider -->
+                    <div style="margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                            <span data-i18n="blendStrength">Blend Strength</span>
+                            <span id="fsBlendVal">50%</span>
+                        </div>
+                        <input type="range" id="fsBlendSlider" min="0" max="100" value="50" class="custom-range">
+                    </div>
+
+                    <!-- Stability Slider -->
+                    <div style="margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                            <span data-i18n="stability">Stability</span>
+                            <span id="fsStabilityVal">70%</span>
+                        </div>
+                        <input type="range" id="fsStabilitySlider" min="0" max="100" value="70" class="custom-range">
+                    </div>
+
+                    <!-- Mask Softness Slider -->
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                            <span data-i18n="maskSoftness">Mask Softness</span>
+                            <span id="fsSoftnessVal">30%</span>
+                        </div>
+                        <input type="range" id="fsSoftnessSlider" min="0" max="100" value="30" class="custom-range">
+                    </div>
+
+                </section>
 
                 <!-- Sliders -->
                 <section class="control-section">

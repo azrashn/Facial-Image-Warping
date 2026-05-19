@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import cv2
 import numpy as np
 
 from backend.modules.warping_module import (
@@ -30,13 +31,19 @@ from backend.modules.warping_module import (
     apply_beard,
     apply_emoji_preset,
 )
+from backend.modules.face_swap_module import (
+    SourceFaceCache,
+    realtime_face_swap,
+    FaceSwapError,
+)
 from live.temporal_smoothing import TemporalSmoother
 
 logger = logging.getLogger(__name__)
 
 
 # Filter dispatch table — maps filter names to (function, arg_type) pairs
-# arg_type: "intensity" for int-based filters, "emoji" for emoji preset name
+# arg_type: "intensity" for int-based filters, "emoji" for emoji preset name,
+#           "face_swap" for the realtime face swap (handled specially)
 _FILTER_DISPATCH: dict[str, tuple] = {
     "smile":          (apply_smile,         "intensity"),
     "eyebrow_raise":  (apply_eyebrow_raise, "intensity"),
@@ -47,6 +54,7 @@ _FILTER_DISPATCH: dict[str, tuple] = {
     "emoji_happy":    (apply_emoji_preset,  "emoji"),
     "emoji_surprised":(apply_emoji_preset,  "emoji"),
     "emoji_joyful":   (apply_emoji_preset,  "emoji"),
+    "face_swap":      (realtime_face_swap,  "face_swap"),
 }
 
 
@@ -72,6 +80,63 @@ class RealtimeEngine:
         self.smoother = TemporalSmoother(alpha=alpha)
         self._last_good_landmarks: Optional[np.ndarray] = None
 
+        # ── Face swap source cache (computed once, reused every frame) ──
+        self._source_cache = SourceFaceCache()
+
+    # ── Source face management ──────────────────────────────────────────
+
+    def load_source_face(self, source_bgr: np.ndarray) -> bool:
+        """
+        Load a source face image for face swap mode.
+
+        Parameters
+        ----------
+        source_bgr : np.ndarray
+            BGR image containing a single face.
+
+        Returns
+        -------
+        bool
+            True if source was loaded successfully, False otherwise.
+        """
+        try:
+            self._source_cache.load(source_bgr)
+            logger.info("Source face loaded for realtime swap")
+            return True
+        except FaceSwapError as e:
+            logger.warning("Failed to load source face: %s", e)
+            return False
+
+    def load_source_face_from_path(self, path: str) -> bool:
+        """
+        Load source face from a file path.
+
+        Parameters
+        ----------
+        path : str
+            Path to a face image file (JPEG / PNG / WEBP).
+
+        Returns
+        -------
+        bool
+            True if source was loaded successfully, False otherwise.
+        """
+        img = cv2.imread(path, cv2.IMREAD_COLOR)
+        if img is None:
+            logger.warning("Could not read image from path: %s", path)
+            return False
+        return self.load_source_face(img)
+
+    def clear_source_face(self) -> None:
+        """Unload the source face from the cache."""
+        self._source_cache.clear()
+        logger.info("Source face cleared")
+
+    @property
+    def source_face_loaded(self) -> bool:
+        """Whether a source face is currently loaded."""
+        return self._source_cache.is_loaded
+
     def process_frame(
         self,
         frame: np.ndarray,
@@ -86,7 +151,8 @@ class RealtimeEngine:
         frame : np.ndarray
             Raw BGR webcam frame.
         filter_type : str
-            Name of the filter to apply (e.g. "smile", "emoji_happy", "none").
+            Name of the filter to apply (e.g. "smile", "emoji_happy",
+            "face_swap", "none").
         intensity : int
             Filter intensity (0–100).
 
@@ -129,6 +195,15 @@ class RealtimeEngine:
                 # Extract emoji name from filter_type (e.g. "emoji_happy" → "happy")
                 emoji_name = filter_type.split("_", 1)[1] if "_" in filter_type else filter_type
                 result = func(frame, emoji_name, landmarks=smoothed_landmarks)
+            elif arg_type == "face_swap":
+                # Realtime face swap — uses cached source + smoothed target landmarks
+                if not self._source_cache.is_loaded:
+                    logger.debug("Face swap selected but no source loaded — skipping")
+                    result = frame
+                else:
+                    result = realtime_face_swap(
+                        frame, smoothed_landmarks, self._source_cache
+                    )
             else:
                 result = frame
 

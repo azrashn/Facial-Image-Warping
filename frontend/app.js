@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'makeup_lips', 'makeup_eyeshadow', 'makeup_blush', 'makeup_eyeliner', 'makeup_mascara',
         'glasses', 'hair_color', 'aging', 'deaging', 'cartoon', 'fft',
         'eyebrow_raise', 'lip_widen', 'face_slim', 'eye_scaling',
+        'face_swap',
     ];
 
     /**
@@ -185,7 +186,19 @@ document.addEventListener('DOMContentLoaded', () => {
             origFFTPhase: "Orijinal - FFT Fazı",
             // Camera Live Mode
             liveMode: "🔴 Canlı",
-            stopLive: "⏹ Canlıyı Durdur"
+            stopLive: "⏹ Canlıyı Durdur",
+            // Face Swap
+            faceSwap: "Yüz Değiştirme",
+            realtimeFaceSwap: "Canlı Yüz Değiştirme",
+            uploadSourceFace: "Kaynak Yüz Yükle",
+            sourceFaceLoaded: "Kaynak yüklendi",
+            startWebcam: "Kamerayı Başlat",
+            stopWebcam: "Kamerayı Durdur",
+            enableFaceSwap: "Yüz Değiştirmeyi Etkinleştir",
+            blendStrength: "Harmanlama Gücü",
+            stability: "Kararlılık",
+            maskSoftness: "Maske Yumuşaklığı",
+            captureScreenshot: "Ekran Görüntüsü Al"
         },
         EN: {
             dropImage: "Drop image here",
@@ -291,7 +304,19 @@ document.addEventListener('DOMContentLoaded', () => {
             origFFTPhase: "Original - FFT Phase",
             // Camera Live Mode
             liveMode: "🔴 Live",
-            stopLive: "⏹ Stop Live"
+            stopLive: "⏹ Stop Live",
+            // Face Swap
+            faceSwap: "Face Swap",
+            realtimeFaceSwap: "Realtime Face Swap",
+            uploadSourceFace: "Upload Source Face",
+            sourceFaceLoaded: "Source loaded",
+            startWebcam: "Start Webcam",
+            stopWebcam: "Stop Webcam",
+            enableFaceSwap: "Enable Face Swap",
+            blendStrength: "Blend Strength",
+            stability: "Stability",
+            maskSoftness: "Mask Softness",
+            captureScreenshot: "Capture Screenshot"
         }
     };
 
@@ -545,6 +570,15 @@ document.addEventListener('DOMContentLoaded', () => {
             opButtons.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             selectedOperation = btn.dataset.op;
+
+            const faceSwapSection = document.getElementById('faceSwapSection');
+            if (faceSwapSection) {
+                if (selectedOperation === 'face_swap') {
+                    faceSwapSection.style.display = 'block';
+                } else {
+                    faceSwapSection.style.display = 'none';
+                }
+            }
         });
     });
 
@@ -2645,6 +2679,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     'makeup_lips', 'makeup_eyeshadow', 'makeup_blush',
                     'makeup_eyeliner', 'makeup_mascara',
                     'glasses', 'hair_color',
+                    'face_swap',
                 ]);
                 if (allowedLiveOps.has(selectedOperation)) return selectedOperation;
             }
@@ -2761,6 +2796,270 @@ document.addEventListener('DOMContentLoaded', () => {
                 liveWorker.terminate();
                 liveWorker = null;
                 liveWorkerReady = false;
+            }
+        });
+
+    })();
+
+    // =========================================================================
+    // FACE SWAP UI & API INTEGRATION
+    // =========================================================================
+    (function initFaceSwap() {
+        const fsUploadInput = document.getElementById('faceSwapUpload');
+        const fsMiniDropZone = document.getElementById('fsMiniDropZone');
+        const fsUploadState = document.getElementById('fsUploadState');
+        const fsPreviewState = document.getElementById('fsPreviewState');
+        const fsPreviewImg = document.getElementById('faceSwapPreviewImg');
+        const removeFsImgBtn = document.getElementById('removeFaceSwapImgBtn');
+        const fsLoadedStatus = document.getElementById('faceSwapLoadedStatus');
+
+        const fsEnableToggle = document.getElementById('enableFaceSwapToggle');
+        
+        const fsBlendSlider = document.getElementById('fsBlendSlider');
+        const fsStabilitySlider = document.getElementById('fsStabilitySlider');
+        const fsSoftnessSlider = document.getElementById('fsSoftnessSlider');
+
+        let sourceFaceLoaded = false;
+        let fsSourceFile = null;
+
+        // Sliders value updates
+        if (fsBlendSlider) fsBlendSlider.addEventListener('input', (e) => document.getElementById('fsBlendVal').textContent = e.target.value + '%');
+        if (fsStabilitySlider) fsStabilitySlider.addEventListener('input', (e) => document.getElementById('fsStabilityVal').textContent = e.target.value + '%');
+        if (fsSoftnessSlider) fsSoftnessSlider.addEventListener('input', (e) => document.getElementById('fsSoftnessVal').textContent = e.target.value + '%');
+
+        // Drop Zone UI Handlers
+        if (fsMiniDropZone && fsUploadInput) {
+            fsMiniDropZone.addEventListener('click', (e) => {
+                if (e.target !== removeFsImgBtn) {
+                    fsUploadInput.click();
+                }
+            });
+
+            fsMiniDropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                fsMiniDropZone.style.backgroundColor = 'rgba(102, 126, 234, 0.1)';
+                fsMiniDropZone.style.borderColor = 'var(--primary-color)';
+            });
+
+            fsMiniDropZone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                fsMiniDropZone.style.backgroundColor = 'rgba(0,0,0,0.2)';
+                fsMiniDropZone.style.borderColor = 'var(--border-color)';
+            });
+
+            fsMiniDropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                fsMiniDropZone.style.backgroundColor = 'rgba(0,0,0,0.2)';
+                fsMiniDropZone.style.borderColor = 'var(--border-color)';
+                if (e.dataTransfer.files.length > 0) {
+                    handleSourceUpload(e.dataTransfer.files[0]);
+                }
+            });
+
+            fsUploadInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    handleSourceUpload(e.target.files[0]);
+                }
+            });
+        }
+
+        async function handleSourceUpload(file) {
+            if (!file.type.startsWith('image/')) return;
+            
+            fsSourceFile = file;
+            
+            // Show preview
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                fsPreviewImg.src = ev.target.result;
+                fsUploadState.style.display = 'none';
+                fsPreviewState.style.display = 'block';
+                fsLoadedStatus.textContent = "Uploading...";
+                fsLoadedStatus.style.color = "var(--text-color)";
+            };
+            reader.readAsDataURL(file);
+
+            // API: POST /api/face-swap/upload-source
+            const formData = new FormData();
+            formData.append('source', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/face-swap/upload-source`, {
+                    method: 'POST',
+                    body: formData
+                });
+                if (!response.ok) {
+                    const errPayload = await response.json().catch(() => ({}));
+                    throw new Error(errPayload.detail || 'Upload failed');
+                }
+                
+                sourceFaceLoaded = true;
+                fsLoadedStatus.textContent = "Ready!";
+                fsLoadedStatus.style.color = "var(--success-color)";
+            } catch (err) {
+                console.error('[Face Swap] Source upload error:', err);
+                fsLoadedStatus.textContent = `Error`;
+                fsLoadedStatus.style.color = "var(--error-color)";
+                
+                // Handle backend unavailable by showing warning but keep preview
+                if (err.message.includes('fetch') || err.message.includes('Network')) {
+                    fsLoadedStatus.textContent = "Backend offline";
+                }
+            }
+        }
+
+        if (removeFsImgBtn) {
+            removeFsImgBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                fsSourceFile = null;
+                sourceFaceLoaded = false;
+                fsUploadInput.value = "";
+                fsPreviewState.style.display = 'none';
+                fsUploadState.style.display = 'flex';
+                if (fsEnableToggle) fsEnableToggle.checked = false;
+                // Remove face_swap from live active states
+                sendLiveStateUpdate('face_swap', null);
+                // If live face swap was active, we should also stop it.
+                fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' }).catch(() => {});
+            });
+        }
+
+        // Enable Face Swap Toggle
+        if (fsEnableToggle) {
+            fsEnableToggle.addEventListener('change', async (e) => {
+                if (!sourceFaceLoaded) {
+                    alert("Please upload a source face first.");
+                    e.target.checked = false;
+                    return;
+                }
+
+                if (e.target.checked) {
+                    // Start Face Swap API
+                    try {
+                        const payload = {
+                            blend_strength: parseInt(fsBlendSlider.value),
+                            stability: parseInt(fsStabilitySlider.value),
+                            mask_softness: parseInt(fsSoftnessSlider.value)
+                        };
+                        const response = await fetch(`${API_BASE}/face-swap/start`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!response.ok) {
+                            throw new Error('Failed to start face swap');
+                        }
+                        console.log('[Face Swap] Live mode started');
+                        
+                        // Set selected operation to face_swap to trigger existing live loops if needed
+                        selectedOperation = 'face_swap';
+                        
+                        // CRITICAL: Send face_swap as active state to WebSocket
+                        // so the backend frame processing loop actually applies face swap
+                        sendLiveStateUpdate('face_swap', {
+                            blend_strength: parseInt(fsBlendSlider.value),
+                            stability: parseInt(fsStabilitySlider.value),
+                            mask_softness: parseInt(fsSoftnessSlider.value),
+                        });
+                    } catch (err) {
+                        console.error('[Face Swap] Start error:', err);
+                        // Backend unavailable handling
+                        alert("Could not start face swap: " + (err.message || 'Backend unavailable'));
+                        e.target.checked = false;
+                    }
+                } else {
+                    // Stop Face Swap API
+                    try {
+                        await fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' });
+                        console.log('[Face Swap] Live mode stopped');
+                        // CRITICAL: Remove face_swap from WebSocket active states
+                        sendLiveStateUpdate('face_swap', null);
+                    } catch (err) {
+                        console.error('[Face Swap] Stop error:', err);
+                    }
+                }
+            });
+        }
+        
+        // Static Face Swap override for the Apply Button
+        const mainApplyBtn = document.getElementById('applyBtn');
+        if (mainApplyBtn) {
+            mainApplyBtn.addEventListener('click', async (e) => {
+                if (selectedOperation === 'face_swap') {
+                    e.stopPropagation(); // prevent default apply action
+                    
+                    if (!uploadedFile) {
+                        alert("Please upload a target image in the main view.");
+                        return;
+                    }
+                    if (!fsSourceFile) {
+                        alert("Please upload a source face in the Face Swap panel.");
+                        return;
+                    }
+
+                    const loadingOverlay = document.getElementById('loadingOverlay');
+                    if (loadingOverlay) loadingOverlay.style.display = 'flex';
+
+                    const formData = new FormData();
+                    formData.append('source', fsSourceFile);
+                    formData.append('target', uploadedFile);
+
+                    try {
+                        const response = await fetch(`${API_BASE}/face-swap`, {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        const payload = await response.json();
+                        if (!response.ok) {
+                            throw new Error(payload?.detail || 'Face swap failed.');
+                        }
+
+                        // Display result
+                        const afterImg = document.getElementById('afterImg');
+                        if (afterImg) afterImg.src = payload.swapped_image;
+                        
+                        const visualPreviewArea = document.getElementById('visualPreviewArea');
+                        const imageWrapper = document.getElementById('imageWrapper');
+                        if (visualPreviewArea) visualPreviewArea.style.display = 'flex';
+                        if (imageWrapper) imageWrapper.style.display = 'block';
+
+                        document.getElementById('analysisSummary').innerHTML = `<strong>Status: Success</strong><br/>Face Swap completed in ${payload.processing_time_ms} ms.`;
+                        
+                    } catch (err) {
+                        console.error('[Face Swap] Static apply error:', err);
+                        document.getElementById('analysisSummary').innerHTML = `<strong>Status: Failed</strong><br/>${err.message || 'Face swap processing failed.'}`;
+                        alert("Face Swap Error: " + (err.message || 'Backend unavailable'));
+                    } finally {
+                        if (loadingOverlay) loadingOverlay.style.display = 'none';
+                    }
+                }
+            }, true); // Use capture phase so it runs first
+        }
+
+
+        // Live Mode specific slider listeners
+        [fsBlendSlider, fsStabilitySlider, fsSoftnessSlider].forEach(slider => {
+            if (slider) {
+                slider.addEventListener('change', async () => {
+                    if (fsEnableToggle && fsEnableToggle.checked) {
+                        // Resend start command to update params
+                        try {
+                            const payload = {
+                                blend_strength: parseInt(fsBlendSlider.value),
+                                stability: parseInt(fsStabilitySlider.value),
+                                mask_softness: parseInt(fsSoftnessSlider.value)
+                            };
+                            await fetch(`${API_BASE}/face-swap/start`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            });
+                        } catch (err) {
+                            console.error('[Face Swap] Update params error:', err);
+                        }
+                    }
+                });
             }
         });
 

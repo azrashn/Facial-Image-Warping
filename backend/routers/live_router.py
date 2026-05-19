@@ -73,6 +73,7 @@ try:
         apply_virtual_makeup_fallback,
     )
     from modules.input_module import get_landmarks, preprocess_image
+    from modules.face_swap_module import face_swap_engine, FaceSwapError
 except ModuleNotFoundError:
     from backend.modules.warping_module import (
         PersistentFaceMesh,
@@ -93,6 +94,7 @@ except ModuleNotFoundError:
         apply_virtual_makeup_fallback,
     )
     from backend.modules.input_module import get_landmarks, preprocess_image
+    from backend.modules.face_swap_module import face_swap_engine, FaceSwapError
 
 # Emoji presets from process.py (lazy import to avoid circular)
 def _get_emoji_presets_map():
@@ -269,6 +271,14 @@ def _apply_filter(
         elif filter_name == "cartoon":
             return apply_cartoon_filter(frame)
 
+        # ── Face Swap ──
+        elif filter_name == "face_swap":
+            logger.info("[FACE_SWAP] _apply_filter entered | is_loaded=%s", face_swap_engine.is_loaded)
+            if face_swap_engine.is_loaded:
+                return face_swap_engine.apply_face_swap(frame, landmarks)
+            else:
+                logger.debug("Face swap: face_swap_engine not loaded")
+
         else:
             logger.debug("Unknown live filter: %s", filter_name)
 
@@ -304,6 +314,8 @@ async def live_websocket(ws: WebSocket):
     # Keys are feature names (e.g. "glasses", "smile", "makeup_lips")
     # Values are parameter dicts for that feature
     active_states: dict[str, dict] = {}
+
+    # SourceFaceCache is now handled globally by face_swap_engine
 
     # Legacy single-filter config (kept for backward compatibility)
     current_config = {
@@ -347,6 +359,19 @@ async def live_websocket(ws: WebSocket):
                 await ws.send_json({
                     "type": "state_ack",
                     "active_states": list(active_states.keys()),
+                    "source_face_loaded": face_swap_engine.is_loaded,
+                })
+                continue
+
+            # ── Face swap source upload ──
+            # Handled via HTTP POST now, but we keep clear_source_face fallback if used
+            if msg_action == "clear_source_face":
+                face_swap_engine.is_loaded = False
+                active_states.pop("face_swap", None)
+                await ws.send_json({
+                    "type": "status",
+                    "message": "Source face cleared",
+                    "source_face_loaded": False,
                 })
                 continue
 
@@ -374,6 +399,7 @@ async def live_websocket(ws: WebSocket):
             # ── Frame processing ──
             if msg_type == "frame":
                 frame_data = msg.get("data", "")
+                logger.info("[WS] WebSocket frame received (frame #%d, active_states=%s)", frame_count + 1, list(active_states.keys()))
                 frame = _decode_frame(frame_data)
                 if frame is None:
                     continue
@@ -426,6 +452,7 @@ def _feature_to_config(feature: str, params: dict) -> dict:
         "makeup_mascara": "makeup_mascara",
         "glasses": "glasses", "hair_color": "hair_color",
         "aging": "aging", "deaging": "deaging", "cartoon": "cartoon",
+        "face_swap": "face_swap",
     }
     config["filter"] = _FEATURE_TO_FILTER.get(feature, feature)
     config.setdefault("intensity", 50)
@@ -483,6 +510,9 @@ def _process_frame_sync(
     for feature, params in filter_states.items():
         try:
             config = _feature_to_config(feature, params)
+            if feature == "face_swap":
+                logger.info("[FACE_SWAP] _process_frame_sync applying face_swap | is_loaded=%s | has_landmarks=%s",
+                           face_swap_engine.is_loaded, smoothed is not None)
             filter_landmarks = smoothed
             if raw_landmarks is None and str(feature).startswith("makeup_"):
                 filter_landmarks = None
