@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'makeup_lips', 'makeup_eyeshadow', 'makeup_blush', 'makeup_eyeliner', 'makeup_mascara',
         'glasses', 'hair_color', 'aging', 'deaging', 'cartoon', 'fft',
         'eyebrow_raise', 'lip_widen', 'face_slim', 'eye_scaling',
+        'face_swap',
     ];
 
     /**
@@ -2678,6 +2679,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     'makeup_lips', 'makeup_eyeshadow', 'makeup_blush',
                     'makeup_eyeliner', 'makeup_mascara',
                     'glasses', 'hair_color',
+                    'face_swap',
                 ]);
                 if (allowedLiveOps.has(selectedOperation)) return selectedOperation;
             }
@@ -2915,6 +2917,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 fsPreviewState.style.display = 'none';
                 fsUploadState.style.display = 'flex';
                 if (fsEnableToggle) fsEnableToggle.checked = false;
+                // Remove face_swap from live active states
+                sendLiveStateUpdate('face_swap', null);
                 // If live face swap was active, we should also stop it.
                 fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' }).catch(() => {});
             });
@@ -2949,6 +2953,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         // Set selected operation to face_swap to trigger existing live loops if needed
                         selectedOperation = 'face_swap';
+                        
+                        // CRITICAL: Send face_swap as active state to WebSocket
+                        // so the backend frame processing loop actually applies face swap
+                        sendLiveStateUpdate('face_swap', {
+                            blend_strength: parseInt(fsBlendSlider.value),
+                            stability: parseInt(fsStabilitySlider.value),
+                            mask_softness: parseInt(fsSoftnessSlider.value),
+                        });
                     } catch (err) {
                         console.error('[Face Swap] Start error:', err);
                         // Backend unavailable handling
@@ -2960,6 +2972,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     try {
                         await fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' });
                         console.log('[Face Swap] Live mode stopped');
+                        // CRITICAL: Remove face_swap from WebSocket active states
+                        sendLiveStateUpdate('face_swap', null);
                     } catch (err) {
                         console.error('[Face Swap] Stop error:', err);
                     }

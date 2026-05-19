@@ -273,6 +273,7 @@ def _apply_filter(
 
         # ── Face Swap ──
         elif filter_name == "face_swap":
+            logger.info("[FACE_SWAP] _apply_filter entered | is_loaded=%s", face_swap_engine.is_loaded)
             if face_swap_engine.is_loaded:
                 return face_swap_engine.apply_face_swap(frame, landmarks)
             else:
@@ -398,6 +399,7 @@ async def live_websocket(ws: WebSocket):
             # ── Frame processing ──
             if msg_type == "frame":
                 frame_data = msg.get("data", "")
+                logger.info("[WS] WebSocket frame received (frame #%d, active_states=%s)", frame_count + 1, list(active_states.keys()))
                 frame = _decode_frame(frame_data)
                 if frame is None:
                     continue
@@ -508,6 +510,9 @@ def _process_frame_sync(
     for feature, params in filter_states.items():
         try:
             config = _feature_to_config(feature, params)
+            if feature == "face_swap":
+                logger.info("[FACE_SWAP] _process_frame_sync applying face_swap | is_loaded=%s | has_landmarks=%s",
+                           face_swap_engine.is_loaded, smoothed is not None)
             filter_landmarks = smoothed
             if raw_landmarks is None and str(feature).startswith("makeup_"):
                 filter_landmarks = None

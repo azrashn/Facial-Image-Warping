@@ -32,6 +32,7 @@ class FaceSwapEngine:
         self.source_landmarks: Optional[np.ndarray] = None
         self.source_triangles: Optional[np.ndarray] = None
         self.is_loaded = False
+        self.running = False
         
         # We also cache the source indices we triangulate over
         self.used_indices: Optional[list[int]] = None
@@ -44,6 +45,10 @@ class FaceSwapEngine:
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
             raise FaceSwapError("Could not decode source image bytes.")
+
+        # CRITICAL: Ensure source image is uint8
+        if img.dtype != np.uint8:
+            img = np.clip(img, 0, 255).astype(np.uint8)
 
         lm = detect_face_landmarks(img)
         if lm is None or len(lm) < 100:
@@ -77,11 +82,18 @@ class FaceSwapEngine:
             raise FaceSwapError(f"Delaunay triangulation failed on source face: {exc}")
 
         self.is_loaded = True
-        logger.info(f"FaceSwapEngine: source loaded, {len(self.source_triangles)} triangles cached.")
+        logger.info(f"[FACE_SWAP] source loaded, {len(self.source_triangles)} triangles cached.")
 
     def apply_face_swap(self, target_frame: np.ndarray, target_landmarks: np.ndarray) -> np.ndarray:
+        logger.info(f"[FACE_SWAP] apply_face_swap called | source_loaded={self.is_loaded} | running={self.running}")
+
         if not self.is_loaded or target_landmarks is None:
+            logger.debug("[FACE_SWAP] Skipping: not loaded or no target landmarks")
             return target_frame
+
+        # CRITICAL: Enforce uint8 on input frame
+        if target_frame.dtype != np.uint8:
+            target_frame = np.clip(target_frame, 0, 255).astype(np.uint8)
 
         h, w = target_frame.shape[:2]
         
@@ -90,12 +102,21 @@ class FaceSwapEngine:
             src_pts = self.source_landmarks[self.used_indices].astype(np.float32)
             dst_pts = target_landmarks[self.used_indices].astype(np.float32)
         except IndexError:
+            logger.warning("[FACE_SWAP] IndexError accessing landmarks subset")
             return target_frame
 
         # Compute Bounding Box (ROI) on target
-        dst_oval_pts = np.array([target_landmarks[i] for i in FACE_OVAL_INDICES if i < len(target_landmarks)], dtype=np.int32)
+        # CRITICAL: Force int32 for all point arrays passed to OpenCV
+        dst_oval_pts = np.array(
+            [target_landmarks[i] for i in FACE_OVAL_INDICES if i < len(target_landmarks)],
+            dtype=np.int32
+        )
         if len(dst_oval_pts) < 3:
+            logger.warning("[FACE_SWAP] Not enough oval points for bounding rect")
             return target_frame
+
+        # SAFETY ASSERTION: points must be int32 for cv2.boundingRect
+        assert dst_oval_pts.dtype == np.int32, f"dst_oval_pts dtype={dst_oval_pts.dtype}, expected int32"
             
         x_min, y_min, w_roi, h_roi = cv2.boundingRect(dst_oval_pts)
         
@@ -109,12 +130,16 @@ class FaceSwapEngine:
         h_roi = y_max - y_min
         
         if w_roi <= 0 or h_roi <= 0:
+            logger.warning("[FACE_SWAP] ROI has zero dimensions")
             return target_frame
 
-        target_roi = target_frame[y_min:y_max, x_min:x_max]
+        target_roi = target_frame[y_min:y_max, x_min:x_max].copy()
         warped_roi = np.zeros_like(target_roi)
         
+        logger.debug(f"[FACE_SWAP] Processing {len(self.source_triangles)} triangles in ROI ({w_roi}x{h_roi})")
+
         # Warp Source to Target (within ROI)
+        triangles_warped = 0
         for ia, ib, ic in self.source_triangles:
             src_tri = np.array([src_pts[ia], src_pts[ib], src_pts[ic]], dtype=np.float32).reshape(3, 2)
             dst_tri = np.array([dst_pts[ia], dst_pts[ib], dst_pts[ic]], dtype=np.float32).reshape(3, 2)
@@ -125,9 +150,11 @@ class FaceSwapEngine:
                 continue
                 
             # Shift dst_tri to ROI coordinates
-            dst_tri_roi = dst_tri - [x_min, y_min]
+            dst_tri_roi = dst_tri - np.array([x_min, y_min], dtype=np.float32)
 
-            r = cv2.boundingRect(dst_tri_roi)
+            # CRITICAL: cv2.boundingRect needs int32 input for float arrays
+            dst_tri_roi_int = np.int32(dst_tri_roi)
+            r = cv2.boundingRect(dst_tri_roi_int)
             bx, by, bw, bh = r
             bx = max(bx, 0)
             by = max(by, 0)
@@ -137,9 +164,11 @@ class FaceSwapEngine:
                 continue
 
             try:
+                # CRITICAL: mask must be uint8
                 mask = np.zeros((bh, bw), dtype=np.uint8)
-                dst_crop = (dst_tri_roi - [bx, by]).astype(np.float32).reshape(3, 2)
+                dst_crop = (dst_tri_roi - np.array([bx, by], dtype=np.float32)).astype(np.float32).reshape(3, 2)
                 src_crop = src_tri.astype(np.float32).reshape(3, 2)
+                # CRITICAL: fillConvexPoly needs int32 points
                 cv2.fillConvexPoly(mask, np.int32(dst_crop), 255)
 
                 warp_mat = cv2.getAffineTransform(src_crop, dst_crop)
@@ -148,28 +177,53 @@ class FaceSwapEngine:
                     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101
                 )
 
+                # Ensure warped_patch is uint8
+                if warped_patch.dtype != np.uint8:
+                    warped_patch = np.clip(warped_patch, 0, 255).astype(np.uint8)
+
                 roi_patch = warped_roi[by: by + bh, bx: bx + bw]
                 blended = np.where(mask[..., None] == 255, warped_patch, roi_patch)
                 warped_roi[by: by + bh, bx: bx + bw] = blended
-            except Exception:
+                triangles_warped += 1
+            except Exception as exc:
+                logger.debug(f"[FACE_SWAP] Triangle ({ia},{ib},{ic}) warp failed: {exc}")
                 continue
+
+        logger.debug(f"[FACE_SWAP] Warped {triangles_warped}/{len(self.source_triangles)} triangles")
+
+        if triangles_warped == 0:
+            logger.warning("[FACE_SWAP] No triangles warped successfully, returning original")
+            return target_frame
 
         # ROI seamless cloning
         # Shift oval points to ROI coordinates for mask
-        dst_oval_pts_roi = dst_oval_pts - [x_min, y_min]
+        dst_oval_pts_roi = dst_oval_pts - np.array([x_min, y_min], dtype=np.int32)
         
+        # CRITICAL: clone_mask must be uint8
         clone_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
-        hull = cv2.convexHull(dst_oval_pts_roi)
+        
+        # CRITICAL: convexHull needs int32 points
+        hull = cv2.convexHull(np.array(dst_oval_pts_roi, dtype=np.int32))
         cv2.fillConvexPoly(clone_mask, hull, 255)
 
         erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, w_roi // 25), max(3, h_roi // 25)))
         clone_mask = cv2.erode(clone_mask, erode_kernel, iterations=1)
         clone_mask = cv2.GaussianBlur(clone_mask, (15, 15), 15 * 0.3)
 
+        # CRITICAL: Ensure clone_mask is still uint8 after blur
+        if clone_mask.dtype != np.uint8:
+            clone_mask = np.clip(clone_mask, 0, 255).astype(np.uint8)
+
+        # Compute center for seamlessClone — must be int tuple inside ROI
         center_x = int(np.mean(dst_oval_pts_roi[:, 0]))
         center_y = int(np.mean(dst_oval_pts_roi[:, 1]))
         center_x = max(1, min(w_roi - 2, center_x))
         center_y = max(1, min(h_roi - 2, center_y))
+
+        # SAFETY ASSERTIONS before seamlessClone
+        assert warped_roi.dtype == np.uint8, f"warped_roi dtype={warped_roi.dtype}"
+        assert target_roi.dtype == np.uint8, f"target_roi dtype={target_roi.dtype}"
+        assert clone_mask.dtype == np.uint8, f"clone_mask dtype={clone_mask.dtype}"
 
         try:
             blended_roi = cv2.seamlessClone(
@@ -179,8 +233,10 @@ class FaceSwapEngine:
                 (center_x, center_y),
                 cv2.NORMAL_CLONE
             )
-        except cv2.error:
-            # Fallback
+            logger.debug("[FACE_SWAP] seamlessClone succeeded")
+        except cv2.error as e:
+            logger.warning(f"[FACE_SWAP] seamlessClone failed: {e}, using alpha fallback")
+            # Fallback: manual alpha blending
             mask_f = clone_mask.astype(np.float32) / 255.0
             mask_3 = mask_f[..., np.newaxis]
             blended_roi = (warped_roi.astype(np.float32) * mask_3 + target_roi.astype(np.float32) * (1.0 - mask_3))
@@ -190,6 +246,7 @@ class FaceSwapEngine:
         result_frame = target_frame.copy()
         result_frame[y_min:y_max, x_min:x_max] = blended_roi
 
+        logger.info("[FACE_SWAP] frame_processed=True")
         return result_frame
 
 # Global engine instance
