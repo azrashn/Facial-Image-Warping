@@ -107,7 +107,7 @@ def apply_frequency_filter(image: np.ndarray, radius: int, mode: str = "low") ->
     return result
 
 
-def _build_face_hair_mask(image: np.ndarray) -> np.ndarray:
+def _build_face_hair_mask(image: np.ndarray, landmarks: np.ndarray = None) -> np.ndarray:
     """
     Build a smooth float mask [0..1] covering the face and hair region.
 
@@ -115,15 +115,17 @@ def _build_face_hair_mask(image: np.ndarray) -> np.ndarray:
     upward to include the hair area.  Returns a single-channel float32
     array of the same (H, W) as *image*.
     """
-    try:
-        from modules.warping_module import detect_face_landmarks
-    except ModuleNotFoundError:
-        from backend.modules.warping_module import detect_face_landmarks
-
     h, w = image.shape[:2]
     mask = np.zeros((h, w), dtype=np.float32)
 
-    lm = detect_face_landmarks(image)
+    lm = landmarks
+    if lm is None:
+        try:
+            from modules.warping_module import detect_face_landmarks
+        except ModuleNotFoundError:
+            from backend.modules.warping_module import detect_face_landmarks
+        lm = detect_face_landmarks(image)
+        
     if lm is None:
         logger.warning("_build_face_hair_mask: no landmarks; using full image mask")
         return np.ones((h, w), dtype=np.float32)
@@ -192,7 +194,7 @@ def _build_face_hair_mask(image: np.ndarray) -> np.ndarray:
     return mask
 
 
-def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
+def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.ndarray = None) -> np.ndarray:
     """
     Realistic aging simulation restricted to the **face and hair** only.
     Background and clothing are left untouched.
@@ -223,7 +225,12 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     lh, lw = lo_image.shape[:2]
 
     # ── Build face + hair mask ────────────────────────────────────────
-    face_mask = _build_face_hair_mask(lo_image)          # float32 [0..1]
+    if landmarks is not None and ds_factor > 1.0:
+        lo_landmarks = landmarks / ds_factor
+    else:
+        lo_landmarks = landmarks
+        
+    face_mask = _build_face_hair_mask(lo_image, landmarks=lo_landmarks)          # float32 [0..1]
     face_mask_3 = face_mask[..., np.newaxis]           # (H,W,1) for BGR ops
 
     # ── 1. WRINKLE & TEXTURE ENHANCEMENT ──────────────────────────────
@@ -274,7 +281,7 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
 
     # Blend with original to keep it natural
     blend_ratio = 0.32 + 0.30 * intensity
-    wrinkled = cv2.addWeighted(image, 1.0 - blend_ratio, wrinkled, blend_ratio, 0)
+    wrinkled = cv2.addWeighted(lo_image, 1.0 - blend_ratio, wrinkled, blend_ratio, 0)
 
     # ★ Composite wrinkle effect onto original using face mask
     result = (
@@ -294,9 +301,9 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarray:
     dark_mask = np.clip((dark_thresh - v_ch_hsv) / max(dark_thresh, 1), 0, 1)
 
     # Position weight: upper portion of image is more likely hair
-    y_coords = np.linspace(0.0, 1.0, h, dtype=np.float32).reshape(-1, 1)
+    y_coords = np.linspace(0.0, 1.0, lh, dtype=np.float32).reshape(-1, 1)
     pos_weight = np.clip(1.0 - y_coords * 1.1, 0.12, 1.0)
-    pos_weight = np.broadcast_to(pos_weight, (h, w)).copy()
+    pos_weight = np.broadcast_to(pos_weight, (lh, lw)).copy()
 
     # Exclude skin-coloured pixels (hue ≈ 0-30 in OpenCV 0-180 scale)
     skin_region = (
@@ -433,9 +440,9 @@ def apply_deaging_filter(image: np.ndarray, intensity: float = 0.5) -> np.ndarra
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def apply_aging(image: np.ndarray, intensity: float) -> np.ndarray:
+def apply_aging(image: np.ndarray, intensity: float, landmarks: np.ndarray = None) -> np.ndarray:
     strength = normalize_strength(intensity)
-    return apply_aging_filter(image, intensity=strength)
+    return apply_aging_filter(image, intensity=strength, landmarks=landmarks)
 
 
 def apply_deaging(image: np.ndarray, intensity: float) -> np.ndarray:

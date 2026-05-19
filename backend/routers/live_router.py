@@ -263,7 +263,7 @@ def _apply_filter(
 
         # ── Aging / De-aging ──
         elif filter_name == "aging":
-            return apply_aging(frame, intensity)
+            return apply_aging(frame, intensity, landmarks=landmarks)
         elif filter_name == "deaging":
             return apply_deaging(frame, intensity)
 

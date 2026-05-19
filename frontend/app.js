@@ -579,6 +579,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     faceSwapSection.style.display = 'none';
                 }
             }
+
+            if (isLiveMode && selectedOperation !== 'face_swap') {
+                const intensity = Number(intensitySlider?.value || 50);
+                sendLiveStateUpdate(selectedOperation, { intensity: intensity });
+            }
         });
     });
 
@@ -2739,6 +2744,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (isLiveMode) {
                     setOp();
                     console.log('[Live] Sidebar switched to:', selectedOperation);
+                    const config = _buildLiveConfig(selectedOperation);
+                    const params = { ...config };
+                    delete params.type;
+                    delete params.filter;
+                    sendLiveStateUpdate(selectedOperation, params);
                 }
             }, true); // capture phase
         });
