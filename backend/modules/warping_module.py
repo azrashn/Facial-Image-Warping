@@ -61,7 +61,10 @@ _LM_PREV_SHAPE: tuple[int, int] | None = None
 
 
 def _estimate_head_pose(lm: np.ndarray, w: int, h: int) -> tuple[float, float, float]:
-    """Approximate (yaw, pitch, roll) in degrees using solvePnP."""
+    """Approximate (yaw, pitch, roll) in degrees using solvePnP.
+
+    Internal helper — prefer :func:`estimate_head_pose` for external callers.
+    """
     if lm.shape[0] < 468:
         return 0.0, 0.0, 0.0
     # Stable canonical 3D-ish template for core points.
@@ -99,6 +102,69 @@ def _estimate_head_pose(lm: np.ndarray, w: int, h: int) -> tuple[float, float, f
         yaw = np.degrees(np.arctan2(-rot[2, 0], sy))
         roll = 0.0
     return float(yaw), float(pitch), float(roll)
+
+
+def estimate_head_pose(
+    landmarks: np.ndarray,
+    frame_width: int,
+    frame_height: int,
+) -> tuple[float, float, float]:
+    """Estimate head pose (yaw, pitch, roll) in degrees using cv2.solvePnP.
+
+    Parameters
+    ----------
+    landmarks : np.ndarray
+        (N, 2) float32 pixel landmarks from MediaPipe (N >= 468).
+    frame_width : int
+        Width of the source frame in pixels.
+    frame_height : int
+        Height of the source frame in pixels.
+
+    Returns
+    -------
+    tuple[float, float, float]
+        (yaw, pitch, roll) in degrees.  Returns (0, 0, 0) on failure.
+    """
+    if not validate_landmarks(landmarks, min_count=292):
+        return 0.0, 0.0, 0.0
+    try:
+        return _estimate_head_pose(landmarks, frame_width, frame_height)
+    except Exception as exc:
+        logger.debug("estimate_head_pose failed: %s", exc)
+        return 0.0, 0.0, 0.0
+
+
+def validate_landmarks(
+    landmarks: Optional[np.ndarray],
+    min_count: int = 100,
+) -> bool:
+    """Check whether landmarks are valid for processing.
+
+    Validates:
+      - Not None
+      - At least *min_count* points
+      - Correct shape (N, 2)
+      - No NaN / Inf values
+      - All coordinates non-negative
+
+    Returns
+    -------
+    bool
+        True if the landmarks pass all checks.
+    """
+    if landmarks is None:
+        return False
+    if landmarks.ndim != 2 or landmarks.shape[1] != 2:
+        return False
+    if landmarks.shape[0] < min_count:
+        return False
+    if not np.all(np.isfinite(landmarks)):
+        return False
+    if np.any(landmarks < 0):
+        return False
+    return True
+
+
 _TASK_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/latest/face_landmarker.task"

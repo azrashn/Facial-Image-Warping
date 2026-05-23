@@ -3,11 +3,13 @@ Temporal landmark smoothing via Exponential Moving Average (EMA).
 
 Reduces inter-frame jitter while preserving responsiveness to fast head
 movements.  Includes confidence gating to reject sudden unstable jumps.
+
+Also provides a separate PoseSmoother for head-pose angle stabilization.
 """
 
 import time
 import numpy as np
-from typing import Optional
+from typing import Optional, Tuple
 
 DEFAULT_ALPHA: float = 0.7
 
@@ -30,6 +32,8 @@ class TemporalSmoother:
     STALE_TIMEOUT: float = 1.0
     # Adaptive alpha range during fast motion
     FAST_MOTION_ALPHA: float = 0.9
+    # Hold last-good landmarks for up to this many frames during brief loss
+    HOLD_FRAMES: int = 45  # ~1.5s at 30fps — increased from 30
 
     def __init__(self, alpha: float = DEFAULT_ALPHA):
         """
@@ -58,11 +62,11 @@ class TemporalSmoother:
 
         if current_landmarks is None:
             self._face_lost_count += 1
-            # Return previous landmarks briefly to avoid flicker (up to ~30 frames)
-            if self.prev_landmarks is not None and self._face_lost_count < 30:
+            # Return previous landmarks briefly to avoid flicker
+            if self.prev_landmarks is not None and self._face_lost_count < self.HOLD_FRAMES:
                 return self.prev_landmarks.copy()
             # After prolonged loss, reset state
-            if self._face_lost_count >= 30:
+            if self._face_lost_count >= self.HOLD_FRAMES:
                 self.prev_landmarks = None
             return None
 
@@ -122,3 +126,61 @@ class TemporalSmoother:
         self.prev_landmarks = None
         self._prev_time = 0.0
         self._face_lost_count = 0
+
+
+class PoseSmoother:
+    """Separate EMA smoother for head-pose angles (yaw, pitch, roll).
+
+    Uses a slower alpha than the landmark smoother to provide extra
+    stability for the pose-gated blend factor display.
+    """
+
+    def __init__(self, alpha: float = 0.4):
+        """
+        :param alpha: Smoothing factor for pose angles.
+                      Lower = more stable but laggier.
+        """
+        self.alpha = max(0.05, min(1.0, alpha))
+        self._prev: Optional[Tuple[float, float, float]] = None
+        self._prev_time: float = 0.0
+        self._stale_timeout: float = 1.5
+
+    def smooth(
+        self,
+        yaw: float,
+        pitch: float,
+        roll: float,
+    ) -> Tuple[float, float, float]:
+        """Smooth the incoming pose angles.
+
+        Parameters
+        ----------
+        yaw, pitch, roll : float
+            Raw angles from solvePnP (degrees).
+
+        Returns
+        -------
+        tuple[float, float, float]
+            Smoothed (yaw, pitch, roll).
+        """
+        now = time.perf_counter()
+
+        if self._prev is None or (now - self._prev_time) > self._stale_timeout:
+            self._prev = (yaw, pitch, roll)
+            self._prev_time = now
+            return self._prev
+
+        a = self.alpha
+        smoothed = (
+            a * yaw + (1.0 - a) * self._prev[0],
+            a * pitch + (1.0 - a) * self._prev[1],
+            a * roll + (1.0 - a) * self._prev[2],
+        )
+        self._prev = smoothed
+        self._prev_time = now
+        return smoothed
+
+    def reset(self) -> None:
+        """Force-reset pose smoothing state."""
+        self._prev = None
+        self._prev_time = 0.0

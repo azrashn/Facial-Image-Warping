@@ -273,7 +273,7 @@ def _apply_filter(
 
         # ── Face Swap ──
         elif filter_name == "face_swap":
-            logger.info("[FACE_SWAP] _apply_filter entered | is_loaded=%s", face_swap_engine.is_loaded)
+            logger.debug("[FACE_SWAP] _apply_filter entered | is_loaded=%s", face_swap_engine.is_loaded)
             if face_swap_engine.is_loaded:
                 return face_swap_engine.apply_face_swap(frame, landmarks)
             else:
@@ -399,17 +399,44 @@ async def live_websocket(ws: WebSocket):
             # ── Frame processing ──
             if msg_type == "frame":
                 frame_data = msg.get("data", "")
-                logger.info("[WS] WebSocket frame received (frame #%d, active_states=%s)", frame_count + 1, list(active_states.keys()))
+                logger.debug("[WS] Frame received (#%d, states=%s)", frame_count + 1, list(active_states.keys()))
                 frame = _decode_frame(frame_data)
                 if frame is None:
                     continue
 
-                # Run heavy processing in a thread
+                # Frame-skip: if we're still processing the previous frame,
+                # peek ahead for a newer frame and skip the stale one
+                _skip_count = 0
+                while True:
+                    try:
+                        peek_msg = await asyncio.wait_for(ws.receive_text(), timeout=0.001)
+                        try:
+                            peek = json.loads(peek_msg)
+                        except json.JSONDecodeError:
+                            break
+                        if peek.get("type") == "frame":
+                            newer = _decode_frame(peek.get("data", ""))
+                            if newer is not None:
+                                frame = newer
+                                _skip_count += 1
+                            else:
+                                break
+                        else:
+                            # Non-frame message — process it next iteration
+                            break
+                    except (asyncio.TimeoutError, Exception):
+                        break
+
+                t_proc_start = time.perf_counter()
+
                 result, face_detected = await asyncio.get_event_loop().run_in_executor(
                     None,
                     _process_frame_sync,
                     frame, mesh, smoother, active_states,
                 )
+
+                t_proc_end = time.perf_counter()
+                proc_ms = (t_proc_end - t_proc_start) * 1000.0
 
                 # FPS calculation
                 frame_count += 1
@@ -421,13 +448,28 @@ async def live_websocket(ws: WebSocket):
                     fps_frame_count = 0
                     last_fps_time = now
 
-                encoded = _encode_frame(result, quality=94)
-                await ws.send_json({
+                encoded = _encode_frame(result, quality=75)
+
+                # Build response with pose metrics
+                response = {
                     "type": "frame",
                     "data": encoded,
                     "fps": round(fps, 1),
                     "face_detected": face_detected,
-                })
+                    "process_ms": round(proc_ms, 1),
+                }
+
+                # Add face swap stats if active
+                if "face_swap" in active_states and face_swap_engine.is_loaded:
+                    swap_stats = face_swap_engine.stats
+                    response["pose"] = swap_stats.get("last_pose", {})
+                    response["swap_active"] = swap_stats.get("last_blend_factor", 0) > 0.01
+                    response["blend_factor"] = round(swap_stats.get("last_blend_factor", 0), 2)
+
+                if _skip_count > 0:
+                    response["frames_skipped"] = _skip_count
+
+                await ws.send_json(response)
 
     except WebSocketDisconnect:
         logger.info("Live WebSocket disconnected")
@@ -511,7 +553,7 @@ def _process_frame_sync(
         try:
             config = _feature_to_config(feature, params)
             if feature == "face_swap":
-                logger.info("[FACE_SWAP] _process_frame_sync applying face_swap | is_loaded=%s | has_landmarks=%s",
+                logger.debug("[FACE_SWAP] _process_frame_sync applying face_swap | is_loaded=%s | has_landmarks=%s",
                            face_swap_engine.is_loaded, smoothed is not None)
             filter_landmarks = smoothed
             if raw_landmarks is None and str(feature).startswith("makeup_"):

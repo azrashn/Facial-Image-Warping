@@ -80,6 +80,7 @@ class Renderer:
         show_bbox: bool = False,
         landmarks: Optional[np.ndarray] = None,
         frame_time_ms: float = 0.0,
+        pose_info: Optional[dict] = None,
     ) -> np.ndarray:
         """
         Draw debugging information, UI overlay, and optional landmarks.
@@ -135,8 +136,8 @@ class Renderer:
         pad = int(8 * scale)
 
         # --- HUD background ---
-        hud_lines = 5
-        hud_w = int(260 * scale)
+        hud_lines = 7
+        hud_w = int(300 * scale)
         hud_h = line_h * hud_lines + pad * 2
         overlay = display.copy()
         cv2.rectangle(overlay, (0, 0), (hud_w, hud_h), self.COLOR_BG, -1)
@@ -166,6 +167,45 @@ class Renderer:
             display, f"Backend: {self._gpu_backend}",
             (pad, y_pos), font, font_scale * 0.75, (150, 150, 150), 1,
         )
+        y_pos += line_h
+
+        # --- Pose info (if available) ---
+        if pose_info is not None:
+            yaw = pose_info.get("yaw", 0.0)
+            pitch = pose_info.get("pitch", 0.0)
+            roll = pose_info.get("roll", 0.0)
+            blend = pose_info.get("blend_factor", 0.0)
+            swap_active = pose_info.get("swap_active", False)
+
+            max_angle = max(abs(yaw), abs(pitch), abs(roll))
+            if max_angle < 25:
+                pose_color = self.COLOR_GREEN
+                pose_label = "OK"
+            elif max_angle < 50:
+                pose_color = self.COLOR_YELLOW
+                pose_label = f"WARN({blend:.0%})"
+            else:
+                pose_color = self.COLOR_RED
+                pose_label = "OFF"
+
+            pose_text = f"Pose: Y{yaw:+.0f} P{pitch:+.0f} R{roll:+.0f} [{pose_label}]"
+            cv2.putText(
+                display, pose_text,
+                (pad, y_pos), font, font_scale * 0.8, pose_color, max(1, thickness - 1),
+            )
+            y_pos += line_h
+
+            if swap_active:
+                swap_text = f"Swap: blend={blend:.0%}"
+                cv2.putText(
+                    display, swap_text,
+                    (pad, y_pos), font, font_scale * 0.8, self.COLOR_CYAN, max(1, thickness - 1),
+                )
+        else:
+            cv2.putText(
+                display, "Pose: N/A",
+                (pad, y_pos), font, font_scale * 0.75, (150, 150, 150), 1,
+            )
 
         # --- Bottom instruction bar ---
         bar_h = int(28 * scale)

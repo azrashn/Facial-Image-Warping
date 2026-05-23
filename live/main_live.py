@@ -156,7 +156,7 @@ def main() -> None:
 
             # Process the frame through the pipeline
             # (landmark detection → smoothing → geometric warp)
-            processed_frame, landmarks = engine.process_frame(
+            processed_frame, landmarks, pose_info = engine.process_frame(
                 frame, filter_type, intensity
             )
 
@@ -179,6 +179,7 @@ def main() -> None:
                 show_bbox=show_bbox,
                 landmarks=landmarks,
                 frame_time_ms=fps_counter.get_frame_time_ms(),
+                pose_info=pose_info,
             )
 
             renderer.show(display_frame)
