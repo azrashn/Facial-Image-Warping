@@ -65,8 +65,16 @@ def _lab_color_transfer(src_bgr: np.ndarray, dst_bgr: np.ndarray, mask: np.ndarr
     src_std = np.maximum(src_vals.std(axis=0), 1.0)
     dst_mean = dst_vals.mean(axis=0)
     dst_std = np.maximum(dst_vals.std(axis=0), 1.0)
+    
+    std_ratio = dst_std / src_std
+    # Limit contrast reduction so the face doesn't become too pale
+    std_ratio = np.clip(std_ratio, 0.75, 1.25)
+    
+    # Keep some of the source face's original color to make it obvious it's a different face
+    blended_mean = 0.5 * dst_mean + 0.5 * src_mean
+
     out_lab = src_lab.copy()
-    out_lab[valid] = ((src_lab[valid] - src_mean) * (dst_std / src_std)) + dst_mean
+    out_lab[valid] = ((src_lab[valid] - src_mean) * std_ratio) + blended_mean
     out_lab = np.clip(out_lab, 0, 255).astype(np.uint8)
     return cv2.cvtColor(out_lab, cv2.COLOR_LAB2BGR)
 
@@ -102,6 +110,9 @@ class FaceSwapEngine:
             362, 263, 387, 385, 380, 373, 386, 374, 61, 291, 0, 17, 78, 308, 13, 14,
             87, 317, 82, 312, 311, 310, 415, 324, 318, 402, 95, 88, 205, 425, 50, 280,
             117, 346, 118, 347, 111, 340,
+            # Eyebrows
+            46, 52, 53, 55, 63, 65, 66, 70, 105, 107,
+            276, 282, 283, 285, 293, 295, 296, 300, 334, 336
         ]
         n_lm = self.source_landmarks.shape[0]
         self.used_indices = sorted(
@@ -230,11 +241,11 @@ class FaceSwapEngine:
         clone_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
         hull = cv2.convexHull(np.array(dst_oval_pts_roi, dtype=np.int32))
         cv2.fillConvexPoly(clone_mask, hull, 255)
-        erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, w_roi // 25), max(3, h_roi // 25)))
+        erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, w_roi // 35), max(3, h_roi // 35)))
         clone_mask = cv2.erode(clone_mask, erode_kernel, iterations=1)
-        clone_mask = cv2.GaussianBlur(clone_mask, (15, 15), 4.5)
+        clone_mask = cv2.GaussianBlur(clone_mask, (21, 21), 7.0)
 
-        attenuation = 0.35 + 0.65 * confidence
+        attenuation = 0.75 + 0.25 * confidence
         clone_mask = self._pose_aware_mask(clone_mask, pose.yaw, attenuation)
         mask_float = clone_mask.astype(np.float32)
         if session.prev_mask_alpha is not None and session.prev_mask_alpha.shape == mask_float.shape:
@@ -247,7 +258,8 @@ class FaceSwapEngine:
         center_x = int(np.clip(np.mean(dst_oval_pts_roi[:, 0]), 1, w_roi - 2))
         center_y = int(np.clip(np.mean(dst_oval_pts_roi[:, 1]), 1, h_roi - 2))
 
-        do_clone = (not degraded_mode) and confidence > 0.45
+        # Disable seamlessClone to make it obvious that it is a different face
+        do_clone = False # (not degraded_mode) and confidence > 0.45
         if do_clone:
             try:
                 blended_roi = cv2.seamlessClone(
