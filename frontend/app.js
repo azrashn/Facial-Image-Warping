@@ -2409,13 +2409,32 @@ document.addEventListener('DOMContentLoaded', () => {
             _liveWs.onopen = () => {
                 _wsReady = true;
                 console.log('[Live] WebSocket connected');
-                // Send initial config
-                const preset = getCurrentLivePreset();
-                _liveWs.send(JSON.stringify({
-                    type: 'config',
-                    filter: _mapPresetToFilter(preset),
-                    intensity: Number(intensitySlider?.value || 50),
-                }));
+
+                // Resend ALL existing active states so features enabled
+                // before live mode (e.g. face_swap toggle) are applied.
+                const existingKeys = Object.keys(liveActiveStates);
+                if (existingKeys.length > 0) {
+                    const payload = {};
+                    // Clear everything first
+                    LIVE_FEATURE_KEYS.forEach(key => { payload[key] = null; });
+                    // Then set active states
+                    existingKeys.forEach(key => {
+                        payload[key] = liveActiveStates[key];
+                    });
+                    _liveWs.send(JSON.stringify({
+                        action: 'update_live_state',
+                        active_states: payload,
+                    }));
+                    console.log('[Live] Resent existing active states:', existingKeys);
+                } else {
+                    // No stacked states — send legacy config
+                    const preset = getCurrentLivePreset();
+                    _liveWs.send(JSON.stringify({
+                        type: 'config',
+                        filter: _mapPresetToFilter(preset),
+                        intensity: Number(intensitySlider?.value || 50),
+                    }));
+                }
             };
 
             _liveWs.onmessage = (ev) => {
@@ -2978,15 +2997,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         e.target.checked = false;
                     }
                 } else {
-                    // Stop Face Swap API
-                    try {
-                        await fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' });
-                        console.log('[Face Swap] Live mode stopped');
-                        // CRITICAL: Remove face_swap from WebSocket active states
-                        sendLiveStateUpdate('face_swap', null);
-                    } catch (err) {
-                        console.error('[Face Swap] Stop error:', err);
-                    }
+                    // Disable face swap in live stream, but do NOT call
+                    // /face-swap/stop — that destroys the cached source
+                    // face (landmarks + triangulation), making re-enable
+                    // impossible without re-uploading the source image.
+                    // Only remove face_swap from WebSocket active states.
+                    sendLiveStateUpdate('face_swap', null);
+                    console.log('[Face Swap] Live mode disabled (source preserved)');
                 }
             });
         }

@@ -273,11 +273,13 @@ def _apply_filter(
 
         # ── Face Swap ──
         elif filter_name == "face_swap":
-            logger.debug("[FACE_SWAP] _apply_filter entered | is_loaded=%s", face_swap_engine.is_loaded)
+            logger.info("[FACE_SWAP] _apply_filter entered | is_loaded=%s", face_swap_engine.is_loaded)
             if face_swap_engine.is_loaded:
-                return face_swap_engine.apply_face_swap(frame, landmarks)
+                result = face_swap_engine.apply_face_swap(frame, landmarks)
+                logger.info("[FACE_SWAP] apply_face_swap returned | same_as_input=%s", result is frame)
+                return result
             else:
-                logger.debug("Face swap: face_swap_engine not loaded")
+                logger.info("Face swap: face_swap_engine not loaded")
 
         else:
             logger.debug("Unknown live filter: %s", filter_name)
@@ -553,7 +555,7 @@ def _process_frame_sync(
         try:
             config = _feature_to_config(feature, params)
             if feature == "face_swap":
-                logger.debug("[FACE_SWAP] _process_frame_sync applying face_swap | is_loaded=%s | has_landmarks=%s",
+                logger.info("[FACE_SWAP] _process_frame_sync applying face_swap | is_loaded=%s | has_landmarks=%s",
                            face_swap_engine.is_loaded, smoothed is not None)
             filter_landmarks = smoothed
             if raw_landmarks is None and str(feature).startswith("makeup_"):

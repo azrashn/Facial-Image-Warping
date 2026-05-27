@@ -346,7 +346,8 @@ class FaceSwapEngine:
         self._frame_count += 1
 
         if not self.is_loaded or not validate_landmarks(target_landmarks):
-            logger.debug("[FACE_SWAP] Skipping: not loaded or invalid target landmarks")
+            logger.info("[FACE_SWAP] Skipping: not loaded or invalid target landmarks (loaded=%s, lm_valid=%s)",
+                        self.is_loaded, validate_landmarks(target_landmarks))
             return target_frame
 
         # CRITICAL: Enforce uint8 on input frame
@@ -487,7 +488,7 @@ class FaceSwapEngine:
                 continue
 
         if triangles_warped == 0:
-            logger.debug("[FACE_SWAP] No triangles warped — returning original")
+            logger.info("[FACE_SWAP] No triangles warped — returning original")
             self._swap_skip_error += 1
             return target_frame
 
