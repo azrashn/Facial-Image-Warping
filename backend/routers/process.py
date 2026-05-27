@@ -13,6 +13,8 @@ try:
         apply_aging,
         apply_deaging,
         apply_fft_filter,
+        apply_fft_annular_filter,
+        apply_fft_selected_region_inverse,
         apply_fft_partial_region_artifact,
         apply_cartoon_filter,
         apply_virtual_makeup,
@@ -44,6 +46,8 @@ except ModuleNotFoundError:
         apply_aging,
         apply_deaging,
         apply_fft_filter,
+        apply_fft_annular_filter,
+        apply_fft_selected_region_inverse,
         apply_fft_partial_region_artifact,
         apply_cartoon_filter,
         apply_virtual_makeup,
@@ -2572,18 +2576,20 @@ async def process_fft(
     image: UploadFile = File(...),
     intensity: float = Form(50),
     mask_coords: str | None = Form(None),
+    fft_band: str = Form("mid"),
 ):
     """
-    Apply FFT-based frequency filter to the uploaded image.
+    Apply FFT-based frequency-band manipulation to the uploaded image.
 
     Parameters
     ----------
     intensity : float
         Filter strength (0-100).
     mask_coords : str | None
-        Optional JSON string with normalized coordinates
-        {"x": float, "y": float, "w": float, "h": float} (0-1 range).
-        If provided, the filter is applied only to that region.
+        Optional JSON string with normalized spectrum coordinates. The
+        selection is converted to radial distance from the shifted FFT center.
+    fft_band : str
+        "low", "mid", or "high" annular band when mask_coords is not provided.
     """
     import json as _json
 
@@ -2601,31 +2607,26 @@ async def process_fft(
                 logger.warning("[FFT] Could not parse mask_coords: %s", exc)
 
         filter_intensity = float(intensity)
-        if parsed_mask:
-            processed, _ = apply_fft_partial_region_artifact(
-                original,
-                mask_coords=parsed_mask,
-                intensity=filter_intensity,
-            )
-        else:
-            processed, _ = apply_fft_filter(original, intensity=filter_intensity)
+        fft_result = apply_fft_annular_filter(
+            original,
+            intensity=filter_intensity,
+            band=fft_band,
+            mask_coords=parsed_mask,
+        )
+        processed = fft_result["processed"]
 
         metrics = _metrics_dict(original, processed)
 
-        # Compute spectra for both original and processed
+        # Compute phase for both original and processed
         orig_fft_shifted = compute_fft(original)[2]
         proc_fft_shifted = compute_fft(processed)[2]
 
-        orig_spectrum_b64 = _data_url_from_image(
-            cv2.cvtColor(compute_magnitude_spectrum(orig_fft_shifted), cv2.COLOR_GRAY2BGR)
-        )
-        proc_spectrum_b64 = _data_url_from_image(
-            cv2.cvtColor(compute_magnitude_spectrum(proc_fft_shifted), cv2.COLOR_GRAY2BGR)
-        )
+        orig_spectrum_b64 = _data_url_from_image(fft_result["orig_spectrum"])
+        proc_spectrum_b64 = _data_url_from_image(fft_result["proc_spectrum"])
         orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
         proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
 
-        return _response_payload(
+        response = _response_payload(
             image_b64=_data_url_from_image(processed),
             metrics=metrics,
             orig_spectrum_b64=orig_spectrum_b64,
@@ -2634,6 +2635,17 @@ async def process_fft(
             proc_phase_b64=proc_phase_b64,
             energy=compute_energy_analysis(processed, radius=30),
         )
+        response.update({
+            "inverse_image_b64": _data_url_from_image(processed),
+            "difference_b64": _data_url_from_image(fft_result["difference"]),
+            "fft_band": "selection" if parsed_mask else fft_result["band"],
+            "annulus_bounds": {
+                "inner_radius": round(float(fft_result.get("bounds", (0, 0))[0]), 2),
+                "outer_radius": round(float(fft_result.get("bounds", (0, 0))[1]), 2),
+            },
+            "selection_coords": parsed_mask,
+        })
+        return response
 
     except HTTPException:
         raise
