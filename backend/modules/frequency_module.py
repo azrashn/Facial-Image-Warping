@@ -459,6 +459,151 @@ def apply_fft_filter(image: np.ndarray, intensity: float) -> tuple[np.ndarray, n
     return filtered_bgr, spectrum
 
 
+def _radial_grid(shape: tuple[int, int]) -> tuple[np.ndarray, float]:
+    rows, cols = shape
+    cy, cx = rows / 2.0, cols / 2.0
+    yy, xx = np.ogrid[:rows, :cols]
+    radius = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    return radius, float(radius.max())
+
+
+def _annular_bounds_from_band(band: str, max_radius: float) -> tuple[float, float]:
+    band = (band or "mid").strip().lower()
+    if band in {"low", "center", "low_frequency"}:
+        return 0.0, max_radius * 0.18
+    if band in {"mid", "middle", "medium", "mid_frequency"}:
+        return max_radius * 0.18, max_radius * 0.42
+    if band in {"high", "outer", "high_frequency"}:
+        return max_radius * 0.42, max_radius * 0.98
+    raise ValueError("fft_band must be 'low', 'mid', or 'high'.")
+
+
+def _annular_bounds_from_coords(
+    coords: dict,
+    rows: int,
+    cols: int,
+    max_radius: float,
+) -> tuple[float, float]:
+    """
+    Interpret a frontend spectrum selection as radial frequency distance.
+
+    The old implementation treated x/y as a rectangular image patch. In shifted
+    FFT space that is misleading: equal distances from the center represent the
+    same frequency magnitude. This converts the selection center/size into an
+    annulus and clamps very outer corner selections to avoid invalid components.
+    """
+    try:
+        x = clamp(float(coords.get("x", 0.5)))
+        y = clamp(float(coords.get("y", 0.5)))
+        w = clamp(float(coords.get("w", coords.get("width", 0.08))))
+        h = clamp(float(coords.get("h", coords.get("height", 0.08))))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("mask_coords must include numeric x, y, w, h values.") from exc
+
+    cx = cols / 2.0
+    cy = rows / 2.0
+    sel_cx = (x + w / 2.0) * cols
+    sel_cy = (y + h / 2.0) * rows
+    selected_radius = float(np.hypot(sel_cx - cx, sel_cy - cy))
+
+    if selected_radius > max_radius * 0.98:
+        raise ValueError("Selection is outside the valid shifted FFT frequency disk.")
+
+    thickness = max(max(rows, cols) * max(w, h) * 0.45, max_radius * 0.045)
+    inner = max(0.0, selected_radius - thickness)
+    outer = min(max_radius * 0.98, selected_radius + thickness)
+    if outer - inner < max_radius * 0.025:
+        raise ValueError("Selected FFT annulus is too small.")
+    return inner, outer
+
+
+def build_annular_fft_mask(
+    shape: tuple[int, int],
+    band: str = "mid",
+    coords: dict | None = None,
+    feather: float = 2.5,
+) -> tuple[np.ndarray, tuple[float, float]]:
+    radius, max_radius = _radial_grid(shape)
+    if coords:
+        inner, outer = _annular_bounds_from_coords(coords, shape[0], shape[1], max_radius)
+    else:
+        inner, outer = _annular_bounds_from_band(band, max_radius)
+
+    mask = ((radius >= inner) & (radius <= outer)).astype(np.float32)
+    if feather > 0:
+        mask = cv2.GaussianBlur(mask, (0, 0), feather)
+        max_value = float(mask.max())
+        if max_value > 0:
+            mask /= max_value
+    return np.clip(mask, 0.0, 1.0), (inner, outer)
+
+
+def overlay_fft_mask(spectrum: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    if len(spectrum.shape) == 2:
+        base = cv2.cvtColor(spectrum, cv2.COLOR_GRAY2BGR)
+    else:
+        base = spectrum.copy()
+
+    overlay = base.astype(np.float32)
+    mask_f = np.clip(mask.astype(np.float32), 0.0, 1.0)
+    tint = np.zeros_like(overlay)
+    tint[:, :, 0] = 210.0
+    tint[:, :, 1] = 240.0
+    tint[:, :, 2] = 80.0
+    overlay = overlay * (1.0 - mask_f[..., None] * 0.26) + tint * (mask_f[..., None] * 0.26)
+    return np.clip(overlay, 0, 255).astype(np.uint8)
+
+
+def apply_fft_annular_filter(
+    image: np.ndarray,
+    intensity: float = 50,
+    band: str = "mid",
+    mask_coords: dict | None = None,
+) -> dict:
+    """
+    Manipulate low/mid/high radial frequency bands with a centered annular mask.
+
+    The selected band is attenuated in shifted FFT space and reconstructed with
+    inverse FFT. This makes the lab demonstrate meaningful frequency bands:
+    center = low frequencies, middle ring = mid frequencies, outer ring = high.
+    """
+    if image is None:
+        raise ValueError("Input image is None.")
+
+    strength = normalize_strength(intensity)
+    rows, cols = image.shape[:2]
+    mask, bounds = build_annular_fft_mask((rows, cols), band=band, coords=mask_coords)
+    attenuation = 1.0 - (0.15 + 0.85 * strength) * mask
+
+    working = image.astype(np.float32)
+    processed = np.zeros_like(working, dtype=np.float32)
+
+    for ch in range(3):
+        fft_shifted = np.fft.fftshift(np.fft.fft2(working[:, :, ch]))
+        manipulated = fft_shifted * attenuation
+        restored = np.real(np.fft.ifft2(np.fft.ifftshift(manipulated)))
+        processed[:, :, ch] = restored
+
+    processed_u8 = np.clip(processed, 0, 255).astype(np.uint8)
+    difference = cv2.absdiff(image, processed_u8)
+    difference = cv2.normalize(difference, None, 0, 255, cv2.NORM_MINMAX)
+
+    orig_fft_shifted = compute_fft(image)[2]
+    proc_fft_shifted = compute_fft(processed_u8)[2]
+    orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
+    proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
+
+    return {
+        "processed": processed_u8,
+        "difference": np.clip(difference, 0, 255).astype(np.uint8),
+        "orig_spectrum": cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR),
+        "proc_spectrum": overlay_fft_mask(proc_spectrum, mask),
+        "mask": mask,
+        "bounds": bounds,
+        "band": band,
+    }
+
+
 def _coords_to_fft_rect(coords: dict, rows: int, cols: int) -> tuple[int, int, int, int]:
     """
     Convert normalized frontend selection coordinates into FFT pixel bounds.
@@ -572,6 +717,63 @@ def apply_fft_partial_region_artifact(
     artifact_vis = cv2.normalize(artifact, None, 0, 255, cv2.NORM_MINMAX)
     artifact_vis = np.clip(artifact_vis, 0, 255).astype(np.uint8)
     return processed, artifact_vis
+
+
+def apply_fft_selected_region_inverse(
+    image: np.ndarray,
+    mask_coords: dict,
+) -> dict:
+    """
+    Select FFT coefficients, keep their conjugate-symmetric counterpart, and
+    reconstruct only that frequency component with inverse FFT.
+
+    This is the FFT Laboratory path: it does not add an artificial effect to the
+    source image. It shows what the selected frequency region contributes when
+    transformed back into image space.
+    """
+    if image is None:
+        raise ValueError("Input image is None.")
+
+    rows, cols = image.shape[:2]
+    patch_mask, rect = _build_symmetric_fft_patch_mask((rows, cols), mask_coords, feather=1.25)
+
+    working = image.astype(np.float32)
+    component = np.zeros_like(working, dtype=np.float32)
+
+    for ch in range(3):
+        fft_shifted = np.fft.fftshift(np.fft.fft2(working[:, :, ch]))
+        isolated = fft_shifted * patch_mask
+        restored = np.real(np.fft.ifft2(np.fft.ifftshift(isolated))).astype(np.float32)
+        component[:, :, ch] = restored
+
+    # Signed components are not displayable directly; normalize for visualization.
+    component_vis = component - component.min(axis=(0, 1), keepdims=True)
+    denom = component_vis.max(axis=(0, 1), keepdims=True)
+    component_vis = np.divide(component_vis, np.maximum(denom, 1e-6)) * 255.0
+    component_vis = np.clip(component_vis, 0, 255).astype(np.uint8)
+
+    energy = np.linalg.norm(component, axis=2)
+    energy_vis = cv2.normalize(energy, None, 0, 255, cv2.NORM_MINMAX)
+    energy_vis = cv2.cvtColor(np.clip(energy_vis, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+
+    orig_spectrum = compute_magnitude_spectrum(compute_fft(image)[2])
+    selected_spectrum = cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR).astype(np.float32)
+    mask_3 = patch_mask[..., None]
+    selected_spectrum *= (0.18 + 0.82 * mask_3)
+    tint = np.zeros_like(selected_spectrum)
+    tint[:, :, 1] = 230.0
+    tint[:, :, 2] = 255.0
+    selected_spectrum = selected_spectrum * (1.0 - mask_3 * 0.35) + tint * (mask_3 * 0.35)
+
+    return {
+        "processed": component_vis,
+        "difference": energy_vis,
+        "orig_spectrum": overlay_fft_mask(orig_spectrum, patch_mask),
+        "proc_spectrum": np.clip(selected_spectrum, 0, 255).astype(np.uint8),
+        "mask": patch_mask,
+        "rect": rect,
+        "band": "selection",
+    }
 
 
 def compute_energy_analysis(image: np.ndarray, radius: int = 30) -> dict:

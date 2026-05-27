@@ -373,6 +373,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const procPhaseImg = document.getElementById('procPhaseImg');
     
     // FFT Lab Elements
+    const fftLabOrigSpectrumImg = document.getElementById('fftLabOrigSpectrumImg');
+    const fftLabOrigSpectrumPlaceholder = document.getElementById('fftLabOrigSpectrumPlaceholder');
     const fftLabProcSpectrumImg = document.getElementById('fftLabProcSpectrumImg');
     const fftLabProcPhaseImg = document.getElementById('fftLabProcPhaseImg');
     const fftLabProcSpectrumPlaceholder = document.getElementById('fftLabProcSpectrumPlaceholder');
@@ -381,6 +383,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const fftOutputPlaceholder = document.getElementById('fftOutputPlaceholder');
     const fftPhaseOutputImg = document.getElementById('fftPhaseOutputImg');
     const fftPhaseOutputPlaceholder = document.getElementById('fftPhaseOutputPlaceholder');
+    const fftInverseImg = document.getElementById('fftInverseImg');
+    const fftDifferenceImg = document.getElementById('fftDifferenceImg');
+    const fftDifferencePlaceholder = document.getElementById('fftDifferencePlaceholder');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -890,9 +895,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (origSpectrumB64 && origSpectrumImg) {
             origSpectrumImg.src = origSpectrumB64;
             origSpectrumImg.style.display = 'block';
+            if (fftLabOrigSpectrumImg) {
+                fftLabOrigSpectrumImg.src = origSpectrumB64;
+                fftLabOrigSpectrumImg.style.display = 'block';
+            }
+            if (fftLabOrigSpectrumPlaceholder) fftLabOrigSpectrumPlaceholder.style.display = 'none';
         } else if (origSpectrumImg) {
             origSpectrumImg.src = '';
             origSpectrumImg.style.display = 'none';
+            if (fftLabOrigSpectrumImg) {
+                fftLabOrigSpectrumImg.src = '';
+                fftLabOrigSpectrumImg.style.display = 'none';
+            }
+            if (fftLabOrigSpectrumPlaceholder) fftLabOrigSpectrumPlaceholder.style.display = 'block';
         }
 
         if (procSpectrumB64 && procSpectrumImg) {
@@ -1960,75 +1975,28 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- FFT LAB INTERACTIVE SELECTION ---
-    const fftSubBtns = document.querySelectorAll('.fft-sub-btn');
-    const fftMagView = document.getElementById('fft-mag-view');
-    const fftPhaseView = document.getElementById('fft-phase-view');
+    // --- FFT LAB ANNULAR FREQUENCY SELECTION ---
+    const fftBandBtns = document.querySelectorAll('.fft-band-btn');
+    let currentFftBand = 'low';
 
-    fftSubBtns.forEach(btn => {
+    fftBandBtns.forEach(btn => {
         btn.addEventListener('click', () => {
-            fftSubBtns.forEach(b => {
+            fftBandBtns.forEach(b => {
                 b.classList.remove('active');
                 b.style.background = 'transparent';
             });
             btn.classList.add('active');
             btn.style.background = 'var(--surface-color)';
-
-            if (btn.dataset.sub === 'magnitude') {
-                fftMagView.style.display = 'flex';
-                fftPhaseView.style.display = 'none';
-            } else {
-                fftMagView.style.display = 'none';
-                fftPhaseView.style.display = 'flex';
-            }
+            currentFftBand = btn.dataset.band || 'mid';
+            currentFftSelection = null;
+            drawAllFftBandOverlays(currentFftBand);
+            applyFftRegionArtifact(null, currentFftBand);
         });
     });
 
-    function getFftSelectionCoords(canvas, imageElement, selection) {
-        if (!imageElement || !imageElement.src || imageElement.style.display === 'none') {
-            return null;
-        }
-
-        const canvasW = canvas.width || canvas.getBoundingClientRect().width;
-        const canvasH = canvas.height || canvas.getBoundingClientRect().height;
-        const naturalW = imageElement.naturalWidth || 1;
-        const naturalH = imageElement.naturalHeight || 1;
-        const imageRatio = naturalW / naturalH;
-        const canvasRatio = canvasW / Math.max(canvasH, 1);
-
-        let drawW = canvasW;
-        let drawH = canvasH;
-        let offsetX = 0;
-        let offsetY = 0;
-
-        if (canvasRatio > imageRatio) {
-            drawH = canvasH;
-            drawW = drawH * imageRatio;
-            offsetX = (canvasW - drawW) / 2;
-        } else {
-            drawW = canvasW;
-            drawH = drawW / imageRatio;
-            offsetY = (canvasH - drawH) / 2;
-        }
-
-        const x0 = Math.max(selection.x, offsetX);
-        const y0 = Math.max(selection.y, offsetY);
-        const x1 = Math.min(selection.x + selection.w, offsetX + drawW);
-        const y1 = Math.min(selection.y + selection.h, offsetY + drawH);
-
-        if (x1 - x0 < 5 || y1 - y0 < 5) return null;
-
-        return {
-            x: (x0 - offsetX) / drawW,
-            y: (y0 - offsetY) / drawH,
-            w: (x1 - x0) / drawW,
-            h: (y1 - y0) / drawH,
-        };
-    }
-
-    async function applyFftRegionArtifact(coords, outputImg, outputPlaceholder) {
-        if (!uploadedFile || !currentOriginalImage || !coords) {
-            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Run FFT Filter first, then select a visible spectrum region.`;
+    async function applyFftRegionArtifact(coords = null, band = currentFftBand) {
+        if (!uploadedFile || !currentOriginalImage) {
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Upload an image first, then choose an FFT frequency band.`;
             return;
         }
 
@@ -2036,13 +2004,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('image', uploadedFile);
         formData.append('intensity', intensitySlider.value);
-        formData.append('mask_coords', JSON.stringify(coords));
+        formData.append('fft_band', band || 'mid');
+        if (coords) formData.append('mask_coords', JSON.stringify(coords));
 
-        if (outputPlaceholder) {
-            outputPlaceholder.style.display = 'block';
-            outputPlaceholder.textContent = currentLang === 'TR' ? 'İşleniyor...' : 'Processing...';
+        if (fftOutputPlaceholder) {
+            fftOutputPlaceholder.style.display = 'block';
+            fftOutputPlaceholder.textContent = 'Processing...';
         }
-        if (outputImg) outputImg.style.display = 'none';
+        if (fftInverseImg) fftInverseImg.style.display = 'none';
+        if (fftDifferenceImg) fftDifferenceImg.style.display = 'none';
         loadingOverlay.style.display = 'flex';
 
         try {
@@ -2058,11 +2028,16 @@ document.addEventListener('DOMContentLoaded', () => {
             afterImg.src = currentProcessedImage;
             landmarksOnlyImg.src = currentProcessedImage;
 
-            if (outputImg) {
-                outputImg.src = currentProcessedImage;
-                outputImg.style.display = 'block';
+            if (fftInverseImg) {
+                fftInverseImg.src = payload.inverse_image_b64 || currentProcessedImage;
+                fftInverseImg.style.display = 'block';
             }
-            if (outputPlaceholder) outputPlaceholder.style.display = 'none';
+            if (fftOutputPlaceholder) fftOutputPlaceholder.style.display = 'none';
+            if (fftDifferenceImg && payload.difference_b64) {
+                fftDifferenceImg.src = payload.difference_b64;
+                fftDifferenceImg.style.display = 'block';
+            }
+            if (fftDifferencePlaceholder) fftDifferencePlaceholder.style.display = 'none';
 
             updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
             setSpectrumImages(
@@ -2071,15 +2046,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 payload.orig_phase_b64 || null,
                 payload.proc_phase_b64 || null
             );
+            const resultBand = payload.fft_band || band || 'mid';
+            if (payload.selection_coords) {
+                currentFftSelection = payload.selection_coords;
+                drawAllFftBandOverlays(resultBand);
+            } else {
+                currentFftSelection = null;
+                drawAllFftBandOverlays(resultBand);
+            }
 
-            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>FFT partial-region artifact applied.`;
-            addHistory('FFT Partial Region Artifact');
+            const bandLabel = resultBand.toUpperCase();
+            const summaryText = resultBand === 'selection'
+                ? 'FFT custom radial frequency band manipulated.'
+                : `FFT ${bandLabel} annular frequency band manipulated.`;
+            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>${summaryText}`;
+            addHistory(resultBand === 'selection' ? 'FFT Custom Radial Band' : `FFT ${bandLabel} Band`);
             if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
         } catch (err) {
             console.error('[FFT Region] Error:', err);
-            if (outputPlaceholder) {
-                outputPlaceholder.style.display = 'block';
-                outputPlaceholder.textContent = err.message || idleText;
+            if (fftOutputPlaceholder) {
+                fftOutputPlaceholder.style.display = 'block';
+                fftOutputPlaceholder.textContent = err.message || idleText;
             }
             analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message || 'FFT region processing failed.'}`;
         } finally {
@@ -2087,89 +2074,216 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function setupInteractiveCanvas(canvasId, name, imageElement, outputImg, outputPlaceholder) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
+    const fftBandRanges = {
+        low: [0.00, 0.18],
+        mid: [0.18, 0.42],
+        high: [0.42, 0.98],
+    };
+    let currentFftSelection = null;
 
-        const ctx = canvas.getContext('2d');
-        let isDrawing = false;
-        let startX = 0;
-        let startY = 0;
-        let currentX = 0;
-        let currentY = 0;
-
-        function resizeCanvas() {
-            const rect = canvas.parentElement.getBoundingClientRect();
-            canvas.width = rect.width;
-            canvas.height = rect.height;
-        }
-
-        window.addEventListener('resize', resizeCanvas);
-
-        canvas.addEventListener('mousedown', (e) => {
-            resizeCanvas();
-            const rect = canvas.getBoundingClientRect();
-            startX = e.clientX - rect.left;
-            startY = e.clientY - rect.top;
-            isDrawing = true;
+    function syncFftBandButtons(band) {
+        currentFftBand = band || 'mid';
+        fftBandBtns.forEach(btn => {
+            const active = btn.dataset.band === currentFftBand;
+            btn.classList.toggle('active', active);
+            btn.style.background = active ? 'var(--surface-color)' : 'transparent';
         });
-
-        canvas.addEventListener('mousemove', (e) => {
-            if (!isDrawing) return;
-            const rect = canvas.getBoundingClientRect();
-            currentX = e.clientX - rect.left;
-            currentY = e.clientY - rect.top;
-
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            const x = Math.min(startX, currentX);
-            const y = Math.min(startY, currentY);
-            const w = Math.abs(currentX - startX);
-            const h = Math.abs(currentY - startY);
-
-            ctx.clearRect(x, y, w, h);
-
-            ctx.strokeStyle = '#00ffcc';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([5, 5]);
-            ctx.strokeRect(x, y, w, h);
-        });
-
-        const finishSelection = (e) => {
-            if (!isDrawing) return;
-            isDrawing = false;
-            
-            const rect = canvas.getBoundingClientRect();
-            currentX = e.clientX - rect.left;
-            currentY = e.clientY - rect.top;
-
-            const x = Math.min(startX, currentX);
-            const y = Math.min(startY, currentY);
-            const w = Math.abs(currentX - startX);
-            const h = Math.abs(currentY - startY);
-
-            if (w > 5 && h > 5) {
-                console.log(`[FFT Lab - ${name}] Region Selected - X: ${Math.round(x)}, Y: ${Math.round(y)}, Width: ${Math.round(w)}, Height: ${Math.round(h)}`);
-                const coords = getFftSelectionCoords(canvas, imageElement, { x, y, w, h });
-                if (coords) {
-                    applyFftRegionArtifact(coords, outputImg, outputPlaceholder);
-                } else {
-                    analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Run FFT Filter first, then select inside the visible spectrum image.`;
-                }
-            } else {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-            }
-        };
-
-        canvas.addEventListener('mouseup', finishSelection);
-        canvas.addEventListener('mouseleave', finishSelection);
     }
 
-    setupInteractiveCanvas('fftSelectionCanvas', 'Magnitude', fftLabProcSpectrumImg, fftOutputImg, fftOutputPlaceholder);
-    setupInteractiveCanvas('fftPhaseCanvas', 'Phase', fftLabProcPhaseImg, fftPhaseOutputImg, fftPhaseOutputPlaceholder);
+    function resizeOverlayCanvas(canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const width = Math.round(rect.width);
+        const height = Math.round(rect.height);
+        if (width < 40 || height < 40) {
+            canvas.width = 0;
+            canvas.height = 0;
+            return false;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        return true;
+    }
+
+    function drawBandOnCanvas(canvas, band) {
+        if (!canvas) return;
+        if (!resizeOverlayCanvas(canvas)) return;
+        const ctx = canvas.getContext('2d');
+        const [innerRatio, outerRatio] = fftBandRanges[band] || fftBandRanges.mid;
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+        const maxR = Math.min(canvas.width, canvas.height) * 0.47;
+        const inner = innerRatio * maxR;
+        const outer = outerRatio * maxR;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = '#00ffcc';
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = 'rgba(0, 255, 204, 0.45)';
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+        ctx.stroke();
+        if (inner > 1) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, inner, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#00ffcc';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function drawAnnularSelectionOnCanvas(canvas, selection) {
+        if (!canvas || !selection) return;
+        if (!resizeOverlayCanvas(canvas)) return;
+        const ctx = canvas.getContext('2d');
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+        const maxR = Math.min(canvas.width, canvas.height) * 0.47;
+        const selCx = (selection.x + selection.w / 2) * canvas.width;
+        const selCy = (selection.y + selection.h / 2) * canvas.height;
+        const selectedRadius = Math.hypot(selCx - cx, selCy - cy);
+        const thickness = Math.max(
+            Math.max(canvas.width, canvas.height) * Math.max(selection.w, selection.h) * 0.45,
+            maxR * 0.045
+        );
+        const inner = Math.max(0, selectedRadius - thickness);
+        const outer = Math.min(maxR * 0.98, selectedRadius + thickness);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.setLineDash([6, 5]);
+        ctx.strokeStyle = '#00ffcc';
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = 'rgba(0, 255, 204, 0.45)';
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+        ctx.stroke();
+        if (inner > 1) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, inner, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#00ffcc';
+        ctx.beginPath();
+        ctx.arc(selCx, selCy, 3, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function drawAllFftBandOverlays(band = currentFftBand) {
+        if (currentFftSelection) {
+            drawAllFftAnnularSelections(currentFftSelection);
+            return;
+        }
+        ['fftSelectionCanvas', 'fftProcSelectionCanvas', 'fftInverseSelectionCanvas', 'fftDifferenceSelectionCanvas']
+            .forEach(id => drawBandOnCanvas(document.getElementById(id), band));
+    }
+
+    function bandFromCanvasClick(canvas, event) {
+        if (!resizeOverlayCanvas(canvas)) return currentFftBand;
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+        const maxR = Math.min(canvas.width, canvas.height) * 0.47;
+        const radiusRatio = Math.hypot(x - cx, y - cy) / Math.max(maxR, 1);
+        if (radiusRatio <= fftBandRanges.low[1]) return 'low';
+        if (radiusRatio <= fftBandRanges.mid[1]) return 'mid';
+        return 'high';
+    }
+
+    function setupFftBandCanvas(canvasId) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        if (canvasId !== 'fftSelectionCanvas') {
+            canvas.addEventListener('click', (event) => {
+                currentFftSelection = null;
+                const band = bandFromCanvasClick(canvas, event);
+                syncFftBandButtons(band);
+                drawAllFftBandOverlays(band);
+                applyFftRegionArtifact(null, band);
+            });
+        }
+        window.addEventListener('resize', () => drawBandOnCanvas(canvas, currentFftBand));
+        drawBandOnCanvas(canvas, currentFftBand);
+    }
+
+    ['fftSelectionCanvas', 'fftProcSelectionCanvas', 'fftInverseSelectionCanvas', 'fftDifferenceSelectionCanvas']
+        .forEach(setupFftBandCanvas);
+
+    function drawAllFftAnnularSelections(selection) {
+        ['fftSelectionCanvas', 'fftProcSelectionCanvas', 'fftInverseSelectionCanvas', 'fftDifferenceSelectionCanvas']
+            .forEach(id => drawAnnularSelectionOnCanvas(document.getElementById(id), selection));
+    }
+
+    function setupFftRegionDrag() {
+        const canvas = document.getElementById('fftSelectionCanvas');
+        if (!canvas) return;
+        let dragging = false;
+        let start = null;
+
+        canvas.addEventListener('mousedown', (event) => {
+            if (!resizeOverlayCanvas(canvas)) return;
+            const rect = canvas.getBoundingClientRect();
+            start = {
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top,
+            };
+            dragging = true;
+        });
+
+        canvas.addEventListener('mousemove', (event) => {
+            if (!dragging || !start) return;
+            const rect = canvas.getBoundingClientRect();
+            const endX = event.clientX - rect.left;
+            const endY = event.clientY - rect.top;
+            const x = Math.min(start.x, endX);
+            const y = Math.min(start.y, endY);
+            const w = Math.abs(endX - start.x);
+            const h = Math.abs(endY - start.y);
+            drawAnnularSelectionOnCanvas(canvas, {
+                x: x / Math.max(canvas.width, 1),
+                y: y / Math.max(canvas.height, 1),
+                w: w / Math.max(canvas.width, 1),
+                h: h / Math.max(canvas.height, 1),
+            });
+        });
+
+        function finishDrag(event) {
+            if (!dragging || !start) return;
+            dragging = false;
+            const rect = canvas.getBoundingClientRect();
+            const endX = event.clientX - rect.left;
+            const endY = event.clientY - rect.top;
+            const x = Math.min(start.x, endX);
+            const y = Math.min(start.y, endY);
+            const w = Math.abs(endX - start.x);
+            const h = Math.abs(endY - start.y);
+            start = null;
+
+            if (w < 8 || h < 8) return;
+            currentFftSelection = {
+                x: x / Math.max(canvas.width, 1),
+                y: y / Math.max(canvas.height, 1),
+                w: w / Math.max(canvas.width, 1),
+                h: h / Math.max(canvas.height, 1),
+            };
+            drawAllFftAnnularSelections(currentFftSelection);
+            applyFftRegionArtifact(currentFftSelection, 'selection');
+        }
+
+        canvas.addEventListener('mouseup', finishDrag);
+        canvas.addEventListener('mouseleave', finishDrag);
+    }
+
+    setupFftRegionDrag();
 
     // =========================================================================
     // CAMERA MODULE — Browser-side webcam + Live processing via REST API
@@ -2832,6 +2946,28 @@ document.addEventListener('DOMContentLoaded', () => {
         let sourceFaceLoaded = false;
         let fsSourceFile = null;
 
+        function getSelectedSourceFile() {
+            return fsSourceFile || fsUploadInput?.files?.[0] || null;
+        }
+
+        async function uploadSourceFace(file) {
+            const formData = new FormData();
+            formData.append('source', file);
+
+            const response = await fetch(`${API_BASE}/face-swap/upload-source`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload.detail || 'Upload failed');
+            }
+
+            sourceFaceLoaded = true;
+            return payload;
+        }
+
         // Sliders value updates
         if (fsBlendSlider) fsBlendSlider.addEventListener('input', (e) => document.getElementById('fsBlendVal').textContent = e.target.value + '%');
         if (fsStabilitySlider) fsStabilitySlider.addEventListener('input', (e) => document.getElementById('fsStabilityVal').textContent = e.target.value + '%');
@@ -2877,6 +3013,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!file.type.startsWith('image/')) return;
             
             fsSourceFile = file;
+            sourceFaceLoaded = false;
             
             // Show preview
             const reader = new FileReader();
@@ -2889,21 +3026,8 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             reader.readAsDataURL(file);
 
-            // API: POST /api/face-swap/upload-source
-            const formData = new FormData();
-            formData.append('source', file);
-
             try {
-                const response = await fetch(`${API_BASE}/face-swap/upload-source`, {
-                    method: 'POST',
-                    body: formData
-                });
-                if (!response.ok) {
-                    const errPayload = await response.json().catch(() => ({}));
-                    throw new Error(errPayload.detail || 'Upload failed');
-                }
-                
-                sourceFaceLoaded = true;
+                await uploadSourceFace(file);
                 fsLoadedStatus.textContent = "Ready!";
                 fsLoadedStatus.style.color = "var(--success-color)";
             } catch (err) {
@@ -2937,7 +3061,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // Enable Face Swap Toggle
         if (fsEnableToggle) {
             fsEnableToggle.addEventListener('change', async (e) => {
-                if (!sourceFaceLoaded) {
+                const selectedSourceFile = getSelectedSourceFile();
+                if (!sourceFaceLoaded && !selectedSourceFile) {
                     alert("Please upload a source face first.");
                     e.target.checked = false;
                     return;
@@ -2946,6 +3071,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (e.target.checked) {
                     // Start Face Swap API
                     try {
+                        if (!sourceFaceLoaded && selectedSourceFile) {
+                            await uploadSourceFace(selectedSourceFile);
+                            fsLoadedStatus.textContent = "Ready!";
+                            fsLoadedStatus.style.color = "var(--success-color)";
+                        }
+
                         const payload = {
                             blend_strength: parseInt(fsBlendSlider.value),
                             stability: parseInt(fsStabilitySlider.value),
@@ -2996,14 +3127,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (mainApplyBtn) {
             mainApplyBtn.addEventListener('click', async (e) => {
                 if (selectedOperation === 'face_swap') {
-                    e.stopPropagation(); // prevent default apply action
+                    e.preventDefault();
+                    e.stopImmediatePropagation(); // prevent the default apply action
                     
                     if (!uploadedFile) {
                         alert("Please upload a target image in the main view.");
                         return;
                     }
-                    if (!fsSourceFile) {
-                        alert("Please upload a source face in the Face Swap panel.");
+
+                    const selectedSourceFile = getSelectedSourceFile();
+                    if (!sourceFaceLoaded && !selectedSourceFile) {
+                        const faceSwapSection = document.getElementById('faceSwapSection');
+                        if (faceSwapSection) faceSwapSection.style.display = 'block';
+                        if (fsUploadInput) fsUploadInput.click();
                         return;
                     }
 
@@ -3011,8 +3147,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (loadingOverlay) loadingOverlay.style.display = 'flex';
 
                     const formData = new FormData();
-                    formData.append('source', fsSourceFile);
                     formData.append('target', uploadedFile);
+                    if (selectedSourceFile) {
+                        formData.append('source', selectedSourceFile);
+                    }
 
                     try {
                         const response = await fetch(`${API_BASE}/face-swap`, {
