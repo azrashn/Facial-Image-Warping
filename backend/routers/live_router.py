@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 import cv2
@@ -27,6 +29,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/live", tags=["live"])
+LIVE_TARGET_FPS = 30.0
+LIVE_FRAME_BUDGET_MS = 1000.0 / LIVE_TARGET_FPS
+LIVE_TRACK_REFRESH_INTERVAL = 3
 
 
 def _hex_to_opencv_hue(hex_str: str) -> int:
@@ -143,10 +148,17 @@ class _BrowserSmoother:
     def __init__(self, alpha: float = 0.7):
         self.alpha = alpha
         self.prev: Optional[np.ndarray] = None
+        self.last_raw: Optional[np.ndarray] = None
+        self.frame_id: int = 0
 
     def smooth(self, pts: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        self.frame_id += 1
+        refresh_now = self.frame_id % LIVE_TRACK_REFRESH_INTERVAL == 0
+        if not refresh_now and pts is None and self.last_raw is not None:
+            pts = self.last_raw.copy()
         if pts is None:
             return self.prev  # hold last good landmarks briefly
+        self.last_raw = pts.copy()
         if self.prev is None or self.prev.shape != pts.shape:
             self.prev = pts.copy()
             return pts
@@ -176,10 +188,47 @@ def _encode_frame(img: np.ndarray, quality: int = 70) -> str:
     return f"data:image/jpeg;base64,{b64}"
 
 
+@dataclass
+class _QueuedFrame:
+    data_url: str
+    queued_at: float
+    seq: int
+
+
+class _LatestFrameBuffer:
+    """Per-connection frame buffer that keeps only newest frame."""
+
+    def __init__(self):
+        self._item: Optional[_QueuedFrame] = None
+        self._event = asyncio.Event()
+        self._closed = False
+
+    def put(self, item: _QueuedFrame) -> int:
+        dropped = 1 if self._item is not None else 0
+        self._item = item
+        self._event.set()
+        return dropped
+
+    async def get(self) -> Optional[_QueuedFrame]:
+        while not self._closed:
+            if self._item is not None:
+                item = self._item
+                self._item = None
+                self._event.clear()
+                return item
+            await self._event.wait()
+        return None
+
+    def close(self) -> None:
+        self._closed = True
+        self._event.set()
+
+
 def _apply_filter(
     frame: np.ndarray,
     landmarks: Optional[np.ndarray],
     config: dict,
+    realtime_hints: Optional[dict] = None,
 ) -> np.ndarray:
     """Apply the requested filter using existing warping/processing functions."""
     filter_name = config.get("filter", "none")
@@ -275,7 +324,7 @@ def _apply_filter(
         elif filter_name == "face_swap":
             logger.info("[FACE_SWAP] _apply_filter entered | is_loaded=%s", face_swap_engine.is_loaded)
             if face_swap_engine.is_loaded:
-                return face_swap_engine.apply_face_swap(frame, landmarks)
+                return face_swap_engine.apply_face_swap(frame, landmarks, runtime_hints=realtime_hints or {})
             else:
                 logger.debug("Face swap: face_swap_engine not loaded")
 
@@ -333,6 +382,57 @@ async def live_websocket(ws: WebSocket):
     fps = 0.0
     last_fps_time = time.perf_counter()
     fps_frame_count = 0
+    recv_seq = 0
+    dropped_frames = 0
+    frame_buffer = _LatestFrameBuffer()
+    state_lock = asyncio.Lock()
+    stop_event = asyncio.Event()
+
+    async def _worker_loop():
+        nonlocal frame_count, fps, last_fps_time, fps_frame_count
+        nonlocal dropped_frames
+        while not stop_event.is_set():
+            queued = await frame_buffer.get()
+            if queued is None:
+                break
+            frame = _decode_frame(queued.data_url)
+            if frame is None:
+                continue
+            async with state_lock:
+                active_states_snapshot = dict(active_states)
+            loop = asyncio.get_event_loop()
+            result, face_detected, proc_ms, degraded = await loop.run_in_executor(
+                None,
+                _process_frame_sync,
+                frame,
+                mesh,
+                smoother,
+                active_states_snapshot,
+                LIVE_FRAME_BUDGET_MS,
+            )
+            frame_count += 1
+            fps_frame_count += 1
+            now = time.perf_counter()
+            elapsed = now - last_fps_time
+            if elapsed >= 1.0:
+                fps = fps_frame_count / elapsed
+                fps_frame_count = 0
+                last_fps_time = now
+
+            queue_latency_ms = max(0.0, (now - queued.queued_at) * 1000.0)
+            total_latency_ms = queue_latency_ms + proc_ms
+            encoded = _encode_frame(result, quality=92 if degraded else 94)
+            await ws.send_json({
+                "type": "frame",
+                "data": encoded,
+                "fps": round(fps, 1),
+                "face_detected": face_detected,
+                "latency_ms": round(total_latency_ms, 1),
+                "dropped_frames": dropped_frames,
+                "degraded": degraded,
+            })
+
+    worker_task = asyncio.create_task(_worker_loop())
 
     try:
         while True:
@@ -350,11 +450,12 @@ async def live_websocket(ws: WebSocket):
             if msg_action == "update_live_state":
                 incoming = msg.get("active_states", {})
                 # Merge: null/None values → remove, otherwise upsert
-                for feature, params in incoming.items():
-                    if params is None:
-                        active_states.pop(feature, None)
-                    else:
-                        active_states[feature] = params if isinstance(params, dict) else {"value": params}
+                async with state_lock:
+                    for feature, params in incoming.items():
+                        if params is None:
+                            active_states.pop(feature, None)
+                        else:
+                            active_states[feature] = params if isinstance(params, dict) else {"value": params}
                 logger.info("Live active_states updated: %s", list(active_states.keys()))
                 await ws.send_json({
                     "type": "state_ack",
@@ -367,7 +468,8 @@ async def live_websocket(ws: WebSocket):
             # Handled via HTTP POST now, but we keep clear_source_face fallback if used
             if msg_action == "clear_source_face":
                 face_swap_engine.is_loaded = False
-                active_states.pop("face_swap", None)
+                async with state_lock:
+                    active_states.pop("face_swap", None)
                 await ws.send_json({
                     "type": "status",
                     "message": "Source face cleared",
@@ -384,10 +486,12 @@ async def live_websocket(ws: WebSocket):
                         changed = True
                 # Auto-migrate legacy config into active_states
                 filt = current_config.get("filter", "none")
-                if filt and filt != "none":
-                    active_states = {filt: dict(current_config)}
-                elif not filt or filt == "none":
-                    active_states.clear()
+                async with state_lock:
+                    if filt and filt != "none":
+                        active_states.clear()
+                        active_states[filt] = dict(current_config)
+                    elif not filt or filt == "none":
+                        active_states.clear()
                 if changed:
                     logger.info("Live config updated (legacy): %s", current_config)
                     await ws.send_json({
@@ -399,41 +503,19 @@ async def live_websocket(ws: WebSocket):
             # ── Frame processing ──
             if msg_type == "frame":
                 frame_data = msg.get("data", "")
-                logger.info("[WS] WebSocket frame received (frame #%d, active_states=%s)", frame_count + 1, list(active_states.keys()))
-                frame = _decode_frame(frame_data)
-                if frame is None:
-                    continue
-
-                # Run heavy processing in a thread
-                result, face_detected = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    _process_frame_sync,
-                    frame, mesh, smoother, active_states,
-                )
-
-                # FPS calculation
-                frame_count += 1
-                fps_frame_count += 1
-                now = time.perf_counter()
-                elapsed = now - last_fps_time
-                if elapsed >= 1.0:
-                    fps = fps_frame_count / elapsed
-                    fps_frame_count = 0
-                    last_fps_time = now
-
-                encoded = _encode_frame(result, quality=94)
-                await ws.send_json({
-                    "type": "frame",
-                    "data": encoded,
-                    "fps": round(fps, 1),
-                    "face_detected": face_detected,
-                })
+                recv_seq += 1
+                dropped_frames += frame_buffer.put(_QueuedFrame(data_url=frame_data, queued_at=time.perf_counter(), seq=recv_seq))
 
     except WebSocketDisconnect:
         logger.info("Live WebSocket disconnected")
     except Exception as exc:
         logger.error("Live WebSocket error: %s", exc)
     finally:
+        stop_event.set()
+        frame_buffer.close()
+        worker_task.cancel()
+        with contextlib.suppress(Exception):
+            await worker_task
         logger.info("Live WebSocket session ended (frames: %d)", frame_count)
 
 
@@ -478,8 +560,11 @@ def _process_frame_sync(
     mesh: PersistentFaceMesh,
     smoother: _BrowserSmoother,
     active_states: dict,
-) -> tuple[np.ndarray, bool]:
+    budget_ms: float,
+) -> tuple[np.ndarray, bool, float, bool]:
     """Synchronous frame processing — applies ALL active states sequentially."""
+    started = time.perf_counter()
+    degraded = False
     # 0. Extract show_landmarks — independent toggle, NOT a filter.
     show_landmarks = "show_landmarks" in active_states
     # Build filter-only states (exclude show_landmarks)
@@ -497,26 +582,37 @@ def _process_frame_sync(
     has_makeup = any(str(feature).startswith("makeup_") for feature in filter_states)
     if not filter_states and not show_landmarks:
         if not face_detected:
-            return frame, face_detected
+            return frame, face_detected, (time.perf_counter() - started) * 1000.0, degraded
         # No filters but show_landmarks is on → skip to step 4
         if show_landmarks and smoothed is not None:
-            return _draw_landmarks_overlay(frame, smoothed), face_detected
-        return frame, face_detected
+            return _draw_landmarks_overlay(frame, smoothed), face_detected, (time.perf_counter() - started) * 1000.0, degraded
+        return frame, face_detected, (time.perf_counter() - started) * 1000.0, degraded
 
     if not face_detected and not has_makeup and not show_landmarks:
-        return frame, face_detected
+        return frame, face_detected, (time.perf_counter() - started) * 1000.0, degraded
 
     result = frame
     for feature, params in filter_states.items():
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        if elapsed_ms > budget_ms and feature != "face_swap":
+            degraded = True
+            continue
         try:
             config = _feature_to_config(feature, params)
             if feature == "face_swap":
                 logger.info("[FACE_SWAP] _process_frame_sync applying face_swap | is_loaded=%s | has_landmarks=%s",
                            face_swap_engine.is_loaded, smoothed is not None)
+                if elapsed_ms > budget_ms * 0.65:
+                    degraded = True
             filter_landmarks = smoothed
             if raw_landmarks is None and str(feature).startswith("makeup_"):
                 filter_landmarks = None
-            result = _apply_filter(result, filter_landmarks, config)
+            result = _apply_filter(
+                result,
+                filter_landmarks,
+                config,
+                realtime_hints={"degraded_mode": degraded, "budget_ms": budget_ms},
+            )
         except Exception as exc:
             logger.warning("Stacked filter '%s' failed: %s", feature, exc)
 
@@ -524,7 +620,10 @@ def _process_frame_sync(
     if show_landmarks and smoothed is not None:
         result = _draw_landmarks_overlay(result, smoothed)
 
-    return result, face_detected
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    if elapsed_ms > budget_ms:
+        degraded = True
+    return result, face_detected, elapsed_ms, degraded
 
 
 # -- Health check --
