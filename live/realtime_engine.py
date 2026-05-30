@@ -32,8 +32,7 @@ from backend.modules.warping_module import (
     apply_emoji_preset,
 )
 from backend.modules.face_swap_module import (
-    SourceFaceCache,
-    realtime_face_swap,
+    face_swap_engine,
     FaceSwapError,
 )
 from live.temporal_smoothing import TemporalSmoother
@@ -80,9 +79,6 @@ class RealtimeEngine:
         self.smoother = TemporalSmoother(alpha=alpha)
         self._last_good_landmarks: Optional[np.ndarray] = None
 
-        # ── Face swap source cache (computed once, reused every frame) ──
-        self._source_cache = SourceFaceCache()
-
     # ── Source face management ──────────────────────────────────────────
 
     def load_source_face(self, source_bgr: np.ndarray) -> bool:
@@ -100,7 +96,10 @@ class RealtimeEngine:
             True if source was loaded successfully, False otherwise.
         """
         try:
-            self._source_cache.load(source_bgr)
+            ok, encoded = cv2.imencode(".png", source_bgr)
+            if not ok:
+                return False
+            face_swap_engine.process_source_image(encoded.tobytes())
             logger.info("Source face loaded for realtime swap")
             return True
         except FaceSwapError as e:
@@ -129,13 +128,17 @@ class RealtimeEngine:
 
     def clear_source_face(self) -> None:
         """Unload the source face from the cache."""
-        self._source_cache.clear()
+        face_swap_engine.is_loaded = False
+        face_swap_engine.source_image = None
+        face_swap_engine.source_landmarks = None
+        face_swap_engine.source_triangles = None
+        face_swap_engine.source_triangle_meta = []
         logger.info("Source face cleared")
 
     @property
     def source_face_loaded(self) -> bool:
         """Whether a source face is currently loaded."""
-        return self._source_cache.is_loaded
+        return face_swap_engine.is_loaded
 
     def process_frame(
         self,
@@ -197,13 +200,11 @@ class RealtimeEngine:
                 result = func(frame, emoji_name, landmarks=smoothed_landmarks)
             elif arg_type == "face_swap":
                 # Realtime face swap — uses cached source + smoothed target landmarks
-                if not self._source_cache.is_loaded:
+                if not face_swap_engine.is_loaded:
                     logger.debug("Face swap selected but no source loaded — skipping")
                     result = frame
                 else:
-                    result = realtime_face_swap(
-                        frame, smoothed_landmarks, self._source_cache
-                    )
+                    result = face_swap_engine.apply_face_swap(frame, smoothed_landmarks)
             else:
                 result = frame
 

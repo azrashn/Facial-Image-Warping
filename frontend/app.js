@@ -2340,7 +2340,8 @@ document.addEventListener('DOMContentLoaded', () => {
         let liveWorkerReady = false;
         let _liveWs = null;           // WebSocket connection for live mode
         let _wsReady = false;         // WebSocket open state
-        let _wsPendingFrame = false;  // throttle: waiting for server response
+        let _wsPendingFrame = false;  // legacy flag; no longer hard-gates sends
+        const _WS_BUFFERED_LIMIT = 2 * 1024 * 1024; // 2MB soft backpressure cap
         const _LIVE_JPEG_QUALITY = 0.94;
 
         // Sync the WS ref to outer scope so sendLiveStateUpdate() can use it
@@ -2728,7 +2729,8 @@ document.addEventListener('DOMContentLoaded', () => {
         async function processLiveFrame() {
             if (!cameraStream || !isLiveMode) return;
             if (!_wsReady || !_liveWs) return;
-            if (_wsPendingFrame) return; // throttle: wait for server to respond
+            // Allow pipelined frame sends; throttle only on WebSocket backpressure.
+            if (_liveWs.bufferedAmount > _WS_BUFFERED_LIMIT) return;
 
             // If stacked states are active, they're already sent via sendLiveStateUpdate().
             // Only use legacy config path when no stacked states exist.
@@ -2763,7 +2765,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!isLiveMode || !_wsReady) return;
 
                 // Stage 3: Send via WebSocket
-                _wsPendingFrame = true;
                 _liveWs.send(JSON.stringify({
                     type: 'frame',
                     data: b64,

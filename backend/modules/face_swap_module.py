@@ -1,12 +1,16 @@
 import logging
-from typing import Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional
+
 import cv2
 import numpy as np
 from scipy.spatial import Delaunay
 
 try:
+    from modules.pose_module import PoseEstimate, estimate_head_pose, landmark_stability_confidence
     from modules.warping_module import detect_face_landmarks, _has_duplicate_vertices, triangle_area
 except ModuleNotFoundError:
+    from backend.modules.pose_module import PoseEstimate, estimate_head_pose, landmark_stability_confidence
     from backend.modules.warping_module import detect_face_landmarks, _has_duplicate_vertices, triangle_area
 
 logger = logging.getLogger(__name__)
@@ -17,288 +21,280 @@ FACE_OVAL_INDICES = [
     176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
     162, 21, 54, 103, 67, 109,
 ]
-
-# MediaPipe Inner Lip Contour — exact ordered loop for cv2.fillPoly.
-# Traces the inner edge of the lips (the teeth/void boundary), NOT the
-# outer lip surface.  Using an ordered contour with fillPoly avoids the
-# convexHull inflation that causes double-lip / smudge artifacts.
 INNER_LIP_INDICES = [
     78, 95, 88, 178, 87, 14, 317, 402, 318, 324,
     308, 415, 310, 311, 312, 13, 82, 81, 80, 191,
 ]
 
+
+@dataclass
+class FaceSwapSession:
+    prev_pose: Optional[PoseEstimate] = None
+    prev_mask_alpha: Optional[np.ndarray] = None
+    prev_landmarks: Optional[np.ndarray] = None
+    stability_score: float = 1.0
+
+
+@dataclass
+class TriangleSourceMeta:
+    src_tri: np.ndarray
+
+
 class FaceSwapError(Exception):
     pass
 
+
+def _alpha_blend(src: np.ndarray, dst: np.ndarray, mask: np.ndarray, alpha_gain: float = 1.0) -> np.ndarray:
+    mask_f = np.clip((mask.astype(np.float32) / 255.0) * alpha_gain, 0.0, 1.0)
+    mask_3 = mask_f[..., np.newaxis]
+    mixed = src.astype(np.float32) * mask_3 + dst.astype(np.float32) * (1.0 - mask_3)
+    return np.clip(mixed, 0, 255).astype(np.uint8)
+
+
+def _lab_color_transfer(src_bgr: np.ndarray, dst_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    if src_bgr.size == 0 or dst_bgr.size == 0:
+        return src_bgr
+    valid = mask > 8
+    if int(np.count_nonzero(valid)) < 64:
+        return src_bgr
+    src_lab = cv2.cvtColor(src_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    dst_lab = cv2.cvtColor(dst_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    src_vals = src_lab[valid]
+    dst_vals = dst_lab[valid]
+    src_mean = src_vals.mean(axis=0)
+    src_std = np.maximum(src_vals.std(axis=0), 1.0)
+    dst_mean = dst_vals.mean(axis=0)
+    dst_std = np.maximum(dst_vals.std(axis=0), 1.0)
+    
+    std_ratio = dst_std / src_std
+    # Limit contrast reduction so the face doesn't become too pale
+    std_ratio = np.clip(std_ratio, 0.75, 1.25)
+    
+    # Keep some of the source face's original color to make it obvious it's a different face
+    blended_mean = 0.5 * dst_mean + 0.5 * src_mean
+
+    out_lab = src_lab.copy()
+    out_lab[valid] = ((src_lab[valid] - src_mean) * std_ratio) + blended_mean
+    out_lab = np.clip(out_lab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(out_lab, cv2.COLOR_LAB2BGR)
+
+
 class FaceSwapEngine:
-    """
-    Core engine for realtime face swapping.
-    Caches source face, landmarks, and Delaunay triangulation for 30+ FPS performance.
-    Uses an ROI-based cv2.seamlessClone approach for optimal speed.
-    """
     def __init__(self):
         self.source_image: Optional[np.ndarray] = None
         self.source_landmarks: Optional[np.ndarray] = None
         self.source_triangles: Optional[np.ndarray] = None
+        self.source_triangle_meta: list[TriangleSourceMeta] = []
         self.is_loaded = False
         self.running = False
-        
-        # We also cache the source indices we triangulate over
         self.used_indices: Optional[list[int]] = None
+        self._default_session = FaceSwapSession()
 
     def process_source_image(self, image_bytes: bytes) -> None:
         if not image_bytes:
             raise FaceSwapError("Empty image data provided.")
-
         arr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
             raise FaceSwapError("Could not decode source image bytes.")
-
-        # CRITICAL: Ensure source image is uint8
         if img.dtype != np.uint8:
             img = np.clip(img, 0, 255).astype(np.uint8)
-
         lm = detect_face_landmarks(img)
         if lm is None or len(lm) < 100:
             raise FaceSwapError("No face detected in source image.")
 
         self.source_image = img
         self.source_landmarks = lm
-
-        # Use Face Oval + some interior anchor points
         interior_indices = [
-            1, 2, 4, 5, 6, 19, 94, 168, # Nose
-            33, 133, 160, 158, 153, 144, 159, 145, # Left eye
-            362, 263, 387, 385, 380, 373, 386, 374, # Right eye
-            61, 291, 0, 17, 78, 308, 13, 14, 87, 317, # Mouth outer
-            82, 312, 311, 310, 415, 324, 318, 402, 95, 88, # Mouth inner
-            205, 425, 50, 280, 117, 346, 118, 347, # Cheeks
-            111, 340, # Under eye
+            1, 2, 4, 5, 6, 19, 94, 168, 33, 133, 160, 158, 153, 144, 159, 145,
+            362, 263, 387, 385, 380, 373, 386, 374, 61, 291, 0, 17, 78, 308, 13, 14,
+            87, 317, 82, 312, 311, 310, 415, 324, 318, 402, 95, 88, 205, 425, 50, 280,
+            117, 346, 118, 347, 111, 340,
+            # Eyebrows
+            46, 52, 53, 55, 63, 65, 66, 70, 105, 107,
+            276, 282, 283, 285, 293, 295, 296, 300, 334, 336
         ]
-        
         n_lm = self.source_landmarks.shape[0]
-        self.used_indices = sorted(set(
-            [i for i in FACE_OVAL_INDICES if i < n_lm] +
-            [i for i in interior_indices if i < n_lm]
-        ))
-        
+        self.used_indices = sorted(
+            set([i for i in FACE_OVAL_INDICES if i < n_lm] + [i for i in interior_indices if i < n_lm])
+        )
         src_pts = self.source_landmarks[self.used_indices].astype(np.float32)
         try:
             tri = Delaunay(src_pts)
             self.source_triangles = tri.simplices
+            self.source_triangle_meta = []
+            for ia, ib, ic in self.source_triangles:
+                src_tri = np.array([src_pts[ia], src_pts[ib], src_pts[ic]], dtype=np.float32).reshape(3, 2)
+                self.source_triangle_meta.append(TriangleSourceMeta(src_tri=src_tri))
         except Exception as exc:
             raise FaceSwapError(f"Delaunay triangulation failed on source face: {exc}")
-
         self.is_loaded = True
-        logger.info(f"[FACE_SWAP] source loaded, {len(self.source_triangles)} triangles cached.")
+        self._default_session = FaceSwapSession()
+        logger.info("[FACE_SWAP] source loaded, %d triangles cached.", len(self.source_triangles))
 
-    def apply_face_swap(self, target_frame: np.ndarray, target_landmarks: np.ndarray) -> np.ndarray:
-        logger.info(f"[FACE_SWAP] apply_face_swap called | source_loaded={self.is_loaded} | running={self.running}")
+    def _pose_aware_mask(self, mask: np.ndarray, yaw: float, attenuation: float) -> np.ndarray:
+        h, w = mask.shape[:2]
+        if w <= 2 or h <= 2:
+            return mask
+        m = mask.astype(np.float32)
+        if abs(yaw) > 10.0:
+            xs = np.linspace(0.0, 1.0, w, dtype=np.float32)[None, :]
+            if yaw > 0:
+                atten = 1.0 - np.clip((1.0 - xs) * (abs(yaw) / 70.0), 0.0, 0.55)
+            else:
+                atten = 1.0 - np.clip(xs * (abs(yaw) / 70.0), 0.0, 0.55)
+            m *= atten
+        m *= attenuation
+        return np.clip(m, 0, 255).astype(np.uint8)
+
+    def apply_face_swap(
+        self,
+        target_frame: np.ndarray,
+        target_landmarks: np.ndarray,
+        runtime_hints: Optional[dict] = None,
+        session: Optional[FaceSwapSession] = None,
+    ) -> np.ndarray:
+        session = session or self._default_session
+        hints = runtime_hints or {}
+        degraded_mode = bool(hints.get("degraded_mode", False))
 
         if not self.is_loaded or target_landmarks is None:
-            logger.debug("[FACE_SWAP] Skipping: not loaded or no target landmarks")
             return target_frame
-
-        # CRITICAL: Enforce uint8 on input frame
         if target_frame.dtype != np.uint8:
             target_frame = np.clip(target_frame, 0, 255).astype(np.uint8)
 
         h, w = target_frame.shape[:2]
-        
-        # Extract target points matching our triangulated subset
+        frame_diag = float(np.hypot(h, w))
+        pose = estimate_head_pose(target_landmarks, w, h)
+        stability = landmark_stability_confidence(target_landmarks, session.prev_landmarks, frame_diag)
+        session.stability_score = 0.5 * session.stability_score + 0.5 * stability
+        confidence = float(np.clip(0.65 * pose.confidence + 0.35 * session.stability_score, 0.0, 1.0))
+        if confidence < 0.2:
+            session.prev_landmarks = target_landmarks.copy()
+            return target_frame
+        if session.prev_pose is not None:
+            pose = PoseEstimate(
+                yaw=0.6 * pose.yaw + 0.4 * session.prev_pose.yaw,
+                pitch=0.6 * pose.pitch + 0.4 * session.prev_pose.pitch,
+                roll=0.6 * pose.roll + 0.4 * session.prev_pose.roll,
+                confidence=confidence,
+            )
+        session.prev_pose = pose
+        session.prev_landmarks = target_landmarks.copy()
+
         try:
             src_pts = self.source_landmarks[self.used_indices].astype(np.float32)
             dst_pts = target_landmarks[self.used_indices].astype(np.float32)
         except IndexError:
-            logger.warning("[FACE_SWAP] IndexError accessing landmarks subset")
             return target_frame
-
-        # Compute Bounding Box (ROI) on target
-        # CRITICAL: Force int32 for all point arrays passed to OpenCV
-        dst_oval_pts = np.array(
-            [target_landmarks[i] for i in FACE_OVAL_INDICES if i < len(target_landmarks)],
-            dtype=np.int32
-        )
+        dst_oval_pts = np.array([target_landmarks[i] for i in FACE_OVAL_INDICES if i < len(target_landmarks)], dtype=np.int32)
         if len(dst_oval_pts) < 3:
-            logger.warning("[FACE_SWAP] Not enough oval points for bounding rect")
             return target_frame
 
-        # SAFETY ASSERTION: points must be int32 for cv2.boundingRect
-        assert dst_oval_pts.dtype == np.int32, f"dst_oval_pts dtype={dst_oval_pts.dtype}, expected int32"
-            
         x_min, y_min, w_roi, h_roi = cv2.boundingRect(dst_oval_pts)
-        
-        # Add padding
         pad = int(max(w_roi, h_roi) * 0.15)
         x_min = max(0, x_min - pad)
         y_min = max(0, y_min - pad)
-        x_max = min(w, x_min + w_roi + 2*pad)
-        y_max = min(h, y_min + h_roi + 2*pad)
+        x_max = min(w, x_min + w_roi + 2 * pad)
+        y_max = min(h, y_min + h_roi + 2 * pad)
         w_roi = x_max - x_min
         h_roi = y_max - y_min
-        
         if w_roi <= 0 or h_roi <= 0:
-            logger.warning("[FACE_SWAP] ROI has zero dimensions")
             return target_frame
 
         target_roi = target_frame[y_min:y_max, x_min:x_max].copy()
         warped_roi = np.zeros_like(target_roi)
-        
-        logger.debug(f"[FACE_SWAP] Processing {len(self.source_triangles)} triangles in ROI ({w_roi}x{h_roi})")
-
-        # Warp Source to Target (within ROI)
         triangles_warped = 0
-        for ia, ib, ic in self.source_triangles:
-            src_tri = np.array([src_pts[ia], src_pts[ib], src_pts[ic]], dtype=np.float32).reshape(3, 2)
+        for t_idx, (ia, ib, ic) in enumerate(self.source_triangles):
+            src_tri = self.source_triangle_meta[t_idx].src_tri
             dst_tri = np.array([dst_pts[ia], dst_pts[ib], dst_pts[ic]], dtype=np.float32).reshape(3, 2)
-
             if _has_duplicate_vertices(src_tri) or _has_duplicate_vertices(dst_tri):
                 continue
             if triangle_area(src_tri) < 1e-3 or triangle_area(dst_tri) < 1e-3:
                 continue
-                
-            # Shift dst_tri to ROI coordinates
             dst_tri_roi = dst_tri - np.array([x_min, y_min], dtype=np.float32)
-
-            # CRITICAL: cv2.boundingRect needs int32 input for float arrays
-            dst_tri_roi_int = np.int32(dst_tri_roi)
-            r = cv2.boundingRect(dst_tri_roi_int)
-            bx, by, bw, bh = r
-            bx = max(bx, 0)
-            by = max(by, 0)
+            bx, by, bw, bh = cv2.boundingRect(np.int32(dst_tri_roi))
+            bx = max(0, bx)
+            by = max(0, by)
             bw = min(bw, w_roi - bx)
             bh = min(bh, h_roi - by)
             if bw <= 0 or bh <= 0:
                 continue
-
-            try:
-                # CRITICAL: mask must be uint8
-                mask = np.zeros((bh, bw), dtype=np.uint8)
-                dst_crop = (dst_tri_roi - np.array([bx, by], dtype=np.float32)).astype(np.float32).reshape(3, 2)
-                src_crop = src_tri.astype(np.float32).reshape(3, 2)
-                # CRITICAL: fillConvexPoly needs int32 points
-                cv2.fillConvexPoly(mask, np.int32(dst_crop), 255)
-
-                warp_mat = cv2.getAffineTransform(src_crop, dst_crop)
-                warped_patch = cv2.warpAffine(
-                    self.source_image, warp_mat, (bw, bh),
-                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101
-                )
-
-                # Ensure warped_patch is uint8
-                if warped_patch.dtype != np.uint8:
-                    warped_patch = np.clip(warped_patch, 0, 255).astype(np.uint8)
-
-                roi_patch = warped_roi[by: by + bh, bx: bx + bw]
-                blended = np.where(mask[..., None] == 255, warped_patch, roi_patch)
-                warped_roi[by: by + bh, bx: bx + bw] = blended
-                triangles_warped += 1
-            except Exception as exc:
-                logger.debug(f"[FACE_SWAP] Triangle ({ia},{ib},{ic}) warp failed: {exc}")
-                continue
-
-        logger.debug(f"[FACE_SWAP] Warped {triangles_warped}/{len(self.source_triangles)} triangles")
-
+            mask = np.zeros((bh, bw), dtype=np.uint8)
+            dst_crop = (dst_tri_roi - np.array([bx, by], dtype=np.float32)).astype(np.float32).reshape(3, 2)
+            cv2.fillConvexPoly(mask, np.int32(dst_crop), 255)
+            warp_mat = cv2.getAffineTransform(src_tri, dst_crop)
+            warped_patch = cv2.warpAffine(
+                self.source_image,
+                warp_mat,
+                (bw, bh),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT_101,
+            )
+            roi_patch = warped_roi[by:by + bh, bx:bx + bw]
+            warped_roi[by:by + bh, bx:bx + bw] = np.where(mask[..., None] == 255, warped_patch, roi_patch)
+            triangles_warped += 1
         if triangles_warped == 0:
-            logger.warning("[FACE_SWAP] No triangles warped successfully, returning original")
             return target_frame
 
-        # ROI seamless cloning
-        # Shift oval points to ROI coordinates for mask
         dst_oval_pts_roi = dst_oval_pts - np.array([x_min, y_min], dtype=np.int32)
-        
-        # CRITICAL: clone_mask must be uint8
         clone_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
-        
-        # CRITICAL: convexHull needs int32 points
         hull = cv2.convexHull(np.array(dst_oval_pts_roi, dtype=np.int32))
         cv2.fillConvexPoly(clone_mask, hull, 255)
-
-        erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, w_roi // 25), max(3, h_roi // 25)))
+        erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, w_roi // 35), max(3, h_roi // 35)))
         clone_mask = cv2.erode(clone_mask, erode_kernel, iterations=1)
-        clone_mask = cv2.GaussianBlur(clone_mask, (15, 15), 15 * 0.3)
+        clone_mask = cv2.GaussianBlur(clone_mask, (21, 21), 7.0)
 
-        # CRITICAL: Ensure clone_mask is still uint8 after blur
-        if clone_mask.dtype != np.uint8:
-            clone_mask = np.clip(clone_mask, 0, 255).astype(np.uint8)
+        attenuation = 0.75 + 0.25 * confidence
+        clone_mask = self._pose_aware_mask(clone_mask, pose.yaw, attenuation)
+        mask_float = clone_mask.astype(np.float32)
+        if session.prev_mask_alpha is not None and session.prev_mask_alpha.shape == mask_float.shape:
+            mask_float = 0.62 * mask_float + 0.38 * session.prev_mask_alpha
+        session.prev_mask_alpha = mask_float.copy()
+        clone_mask = np.clip(mask_float, 0, 255).astype(np.uint8)
 
-        # Compute center for seamlessClone — must be int tuple inside ROI
-        center_x = int(np.mean(dst_oval_pts_roi[:, 0]))
-        center_y = int(np.mean(dst_oval_pts_roi[:, 1]))
-        center_x = max(1, min(w_roi - 2, center_x))
-        center_y = max(1, min(h_roi - 2, center_y))
+        if not degraded_mode:
+            warped_roi = _lab_color_transfer(warped_roi, target_roi, clone_mask)
+        center_x = int(np.clip(np.mean(dst_oval_pts_roi[:, 0]), 1, w_roi - 2))
+        center_y = int(np.clip(np.mean(dst_oval_pts_roi[:, 1]), 1, h_roi - 2))
 
-        # SAFETY ASSERTIONS before seamlessClone
-        assert warped_roi.dtype == np.uint8, f"warped_roi dtype={warped_roi.dtype}"
-        assert target_roi.dtype == np.uint8, f"target_roi dtype={target_roi.dtype}"
-        assert clone_mask.dtype == np.uint8, f"clone_mask dtype={clone_mask.dtype}"
+        # Disable seamlessClone to make it obvious that it is a different face
+        do_clone = False # (not degraded_mode) and confidence > 0.45
+        if do_clone:
+            try:
+                blended_roi = cv2.seamlessClone(
+                    warped_roi,
+                    target_roi,
+                    clone_mask,
+                    (center_x, center_y),
+                    cv2.NORMAL_CLONE,
+                )
+            except cv2.error:
+                blended_roi = _alpha_blend(warped_roi, target_roi, clone_mask, alpha_gain=attenuation)
+        else:
+            blended_roi = _alpha_blend(warped_roi, target_roi, clone_mask, alpha_gain=attenuation)
 
-        try:
-            blended_roi = cv2.seamlessClone(
-                warped_roi,
-                target_roi,
-                clone_mask,
-                (center_x, center_y),
-                cv2.NORMAL_CLONE
-            )
-            logger.debug("[FACE_SWAP] seamlessClone succeeded")
-        except cv2.error as e:
-            logger.warning(f"[FACE_SWAP] seamlessClone failed: {e}, using alpha fallback")
-            # Fallback: manual alpha blending
-            mask_f = clone_mask.astype(np.float32) / 255.0
-            mask_3 = mask_f[..., np.newaxis]
-            blended_roi = (warped_roi.astype(np.float32) * mask_3 + target_roi.astype(np.float32) * (1.0 - mask_3))
-            blended_roi = np.clip(blended_roi, 0, 255).astype(np.uint8)
-
-        # ══════════════════════════════════════════════════════════════════
-        # MOUTH OCCLUSION PASS
-        # After seamlessClone blends skin tones, we restore the target's
-        # real inner-mouth pixels (teeth, tongue, shadow) on top.
-        #
-        # Pipeline:
-        #   1. Extract the EXACT inner-lip contour from target landmarks
-        #      (ordered loop → fillPoly, NOT convexHull which inflates)
-        #   2. Gentle Gaussian feather (5×5) for seamless edge transition
-        #   3. Alpha blend:  result = target×α + swapped×(1−α)
-        #      where α=1 inside mouth → real teeth/tongue shown
-        # ══════════════════════════════════════════════════════════════════
         try:
             n_lm = len(target_landmarks)
-            inner_lip_pts = np.array(
-                [target_landmarks[i] for i in INNER_LIP_INDICES if i < n_lm],
-                dtype=np.int32,
-            )
+            inner_lip_pts = np.array([target_landmarks[i] for i in INNER_LIP_INDICES if i < n_lm], dtype=np.int32)
             if len(inner_lip_pts) >= 10:
-                # Shift to ROI-local coordinates
                 inner_lip_roi = inner_lip_pts - np.array([x_min, y_min], dtype=np.int32)
-
-                # Build precise mouth mask using the ordered contour (no convexHull!)
                 mouth_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
                 cv2.fillPoly(mouth_mask, [inner_lip_roi], 255)
-
-                # Gentle Gaussian feather — small kernel keeps mask tight to
-                # the inner lip edge without bleeding onto lip tissue.
-                mouth_mask_f = mouth_mask.astype(np.float32) / 255.0
-                mouth_mask_f = cv2.GaussianBlur(mouth_mask_f, (5, 5), 1.5)
-
-                # Alpha blend: where mask ≈ 1 → use target_roi (real mouth)
-                alpha_3 = mouth_mask_f[..., np.newaxis]  # (H, W, 1)
+                mouth_mask_f = cv2.GaussianBlur(mouth_mask.astype(np.float32) / 255.0, (5, 5), 1.5)
+                mouth_strength = float(np.clip(0.6 + 0.4 * confidence, 0.35, 1.0))
+                alpha_3 = (mouth_mask_f * mouth_strength)[..., np.newaxis]
                 blended_roi = (
                     target_roi.astype(np.float32) * alpha_3
                     + blended_roi.astype(np.float32) * (1.0 - alpha_3)
                 )
                 blended_roi = np.clip(blended_roi, 0, 255).astype(np.uint8)
-                logger.debug("[FACE_SWAP] Mouth occlusion applied (%d inner-lip pts)", len(inner_lip_pts))
-        except Exception as exc:
-            logger.warning("[FACE_SWAP] Mouth occlusion pass failed (non-fatal): %s", exc)
+        except Exception:
+            pass
 
-        # Place the blended ROI back into the target frame
         result_frame = target_frame.copy()
         result_frame[y_min:y_max, x_min:x_max] = blended_roi
-
-        logger.info("[FACE_SWAP] frame_processed=True")
         return result_frame
 
-# Global engine instance
+
 face_swap_engine = FaceSwapEngine()
