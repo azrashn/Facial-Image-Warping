@@ -48,6 +48,10 @@ logger = logging.getLogger("main_live")
 
 # ── Filter name display map ──
 FILTER_DISPLAY_NAMES: dict[str, str] = {
+    "alien":      "Alien ",
+    "clown":      "Clown ",
+    "live_beard": "Beard ",
+    "blush_pink": "Blush ",
     "none":             "None",
     "smile":            "Smile",
     "eyebrow_raise":    "Eyebrow Raise",
@@ -190,6 +194,14 @@ def main() -> None:
                 break
 
             # Filter selection
+            elif key == ord("a"):
+                 filter_type = "alien"
+            elif key == ord("c"): 
+                 filter_type = "clown"
+            elif key == ord("v"): 
+                 filter_type = "live_beard"
+            elif key == ord("n"): 
+                 filter_type = "blush_pink"
             elif key == ord("1"):
                 filter_type = "smile"
             elif key == ord("2"):
