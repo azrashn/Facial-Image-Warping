@@ -58,8 +58,13 @@ def estimate_head_pose(landmarks: np.ndarray, width: int, height: int) -> PoseEs
     abs_yaw = abs(float(yaw))
     abs_pitch = abs(float(pitch))
     abs_roll = abs(float(roll))
-    extreme = max(abs_yaw / 65.0, abs_pitch / 55.0, abs_roll / 45.0)
-    confidence = float(np.clip(1.0 - extreme, 0.0, 1.0))
+    # Aggressive confidence falloff: full confidence up to ~20° yaw,
+    # linear drop to 0 by ~40° yaw.  This prevents face swap from
+    # operating on profile faces where frontal triangulation breaks down.
+    yaw_conf = 1.0 - float(np.clip((abs_yaw - 20.0) / 20.0, 0.0, 1.0))
+    pitch_conf = 1.0 - float(np.clip((abs_pitch - 25.0) / 20.0, 0.0, 1.0))
+    roll_conf = 1.0 - float(np.clip(abs_roll / 45.0, 0.0, 1.0))
+    confidence = float(np.clip(min(yaw_conf, pitch_conf, roll_conf), 0.0, 1.0))
     return PoseEstimate(float(yaw), float(pitch), float(roll), confidence)
 
 

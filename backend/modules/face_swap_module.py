@@ -25,6 +25,18 @@ INNER_LIP_INDICES = [
     78, 95, 88, 178, 87, 14, 317, 402, 318, 324,
     308, 415, 310, 311, 312, 13, 82, 81, 80, 191,
 ]
+# Outer lip boundary — used together with INNER_LIP_INDICES to create
+# a full mouth preservation mask that covers the entire oral cavity.
+# Without this, wide mouth openings produce a hard seam between the
+# swapped face and the original mouth interior.
+OUTER_LIP_INDICES = [
+    61, 146, 91, 181, 84, 17, 314, 405, 321, 375,
+    291, 409, 270, 269, 267, 0, 37, 39, 40, 185,
+    # Upper lip top edge
+    185, 40, 39, 37, 0, 267, 269, 270, 409, 291,
+    # Lower lip bottom edge
+    146, 91, 181, 84, 17, 314, 405, 321, 375, 61,
+]
 
 
 @dataclass
@@ -133,18 +145,47 @@ class FaceSwapEngine:
         logger.info("[FACE_SWAP] source loaded, %d triangles cached.", len(self.source_triangles))
 
     def _pose_aware_mask(self, mask: np.ndarray, yaw: float, attenuation: float) -> np.ndarray:
+        """Attenuate the blend mask based on head yaw for graceful degradation.
+
+        Two-layer attenuation:
+          1. Global yaw_factor: ramps from 1.0 (full swap) at <=20° to 0.0
+             (no swap) at >=40°.  Provides smooth fade-out so the swap
+             doesn't vanish abruptly.
+          2. Directional gradient: the occluded half of the face gets extra
+             attenuation via a column-wise linear ramp.  Cap raised from
+             0.55 to 0.85 so the hidden side is much more aggressively
+             faded — the old 0.55 cap left 45% opacity on geometry that
+             was severely distorted.
+        """
         h, w = mask.shape[:2]
         if w <= 2 or h <= 2:
             return mask
         m = mask.astype(np.float32)
-        if abs(yaw) > 10.0:
+
+        abs_yaw = abs(yaw)
+
+        # ── Layer 1: global yaw-dependent fade ──
+        # 0–20°: full strength (1.0)
+        # 20–40°: linear ramp down
+        # 40°+: completely off (0.0)
+        fade_start = 20.0
+        fade_end = 40.0
+        yaw_factor = 1.0 - float(np.clip(
+            (abs_yaw - fade_start) / (fade_end - fade_start), 0.0, 1.0
+        ))
+
+        # ── Layer 2: directional column gradient (occluded side) ──
+        if abs_yaw > 10.0:
             xs = np.linspace(0.0, 1.0, w, dtype=np.float32)[None, :]
             if yaw > 0:
-                atten = 1.0 - np.clip((1.0 - xs) * (abs(yaw) / 70.0), 0.0, 0.55)
+                # Face turned right → left columns (high 1-xs) are occluded
+                dir_atten = 1.0 - np.clip((1.0 - xs) * (abs_yaw / 50.0), 0.0, 0.85)
             else:
-                atten = 1.0 - np.clip(xs * (abs(yaw) / 70.0), 0.0, 0.55)
-            m *= atten
-        m *= attenuation
+                # Face turned left → right columns (high xs) are occluded
+                dir_atten = 1.0 - np.clip(xs * (abs_yaw / 50.0), 0.0, 0.85)
+            m *= dir_atten
+
+        m *= attenuation * yaw_factor
         return np.clip(m, 0, 255).astype(np.uint8)
 
     def apply_face_swap(
@@ -169,7 +210,19 @@ class FaceSwapEngine:
         stability = landmark_stability_confidence(target_landmarks, session.prev_landmarks, frame_diag)
         session.stability_score = 0.5 * session.stability_score + 0.5 * stability
         confidence = float(np.clip(0.65 * pose.confidence + 0.35 * session.stability_score, 0.0, 1.0))
-        if confidence < 0.2:
+
+        # ── Dynamic pose gating ──
+        # Hard yaw gate: beyond 40° the frontal Delaunay triangulation
+        # produces degenerate geometry — don't even attempt the swap.
+        abs_yaw = abs(pose.yaw)
+        if abs_yaw > 40.0:
+            session.prev_landmarks = target_landmarks.copy()
+            session.prev_pose = pose
+            return target_frame
+        # Raised from 0.2 → 0.35: the old threshold let yaw≈35° through
+        # (old confidence ~0.46) causing stretched triangles.  With the
+        # new pose_module confidence curve, 0.35 corresponds to ~33° yaw.
+        if confidence < 0.35:
             session.prev_landmarks = target_landmarks.copy()
             return target_frame
         if session.prev_pose is not None:
@@ -237,6 +290,15 @@ class FaceSwapEngine:
         if triangles_warped == 0:
             return target_frame
 
+        # ── Black-gap fallback ──
+        # Skipped/degenerate triangles leave zero-valued (black) pixels in
+        # warped_roi.  Without this fallback these black holes bleed through
+        # alpha blending at 75%+ opacity, producing the black band artifacts
+        # visible in rotated-face screenshots.  Filling with target_roi
+        # pixels makes gaps invisible.
+        black_mask = (warped_roi.sum(axis=2) == 0)
+        warped_roi[black_mask] = target_roi[black_mask]
+
         dst_oval_pts_roi = dst_oval_pts - np.array([x_min, y_min], dtype=np.int32)
         clone_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
         hull = cv2.convexHull(np.array(dst_oval_pts_roi, dtype=np.int32))
@@ -276,12 +338,33 @@ class FaceSwapEngine:
 
         try:
             n_lm = len(target_landmarks)
-            inner_lip_pts = np.array([target_landmarks[i] for i in INNER_LIP_INDICES if i < n_lm], dtype=np.int32)
-            if len(inner_lip_pts) >= 10:
-                inner_lip_roi = inner_lip_pts - np.array([x_min, y_min], dtype=np.int32)
+            # Combine inner + outer lip indices for full mouth coverage.
+            # The inner ring alone leaves the lip-skin boundary exposed,
+            # causing a hard seam when the mouth opens wide.
+            all_mouth_indices = list(set(INNER_LIP_INDICES + OUTER_LIP_INDICES))
+            mouth_pts = np.array(
+                [target_landmarks[i] for i in all_mouth_indices if i < n_lm],
+                dtype=np.int32,
+            )
+            if len(mouth_pts) >= 10:
+                mouth_pts_roi = mouth_pts - np.array([x_min, y_min], dtype=np.int32)
                 mouth_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
-                cv2.fillPoly(mouth_mask, [inner_lip_roi], 255)
-                mouth_mask_f = cv2.GaussianBlur(mouth_mask.astype(np.float32) / 255.0, (5, 5), 1.5)
+                # Use convexHull so that the entire oral cavity is covered
+                # even when individual landmark polygons leave gaps.
+                hull = cv2.convexHull(mouth_pts_roi)
+                cv2.fillConvexPoly(mouth_mask, hull, 255)
+                # Dilate slightly to extend coverage into the lip-skin
+                # transition zone (~3% of ROI width).
+                dilate_sz = max(3, w_roi // 35)
+                dilate_k = cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (dilate_sz, dilate_sz)
+                )
+                mouth_mask = cv2.dilate(mouth_mask, dilate_k, iterations=1)
+                # Soft feathering: (5,5)/1.5 was only ~3px — clearly visible
+                # at 640x480.  (15,15)/4.0 gives ~12px feather.
+                mouth_mask_f = cv2.GaussianBlur(
+                    mouth_mask.astype(np.float32) / 255.0, (15, 15), 4.0
+                )
                 mouth_strength = float(np.clip(0.6 + 0.4 * confidence, 0.35, 1.0))
                 alpha_3 = (mouth_mask_f * mouth_strength)[..., np.newaxis]
                 blended_roi = (

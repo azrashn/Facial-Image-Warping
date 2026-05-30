@@ -24,8 +24,11 @@ class TemporalSmoother:
       - Stale-state reset: re-initializes after prolonged face loss
     """
 
-    # If mean landmark motion exceeds this fraction of face scale, reject frame
-    JUMP_THRESHOLD_RATIO: float = 0.35
+    # If mean landmark motion exceeds this fraction of face scale, reject frame.
+    # Raised from 0.35 to 0.50: the old value rejected legitimate fast mouth
+    # movements (speech, yawn) as glitches, causing stale landmarks that produce
+    # lip tearing in face swap when actual mouth pose diverges from smoothed pose.
+    JUMP_THRESHOLD_RATIO: float = 0.50
     # If no face detected for this many seconds, reset state
     STALE_TIMEOUT: float = 1.0
     # Adaptive alpha range during fast motion
