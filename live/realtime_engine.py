@@ -20,6 +20,13 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from live.mask_stabilizer import (
+    apply_live_alien,
+    apply_live_clown,
+    apply_live_beard,
+    apply_live_blush,
+)
+
 from backend.modules.warping_module import (
     PersistentFaceMesh,
     detect_face_landmarks_live,
@@ -44,6 +51,11 @@ logger = logging.getLogger(__name__)
 # arg_type: "intensity" for int-based filters, "emoji" for emoji preset name,
 #           "face_swap" for the realtime face swap (handled specially)
 _FILTER_DISPATCH: dict[str, tuple] = {
+
+    "alien":       (apply_live_alien,  "landmark"),
+    "clown":       (apply_live_clown,  "landmark"),
+    "live_beard":  (apply_live_beard,  "landmark_intensity"),
+    "blush_pink":  (apply_live_blush,  "landmark"),
     "smile":          (apply_smile,         "intensity"),
     "eyebrow_raise":  (apply_eyebrow_raise, "intensity"),
     "lip_widen":      (apply_lip_widen,     "intensity"),
@@ -194,6 +206,10 @@ class RealtimeEngine:
 
             if arg_type == "intensity":
                 result = func(frame, intensity, landmarks=smoothed_landmarks)
+            elif arg_type == "landmark":
+                result = func(frame, smoothed_landmarks)
+            elif arg_type == "landmark_intensity":
+                 result = func(frame, smoothed_landmarks, intensity)
             elif arg_type == "emoji":
                 # Extract emoji name from filter_type (e.g. "emoji_happy" → "happy")
                 emoji_name = filter_type.split("_", 1)[1] if "_" in filter_type else filter_type
