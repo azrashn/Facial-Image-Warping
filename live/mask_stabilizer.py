@@ -1,4 +1,4 @@
-"""
+f"""
 mask_stabilizer.py — Live kamera maske overlay stabilizasyonu.
 
 Rol 4 — Görev Dağılımı v2:
@@ -188,6 +188,8 @@ def detect_skin_tone(
 # ---------------------------------------------------------------------------
 # Global stabilizer instance'ları (her filtre için ayrı)
 _alien_stabilizer = MaskStabilizer(alpha=0.35)
+_alien_eye_smoother_left  = _EMAPoint(alpha=0.15)   # gözler için daha yüksek smoothing
+_alien_eye_smoother_right = _EMAPoint(alpha=0.15)
 _clown_stabilizer = MaskStabilizer(alpha=0.35)
 _beard_stabilizer = MaskStabilizer(alpha=0.30)
 _blush_stabilizer = MaskStabilizer(alpha=0.30)
@@ -251,8 +253,8 @@ def apply_live_alien(
         left_eye_pts  = [33, 133, 160, 159, 158, 157, 163, 144, 145, 153, 154, 155]
         right_eye_pts = [362, 263, 387, 386, 385, 384, 390, 373, 374, 380, 381, 382]
 
-        c_left  = stable_lm[left_eye_pts].mean(axis=0)
-        c_right = stable_lm[right_eye_pts].mean(axis=0)
+        c_left  = _alien_eye_smoother_left.update(stable_lm[left_eye_pts].mean(axis=0))
+        c_right = _alien_eye_smoother_right.update(stable_lm[right_eye_pts].mean(axis=0))
 
         eye_rx = int(face_sz * 0.28)
         eye_ry = int(face_sz * 0.22)
