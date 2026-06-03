@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'glasses', 'hair_color', 'aging', 'deaging', 'cartoon', 'fft',
         'eyebrow_raise', 'lip_widen', 'face_slim', 'eye_scaling',
         'face_swap',
+        'clothing',
     ];
 
     /**
@@ -72,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
         bar.innerHTML = keys.map(k => `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;background:rgba(102,126,234,0.25);border:1px solid rgba(102,126,234,0.5);font-size:0.75rem;color:#c5ceff;cursor:default;">${k}<button onclick="window._removeLiveState('${k}')" style="background:none;border:none;color:#ff6b6b;cursor:pointer;font-size:0.85rem;padding:0 2px;line-height:1;">✕</button></span>`).join('');
     }
     // Global hook for chip removal
-    window._removeLiveState = function(feature) {
+    window._removeLiveState = function (feature) {
         sendLiveStateUpdate(feature, null);
     };
 
@@ -198,7 +199,14 @@ document.addEventListener('DOMContentLoaded', () => {
             blendStrength: "Harmanlama Gücü",
             stability: "Kararlılık",
             maskSoftness: "Maske Yumuşaklığı",
-            captureScreenshot: "Ekran Görüntüsü Al"
+            captureScreenshot: "Ekran Görüntüsü Al",
+            clothingTryOn: "Kıyafet Giydirme",
+            clothingSectionTitle: "Kıyafet",
+            clothingType: "Kıyafet Türü",
+            clothingTshirt: "T-Shirt",
+            clothingShirt: "Gömlek",
+            clothingTanktop: "Tank Top",
+            applyClothing: "Kıyafet Uygula"
         },
         EN: {
             dropImage: "Drop image here",
@@ -316,7 +324,14 @@ document.addEventListener('DOMContentLoaded', () => {
             blendStrength: "Blend Strength",
             stability: "Stability",
             maskSoftness: "Mask Softness",
-            captureScreenshot: "Capture Screenshot"
+            captureScreenshot: "Capture Screenshot",
+            clothingTryOn: "Clothing Try-On",
+            clothingSectionTitle: "Clothing",
+            clothingType: "Clothing Type",
+            clothingTshirt: "T-Shirt",
+            clothingShirt: "Shirt",
+            clothingTanktop: "Tank Top",
+            applyClothing: "Apply Clothes"
         }
     };
 
@@ -371,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const procSpectrumImg = document.getElementById('procSpectrumImg');
     const origPhaseImg = document.getElementById('origPhaseImg');
     const procPhaseImg = document.getElementById('procPhaseImg');
-    
+
     // FFT Lab Elements
     const fftLabOrigSpectrumImg = document.getElementById('fftLabOrigSpectrumImg');
     const fftLabOrigSpectrumPlaceholder = document.getElementById('fftLabOrigSpectrumPlaceholder');
@@ -586,8 +601,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (isLiveMode && selectedOperation !== 'face_swap') {
-                const intensity = Number(intensitySlider?.value || 50);
-                sendLiveStateUpdate(selectedOperation, { intensity: intensity });
+                if (selectedOperation === 'clothing') {
+                    const clothingType = document.getElementById('clothingSelect')?.value || 'tshirt';
+                    sendLiveStateUpdate('clothing', { clothing_type: clothingType });
+                } else {
+                    const intensity = Number(intensitySlider?.value || 50);
+                    sendLiveStateUpdate(selectedOperation, { intensity: intensity });
+                }
             }
         });
     });
@@ -1690,6 +1710,68 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Clothing / Kıyafet Event
+    const applyClothingBtn = document.getElementById('applyClothingBtn');
+    const clothingSelect = document.getElementById('clothingSelect');
+
+    if (applyClothingBtn) {
+        applyClothingBtn.addEventListener('click', async (e) => {
+            if (e) e.preventDefault();
+            // ── LIVE MODE: route to WebSocket ──
+            if (isLiveMode) {
+                sendLiveStateUpdate('clothing', { clothing_type: clothingSelect.value });
+                selectedOperation = 'clothing';
+                return;
+            }
+
+            if (!uploadedFile || !currentOriginalImage) return;
+
+            const formData = new FormData();
+            formData.append('image', uploadedFile);
+            formData.append('clothing_type', clothingSelect.value);
+
+            loadingOverlay.style.display = 'flex';
+            try {
+                const response = await fetch(`${API_BASE}/process/clothing`, { method: 'POST', body: formData });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload?.detail || 'Clothing processing failed.');
+
+                try {
+                    currentProcessedImage = payload.image_b64;
+                    afterImg.src = currentProcessedImage;
+                    landmarksOnlyImg.src = currentProcessedImage;
+
+                    updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
+                    setSpectrumImages(
+                        payload.orig_spectrum_b64 || null,
+                        payload.proc_spectrum_b64 || null,
+                        payload.orig_phase_b64 || null,
+                        payload.proc_phase_b64 || null
+                    );
+                } catch (renderError) {
+                    console.error('[Clothing Render] Error rendering clothing overlay:', renderError);
+                }
+
+                const clothingLabelMap = {
+                    tshirt: i18n[currentLang]?.clothingTshirt || 'T-Shirt',
+                    shirt: i18n[currentLang]?.clothingShirt || 'Shirt',
+                    tanktop: i18n[currentLang]?.clothingTanktop || 'Tank Top',
+                };
+                const clothingLabel = clothingLabelMap[clothingSelect.value] || clothingSelect.value;
+                addHistory(`Clothing: ${clothingLabel}`);
+                const appliedPrefix = currentLang === 'tr' ? 'Uygulanan Kıyafet:' : 'Applied Clothing:';
+                analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>${appliedPrefix} ${clothingLabel}.`;
+
+                if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
+            } catch (e) {
+                console.error('[Clothing] Error:', e);
+                analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${e.message || 'Clothing processing failed.'}`;
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        });
+    }
+
     // PNG Download Event
     if (downloadPngBtn) {
         downloadPngBtn.addEventListener('click', () => {
@@ -1878,12 +1960,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function hexToRgb(hex) {
         let h = hex.replace('#', '');
         if (h.length === 3) h = [...h].map(x => x + x).join('');
-        return `${parseInt(h.substring(0,2), 16)},${parseInt(h.substring(2,4), 16)},${parseInt(h.substring(4,6), 16)}`;
+        return `${parseInt(h.substring(0, 2), 16)},${parseInt(h.substring(2, 4), 16)},${parseInt(h.substring(4, 6), 16)}`;
     }
 
     const applyHairColorBtn = document.getElementById('applyHairColorBtn');
-    const hairColorPicker  = document.getElementById('hairColorPicker');
-    const hairOpacity      = document.getElementById('hairOpacity');
+    const hairColorPicker = document.getElementById('hairColorPicker');
+    const hairOpacity = document.getElementById('hairOpacity');
 
     if (applyHairColorBtn) {
         applyHairColorBtn.addEventListener('click', async () => {
@@ -1904,7 +1986,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            const rgbColor      = hexToRgb(hairColorPicker.value);
+            const rgbColor = hexToRgb(hairColorPicker.value);
             const intensityFloat = parseInt(hairOpacity.value) / 100.0;
 
             // Debug — verify values before request
@@ -1913,9 +1995,9 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('[Hair Color] endpoint:', `${API_BASE}/process/hair-color`);
 
             const formData = new FormData();
-            formData.append('image',        uploadedFile);
+            formData.append('image', uploadedFile);
             formData.append('target_color', rgbColor);
-            formData.append('intensity',    intensityFloat.toString());
+            formData.append('intensity', intensityFloat.toString());
 
             loadingOverlay.style.display = 'flex';
 
@@ -2294,17 +2376,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // =========================================================================
     (function initCamera() {
         const startCameraBtn = document.getElementById('startCameraBtn');
-        const captureBtn     = document.getElementById('captureBtn');
-        const liveBtn        = document.getElementById('liveBtn');
-        const stopCameraBtn  = document.getElementById('stopCameraBtn');
-        const cameraVideo    = document.getElementById('cameraVideo');
-        const cameraCanvas   = document.getElementById('cameraCanvas');
+        const captureBtn = document.getElementById('captureBtn');
+        const liveBtn = document.getElementById('liveBtn');
+        const stopCameraBtn = document.getElementById('stopCameraBtn');
+        const cameraVideo = document.getElementById('cameraVideo');
+        const cameraCanvas = document.getElementById('cameraCanvas');
         const cameraPlaceholder = document.getElementById('cameraPlaceholder');
-        const cameraColumn   = document.getElementById('cameraColumn');
+        const cameraColumn = document.getElementById('cameraColumn');
         const liveProcessedImg = document.getElementById('liveProcessedImg');
-        const liveFpsBadge   = document.getElementById('liveFpsBadge');
-        const liveIndicator  = document.getElementById('liveIndicator');
-        const uploadCol      = document.querySelector('#previewPlaceholder > .split-col:first-child');
+        const liveFpsBadge = document.getElementById('liveFpsBadge');
+        const liveIndicator = document.getElementById('liveIndicator');
+        const uploadCol = document.querySelector('#previewPlaceholder > .split-col:first-child');
 
         if (!startCameraBtn) return;
 
@@ -2609,6 +2691,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 'cartoon': 'cartoon',
                 // Beard
                 'beard': 'beard',
+                // Clothing
+                'clothing': 'clothing',
             };
             return map[preset] || preset;
         }
@@ -2669,6 +2753,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 config.intensity = config.beard_darkness;
             }
 
+            // Clothing type
+            if (filterName === 'clothing') {
+                config.clothing_type = document.getElementById('clothingSelect')?.value || 'tshirt';
+            }
+
             // Eye scale uses raw slider value (-100 to 100)
             if (filterName === 'eye_scaling') {
                 const eyeSlider = document.getElementById('eyeSizeSlider');
@@ -2684,7 +2773,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (liveFpsTimer) { clearInterval(liveFpsTimer); liveFpsTimer = null; }
             // Close WebSocket
             if (_liveWs) {
-                try { _liveWs.close(); } catch (_) {}
+                try { _liveWs.close(); } catch (_) { }
                 _liveWs = null;
                 _wsReady = false;
             }
@@ -2845,6 +2934,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 selectedOperation = `makeup_${region}`;
             },
             'applyGlassesBtn': () => { selectedOperation = 'glasses'; },
+            'applyClothingBtn': () => { selectedOperation = 'clothing'; },
             'applyHairColorBtn': () => { selectedOperation = 'hair_color'; },
             'cartoonBtn': () => { selectedOperation = 'cartoon'; },
             'beardBtn': () => { selectedOperation = 'beard'; },
@@ -2911,6 +3001,17 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // Wire clothing dropdown to push config immediately in live mode
+        const clothingSelect = document.getElementById('clothingSelect');
+        if (clothingSelect) {
+            clothingSelect.addEventListener('change', () => {
+                if (isLiveMode && selectedOperation === 'clothing') {
+                    sendLiveStateUpdate('clothing', { clothing_type: clothingSelect.value });
+                    console.log('[Live] Clothing type changed to:', clothingSelect.value);
+                }
+            });
+        }
+
         window.addEventListener('beforeunload', () => {
             stopLiveMode();
             if (cameraStream) {
@@ -2939,7 +3040,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const fsLoadedStatus = document.getElementById('faceSwapLoadedStatus');
 
         const fsEnableToggle = document.getElementById('enableFaceSwapToggle');
-        
+
         const fsBlendSlider = document.getElementById('fsBlendSlider');
         const fsStabilitySlider = document.getElementById('fsStabilitySlider');
         const fsSoftnessSlider = document.getElementById('fsSoftnessSlider');
@@ -3012,10 +3113,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         async function handleSourceUpload(file) {
             if (!file.type.startsWith('image/')) return;
-            
+
             fsSourceFile = file;
             sourceFaceLoaded = false;
-            
+
             // Show preview
             const reader = new FileReader();
             reader.onload = (ev) => {
@@ -3035,7 +3136,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.error('[Face Swap] Source upload error:', err);
                 fsLoadedStatus.textContent = `Error`;
                 fsLoadedStatus.style.color = "var(--error-color)";
-                
+
                 // Handle backend unavailable by showing warning but keep preview
                 if (err.message.includes('fetch') || err.message.includes('Network')) {
                     fsLoadedStatus.textContent = "Backend offline";
@@ -3055,7 +3156,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Remove face_swap from live active states
                 sendLiveStateUpdate('face_swap', null);
                 // If live face swap was active, we should also stop it.
-                fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' }).catch(() => {});
+                fetch(`${API_BASE}/face-swap/stop`, { method: 'POST' }).catch(() => { });
             });
         }
 
@@ -3092,10 +3193,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             throw new Error('Failed to start face swap');
                         }
                         console.log('[Face Swap] Live mode started');
-                        
+
                         // Set selected operation to face_swap to trigger existing live loops if needed
                         selectedOperation = 'face_swap';
-                        
+
                         // CRITICAL: Send face_swap as active state to WebSocket
                         // so the backend frame processing loop actually applies face swap
                         sendLiveStateUpdate('face_swap', {
@@ -3122,7 +3223,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         }
-        
+
         // Static Face Swap override for the Apply Button
         const mainApplyBtn = document.getElementById('applyBtn');
         if (mainApplyBtn) {
@@ -3130,7 +3231,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (selectedOperation === 'face_swap') {
                     e.preventDefault();
                     e.stopImmediatePropagation(); // prevent the default apply action
-                    
+
                     if (!uploadedFile) {
                         alert("Please upload a target image in the main view.");
                         return;
@@ -3167,14 +3268,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Display result
                         const afterImg = document.getElementById('afterImg');
                         if (afterImg) afterImg.src = payload.swapped_image;
-                        
+
                         const visualPreviewArea = document.getElementById('visualPreviewArea');
                         const imageWrapper = document.getElementById('imageWrapper');
                         if (visualPreviewArea) visualPreviewArea.style.display = 'flex';
                         if (imageWrapper) imageWrapper.style.display = 'block';
 
                         document.getElementById('analysisSummary').innerHTML = `<strong>Status: Success</strong><br/>Face Swap completed in ${payload.processing_time_ms} ms.`;
-                        
+
                     } catch (err) {
                         console.error('[Face Swap] Static apply error:', err);
                         document.getElementById('analysisSummary').innerHTML = `<strong>Status: Failed</strong><br/>${err.message || 'Face swap processing failed.'}`;
