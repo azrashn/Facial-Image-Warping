@@ -342,16 +342,28 @@ def _build_age_fn(op: str, intensity: float):
     """Return a callable(image) → image for aging/deaging."""
     def _fn(image):
         if op in ("aging", "age"):
-            aged = apply_aging(image, intensity)
+            landmarks_pixel = None
+            landmarks = None
             try:
                 rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 landmarks = get_landmarks(rgb)
-                face_mask = create_face_region_mask(image, landmarks)
-                return _safe_aging_blend(image, aged, face_mask,
-                                         strength=min(1.0, intensity / 100.0))
+                if landmarks:
+                    h, w = image.shape[:2]
+                    landmarks_pixel = np.array([[float(pt["x"]) * w, float(pt["y"]) * h] for pt in landmarks], dtype=np.float32)
             except Exception:
-                return _safe_aging_blend(image, aged,
-                                         strength=min(1.0, intensity / 100.0))
+                pass
+            
+            aged = apply_aging(image, intensity, landmarks=landmarks_pixel)
+            
+            try:
+                if landmarks:
+                    face_mask = create_face_region_mask(image, landmarks)
+                    return _safe_aging_blend(image, aged, face_mask,
+                                             strength=min(1.0, intensity / 100.0))
+            except Exception:
+                pass
+            return _safe_aging_blend(image, aged, strength=min(1.0, intensity / 100.0))
+            
         elif op in ("deaging", "deage"):
             deaged = apply_deaging(image, intensity)
             try:

@@ -187,11 +187,692 @@ def _build_face_hair_mask(image: np.ndarray, landmarks: np.ndarray = None) -> np
     cv2.fillConvexPoly(mask, right_side, 1.0)
 
     # ── Smooth edges for seamless blending ────────────────────────────
-    ksize = max(3, int(min(h, w) * 0.06) | 1)  # ensure odd
+    return mask
+
+
+def _build_face_oval_mask(image: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
+    h, w = image.shape[:2]
+    if landmarks is None:
+        return np.ones((h, w), dtype=np.float32)
+
+    mask = np.zeros((h, w), dtype=np.float32)
+    face_oval_indices = [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+        361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+        176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+        162, 21, 54, 103, 67, 109
+    ]
+    n_lm = landmarks.shape[0]
+    face_pts = landmarks[[i for i in face_oval_indices if i < n_lm]]
+    hull = cv2.convexHull(face_pts.astype(np.int32))
+    cv2.fillConvexPoly(mask, hull, 1.0)
+
+    ksize = max(9, int(min(h, w) * 0.04) | 1)
     mask = cv2.GaussianBlur(mask, (ksize, ksize), ksize * 0.4)
     mask = np.clip(mask, 0.0, 1.0)
-
     return mask
+
+
+def _build_feathered_face_mask(image: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
+    h, w = image.shape[:2]
+    if landmarks is None:
+        return np.ones((h, w), dtype=np.float32)
+
+    mask = np.zeros((h, w), dtype=np.float32)
+    face_oval_indices = [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+        361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+        176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+        162, 21, 54, 103, 67, 109
+    ]
+    n_lm = landmarks.shape[0]
+    face_pts = landmarks[[i for i in face_oval_indices if i < n_lm]]
+    hull = cv2.convexHull(face_pts.astype(np.int32))
+    cv2.fillConvexPoly(mask, hull, 1.0)
+
+    # ── Extend the mask upward slightly to ensure the forehead gets full coloring ──
+    # Since Gaussian blur fades out the mask at the top of the face oval (landmark 10),
+    # shifting the top forehead landmarks upward by 18% of the face scale keeps the forehead
+    # values high (near 1.0) after blurring.
+    face_sz = _face_scale(landmarks)
+    up_shift = np.array([0, -0.18 * face_sz], dtype=np.float32)
+    extended_pts = []
+    for idx in [109, 67, 103, 10, 332, 297, 338]:
+        if idx < n_lm:
+            extended_pts.append(landmarks[idx] + up_shift)
+    for idx in [338, 297, 332, 10, 103, 67, 109]:
+        if idx < n_lm:
+            extended_pts.append(landmarks[idx])
+            
+    if len(extended_pts) > 0:
+        extended_pts = np.array(extended_pts, dtype=np.int32)
+        cv2.fillPoly(mask, [extended_pts], 1.0)
+
+    ksize = max(45, int(min(h, w) * 0.20) | 1)
+    mask = cv2.GaussianBlur(mask, (ksize, ksize), ksize * 0.45)
+    
+    # Normalize the mask to ensure the center of the face gets the full color change intensity
+    max_val = np.max(mask)
+    if max_val > 0.001:
+        mask = mask / max_val
+        
+    mask = np.clip(mask, 0.0, 1.0)
+    return mask
+
+
+def _build_pure_skin_mask(image: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
+    h, w = image.shape[:2]
+    if landmarks is None:
+        return np.ones((h, w), dtype=np.float32)
+
+    mask = np.zeros((h, w), dtype=np.float32)
+    face_oval_indices = [
+        10, 338, 297, 332, 284, 251, 389, 356, 454, 323,
+        361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
+        176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+        162, 21, 54, 103, 67, 109
+    ]
+    n_lm = landmarks.shape[0]
+    face_pts = landmarks[[i for i in face_oval_indices if i < n_lm]]
+    hull = cv2.convexHull(face_pts.astype(np.int32))
+    cv2.fillConvexPoly(mask, hull, 1.0)
+
+    exclude_polys = []
+    
+    # Left eye
+    left_eye = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+    exclude_polys.append(landmarks[[i for i in left_eye if i < n_lm]].astype(np.int32))
+    
+    # Right eye
+    right_eye = [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466]
+    exclude_polys.append(landmarks[[i for i in right_eye if i < n_lm]].astype(np.int32))
+    
+    # Lips
+    lips = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 95]
+    exclude_polys.append(landmarks[[i for i in lips if i < n_lm]].astype(np.int32))
+    
+    # Left Eyebrow
+    left_brow = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
+    exclude_polys.append(landmarks[[i for i in left_brow if i < n_lm]].astype(np.int32))
+    
+    # Right Eyebrow
+    right_brow = [336, 296, 334, 293, 300, 285, 295, 282, 283, 276]
+    exclude_polys.append(landmarks[[i for i in right_brow if i < n_lm]].astype(np.int32))
+
+    for poly in exclude_polys:
+        cv2.fillPoly(mask, [poly], 0.0)
+
+    ksize = max(3, int(min(h, w) * 0.02) | 1)
+    mask = cv2.GaussianBlur(mask, (ksize, ksize), ksize * 0.4)
+    mask = np.clip(mask, 0.0, 1.0)
+    return mask
+
+
+def _build_crepiness_mask(image: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
+    h, w = image.shape[:2]
+    if landmarks is None:
+        return np.ones((h, w), dtype=np.float32)
+
+    mask = np.zeros((h, w), dtype=np.float32)
+    n_lm = landmarks.shape[0]
+    
+    left_cheeks = [33, 133, 117, 50, 187, 216, 92, 111, 118]
+    right_cheeks = [263, 362, 346, 280, 411, 436, 322, 340, 347]
+    
+    left_poly = landmarks[[i for i in left_cheeks if i < n_lm]].astype(np.int32)
+    right_poly = landmarks[[i for i in right_cheeks if i < n_lm]].astype(np.int32)
+    
+    cv2.fillPoly(mask, [left_poly, right_poly], 1.0)
+    
+    ksize = max(15, int(min(h, w) * 0.12) | 1)
+    mask = cv2.GaussianBlur(mask, (ksize, ksize), ksize * 0.4)
+    mask = np.clip(mask, 0.0, 1.0)
+    return mask
+
+
+def _face_scale(lm: np.ndarray) -> float:
+    if lm is None or len(lm) < 363:
+        return 100.0
+    return float(np.linalg.norm(lm[133] - lm[362]))
+
+
+def _warp_landmarks_for_sagging(landmarks: np.ndarray, shape: tuple[int, int], intensity: float) -> np.ndarray:
+    if landmarks is None or intensity < 0.01:
+        return landmarks
+
+    h, w = shape[:2]
+    face_sz = _face_scale(landmarks)
+
+    control_points_config = [
+        (117, 0.0, 0.045, 0.22),    # Left Cheek
+        (346, 0.0, 0.045, 0.22),    # Right Cheek
+        (132, -0.015, 0.055, 0.25),  # Jaw Left
+        (361, 0.015, 0.055, 0.25),   # Jaw Right
+        (152, 0.0, 0.065, 0.25),     # Chin
+        (159, 0.0, 0.02, 0.1),      # Left Upper Eyelid
+        (386, 0.0, 0.02, 0.1),      # Right Upper Eyelid
+
+        # anchor points:
+        (1, 0.0, 0.0, 0.15),        # Nose Tip
+        (133, 0.0, 0.0, 0.12),      # Left Eye Inner Corner
+        (362, 0.0, 0.0, 0.12),      # Right Eye Inner Corner
+        (10, 0.0, 0.0, 0.25),       # Forehead Top
+    ]
+
+    warped_landmarks = landmarks.copy()
+    for i in range(len(landmarks)):
+        lx, ly = landmarks[i]
+        l_weight_sum = 0.0
+        l_disp_x = 0.0
+        l_disp_y = 0.0
+        for idx, dx_f, dy_f, sig_f in control_points_config:
+            if idx >= len(landmarks):
+                continue
+            cx, cy = landmarks[idx]
+            dx = dx_f * face_sz * intensity
+            dy = dy_f * face_sz * intensity
+            sigma = sig_f * face_sz
+            r2 = (lx - cx)**2 + (ly - cy)**2
+            w_i = np.exp(-0.5 * r2 / (sigma**2))
+            l_disp_x += w_i * dx
+            l_disp_y += w_i * dy
+            l_weight_sum += w_i
+        denom = l_weight_sum + 0.15
+        warped_landmarks[i, 0] += l_disp_x / denom
+        warped_landmarks[i, 1] += l_disp_y / denom
+
+    return warped_landmarks
+
+
+def _apply_sagging_warp(image: np.ndarray, landmarks: np.ndarray, intensity: float) -> np.ndarray:
+    if landmarks is None or intensity < 0.01:
+        return image
+
+    h, w = image.shape[:2]
+    face_sz = _face_scale(landmarks)
+
+    control_points_config = [
+        (117, 0.0, 0.045, 0.22),    # Left Cheek
+        (346, 0.0, 0.045, 0.22),    # Right Cheek
+        (132, -0.015, 0.055, 0.25),  # Jaw Left
+        (361, 0.015, 0.055, 0.25),   # Jaw Right
+        (152, 0.0, 0.065, 0.25),     # Chin
+        (159, 0.0, 0.02, 0.1),      # Left Upper Eyelid
+        (386, 0.0, 0.02, 0.1),      # Right Upper Eyelid
+
+        # anchor points:
+        (1, 0.0, 0.0, 0.15),        # Nose Tip
+        (133, 0.0, 0.0, 0.12),      # Left Eye Inner Corner
+        (362, 0.0, 0.0, 0.12),      # Right Eye Inner Corner
+        (10, 0.0, 0.0, 0.25),       # Forehead Top
+    ]
+
+    y_grid, x_grid = np.mgrid[:h, :w].astype(np.float32)
+
+    disp_x = np.zeros((h, w), dtype=np.float32)
+    disp_y = np.zeros((h, w), dtype=np.float32)
+    weight_sum = np.zeros((h, w), dtype=np.float32)
+
+    for idx, dx_f, dy_f, sig_f in control_points_config:
+        if idx >= len(landmarks):
+            continue
+        cx, cy = landmarks[idx]
+        dx = dx_f * face_sz * intensity
+        dy = dy_f * face_sz * intensity
+        sigma = sig_f * face_sz
+
+        r2 = (x_grid - cx)**2 + (y_grid - cy)**2
+        w_i = np.exp(-0.5 * r2 / (sigma**2))
+
+        disp_x += w_i * dx
+        disp_y += w_i * dy
+        weight_sum += w_i
+
+    denom = weight_sum + 0.15
+    final_disp_x = disp_x / denom
+    final_disp_y = disp_y / denom
+
+    map_x = x_grid - final_disp_x
+    map_y = y_grid - final_disp_y
+
+    warped = cv2.remap(image, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+    return warped
+
+
+def _apply_structural_wrinkles(image: np.ndarray, landmarks: np.ndarray, face_mask: np.ndarray, intensity: float) -> np.ndarray:
+    if landmarks is None or intensity < 0.01:
+        return image
+
+    h, w = image.shape[:2]
+    face_sz = _face_scale(landmarks)
+
+    # Use 4x supersampling to prevent pixelation/aliasing in the wrinkle lines
+    ss_scale = 4.0
+    ssh, ssw = int(h * ss_scale), int(w * ss_scale)
+
+    W_valley = np.zeros((ssh, ssw), dtype=np.float32)
+    W_hill = np.zeros((ssh, ssw), dtype=np.float32)
+    y_grid, x_grid = np.mgrid[:h, :w].astype(np.float32)
+
+    # Helper function to generate wavy interpolated curve
+    def generate_wavy_curve(pts: np.ndarray, num_points: int = 120, wave_amp: float = 0.004, wave_freq: float = 12.0) -> np.ndarray:
+        t_orig = np.linspace(0, 1, len(pts))
+        t_new = np.linspace(0, 1, num_points)
+        x_new = np.interp(t_new, t_orig, pts[:, 0])
+        y_new = np.interp(t_new, t_orig, pts[:, 1])
+        interpolated = np.stack([x_new, y_new], axis=1)
+        
+        wavy = interpolated.copy()
+        for j in range(1, num_points - 1):
+            tangent = interpolated[j+1] - interpolated[j-1]
+            norm_t = np.linalg.norm(tangent)
+            if norm_t < 1e-5:
+                continue
+            normal = np.array([-tangent[1], tangent[0]]) / norm_t
+            
+            # Combine primary and secondary wave frequencies + noise
+            phase = t_new[j] * wave_freq * np.pi
+            wave_val = np.sin(phase) * 0.6 + np.sin(phase * 2.3) * 0.3 + np.random.normal(0, 0.1)
+            wavy[j] += normal * wave_val * (wave_amp * face_sz)
+        return wavy
+
+    # Helper function to draw a curve with tapered thickness and breaks on the supersampled canvas
+    def draw_tapered_and_broken_curve(canvas: np.ndarray, pts: np.ndarray, base_intensity: float, max_thickness: float, break_freq: float = 0.0, phase_offset: float = 0.0):
+        num_segments = len(pts) - 1
+        for j in range(num_segments):
+            t0 = j / num_segments
+            t1 = (j + 1) / num_segments
+            t_mid = (t0 + t1) / 2.0
+            
+            # 1. Tapering envelope (fades out at ends)
+            envelope = np.sin(np.pi * t_mid)
+            
+            # 2. Break modulation (optional gaps)
+            if break_freq > 0.0:
+                break_val = np.sin(t_mid * break_freq + phase_offset)
+                if break_val < -0.15:
+                    envelope *= 0.1  # introduce a break/gap
+            
+            intensity_val = base_intensity * envelope
+            thickness = max(1, int(round(max_thickness * ss_scale * envelope)))
+            
+            p0 = tuple((pts[j] * ss_scale).astype(np.int32))
+            p1 = tuple((pts[j+1] * ss_scale).astype(np.int32))
+            
+            cv2.line(canvas, p0, p1, float(intensity_val), thickness, lineType=cv2.LINE_AA)
+
+    n_lm = landmarks.shape[0]
+
+    # ── 1. FOREHEAD WRINKLES ──
+    # Eyebrow and temple points to cover the entire width of the forehead horizontally
+    eyebrow_indices = [21, 71, 70, 63, 105, 66, 107, 336, 296, 334, 293, 300, 301, 251]
+    eyebrow_pts = landmarks[[i for i in eyebrow_indices if i < n_lm]]
+    
+    # Forehead top and vertical vector
+    if 10 < n_lm and 9 < n_lm:
+        v_forehead = landmarks[10] - landmarks[9]
+        u_forehead = v_forehead / max(np.linalg.norm(v_forehead), 1e-5)
+        
+        # 5 forehead wrinkles (amount increased as new wrinkle count, covering forehead very densely)
+        forehead_shifts = [0.16, 0.30, 0.44, 0.58, 0.72]
+        # Base thickness & blur parameters
+        t_val = 1
+        t_hil = 2
+        
+        for idx, shift in enumerate(forehead_shifts):
+            # Base curve
+            pts_base = eyebrow_pts + shift * v_forehead
+            wavy_valley = generate_wavy_curve(pts_base, num_points=120, wave_amp=0.005, wave_freq=12.0)
+            
+            # Hill curve (shifted upwards towards hairline, which is in direction of v_forehead)
+            # Upward is positive v_forehead direction in image space (negative Y)
+            shift_dist = face_sz * 0.015
+            wavy_hill = wavy_valley + u_forehead * shift_dist
+            
+            # Draw on respective canvases with 2% more transparency (0.98 drawing intensity)
+            # Change phase_offset per wrinkle to randomize breaks
+            draw_tapered_and_broken_curve(W_valley, wavy_valley, 0.98, t_val, break_freq=9.0, phase_offset=idx * 2.0)
+            draw_tapered_and_broken_curve(W_hill, wavy_hill, 0.98, t_hil, break_freq=9.0, phase_offset=idx * 2.0)
+
+    # ── 2. CROW'S FEET ──
+    # Face downward vector
+    if 152 < n_lm and 9 < n_lm:
+        v_face_down = landmarks[152] - landmarks[9]
+        u_face_down = v_face_down / max(np.linalg.norm(v_face_down), 1e-5)
+    else:
+        u_face_down = np.array([0, 1], dtype=np.float32)
+
+    for eye_type in ["left", "right"]:
+        if eye_type == "left":
+            outer_idx, inner_idx = 33, 133
+            angle_offsets = [-0.38, 0.0, 0.38]
+        else:
+            outer_idx, inner_idx = 263, 362
+            angle_offsets = [np.pi - 0.38, np.pi, np.pi + 0.38]
+
+        if outer_idx >= n_lm or inner_idx >= n_lm:
+            continue
+
+        outer_pt = landmarks[outer_idx]
+        inner_pt = landmarks[inner_idx]
+        eye_w = np.linalg.norm(outer_pt - inner_pt)
+        
+        # Radiating outward vector
+        dir_vec = (outer_pt - inner_pt) / max(eye_w, 1.0)
+        theta_0 = np.arctan2(dir_vec[1], dir_vec[0])
+
+        for offset in angle_offsets:
+            theta_target = theta_0 + (offset if eye_type == "left" else (offset - np.pi))
+            
+            # Radiating direction unit vector
+            u_dir = np.array([np.cos(theta_target), np.sin(theta_target)], dtype=np.float32)
+            
+            # Generate points along the curved path
+            # p(t) = outer_pt + r(t)*u_dir + bend(t)*u_face_down
+            num_pts = 30
+            t_vals = np.linspace(0, 1, num_pts)
+            
+            # Main branch (shorter length to prevent reaching the ears)
+            pts_main = []
+            for t in t_vals:
+                r = (0.15 + 0.85 * t) * (eye_w * 0.92)
+                bend = (eye_w * 0.22) * (t ** 1.6)
+                pt = outer_pt + r * u_dir + bend * u_face_down
+                pts_main.append(pt)
+            pts_main = np.array(pts_main)
+            
+            # Wave the main branch
+            wavy_main = generate_wavy_curve(pts_main, num_points=40, wave_amp=0.003, wave_freq=8.0)
+            
+            # Hill branch (shifted UPwards, i.e., -u_face_down)
+            shift_dist = face_sz * 0.010
+            hill_main = wavy_main - u_face_down * shift_dist
+            
+            # Draw with 2% more transparency (0.98 intensity)
+            draw_tapered_and_broken_curve(W_valley, wavy_main, 0.98, 1)
+            draw_tapered_and_broken_curve(W_hill, hill_main, 0.98, 2)
+            
+            # Branching: spawn sub-branch from the middle crow's foot line (offset == 0)
+            if abs(offset) < 0.05 or abs(abs(offset) - np.pi) < 0.05:
+                # Sub-branch starts at t = 0.4
+                sub_start_idx = 12
+                sub_pt_start = pts_main[sub_start_idx]
+                
+                # Sub-branch angle: diverged by 22 degrees
+                theta_sub = theta_target + (0.38 if eye_type == "left" else -0.38)
+                u_dir_sub = np.array([np.cos(theta_sub), np.sin(theta_sub)], dtype=np.float32)
+                
+                pts_sub = []
+                for t in np.linspace(0, 1, 18):
+                    r = t * (eye_w * 0.45)
+                    bend = (eye_w * 0.12) * (t ** 1.6)
+                    pt = sub_pt_start + r * u_dir_sub + bend * u_face_down
+                    pts_sub.append(pt)
+                pts_sub = np.array(pts_sub)
+                
+                wavy_sub = generate_wavy_curve(pts_sub, num_points=25, wave_amp=0.003, wave_freq=8.0)
+                hill_sub = wavy_sub - u_face_down * shift_dist
+                
+                # Draw sub-branches with 2% more transparency (0.83 intensity instead of 0.85)
+                draw_tapered_and_broken_curve(W_valley, wavy_sub, 0.83, 1)
+                draw_tapered_and_broken_curve(W_hill, hill_sub, 0.83, 2)
+
+    # ── 3. NASOLABIAL FOLDS ──
+    nose_tip = landmarks[1]
+    for side in ["left", "right"]:
+        if side == "left":
+            p_start_idx, p_end_idx = 57, 61
+        else:
+            p_start_idx, p_end_idx = 287, 291
+
+        if p_start_idx >= n_lm or p_end_idx >= n_lm:
+            continue
+
+        p_start = landmarks[p_start_idx]
+        p_end = landmarks[p_end_idx]
+
+        vec = p_end - p_start
+        dist = np.linalg.norm(vec)
+        p_mid = (p_start + p_end) / 2.0
+        
+        # Outward direction (cheek side)
+        out_dir = p_mid - nose_tip
+        out_dir /= max(np.linalg.norm(out_dir), 1e-6)
+        
+        p_ctrl = p_mid + out_dir * (dist * 0.22)
+        ext_dir = vec / max(dist, 1e-6)
+        p_ext = p_end + ext_dir * (dist * 0.28)
+
+        t_values = np.linspace(0, 1, 40)
+        curve_pts = []
+        for t in t_values:
+            pt = (1-t)**2 * p_start + 2*(1-t)*t * p_ctrl + t**2 * p_ext
+            curve_pts.append(pt)
+        curve_pts = np.array(curve_pts)
+        
+        # Wavy main nasolabial curve
+        wavy_nl = generate_wavy_curve(curve_pts, num_points=60, wave_amp=0.002, wave_freq=6.0)
+        
+        # Hill (cheek fat pad overhang): shifted outwards towards the cheek (out_dir)
+        shift_dist = face_sz * 0.018
+        hill_nl = wavy_nl + out_dir * shift_dist
+        
+        # Secondary shallow fold parallel to it
+        shift_sec = out_dir * (dist * 0.16)
+        wavy_nl_sec = wavy_nl + shift_sec
+        hill_nl_sec = hill_nl + shift_sec
+        
+        # Draw main folds (0.98 intensity) and secondary folds (0.49 intensity)
+        draw_tapered_and_broken_curve(W_valley, wavy_nl, 0.98, 2)
+        draw_tapered_and_broken_curve(W_hill, hill_nl, 0.98, 3)
+        
+        draw_tapered_and_broken_curve(W_valley, wavy_nl_sec, 0.49, 1)
+        draw_tapered_and_broken_curve(W_hill, hill_nl_sec, 0.49, 2)
+
+    # ── 4. BLURRING & HARMONIZING VALLEY/HILL CANVASES ──
+    # Crease gets a tight blur (sharp fold), Valley gets a medium blur (soft shading depression)
+    # Hill gets a wider blur (overhang) on the supersampled canvas
+    sigma_v_sharp = max(0.5, face_sz * 0.003) * ss_scale
+    sigma_v_soft = max(2.0, face_sz * 0.014) * ss_scale
+    sigma_h = max(2.2, face_sz * 0.016) * ss_scale
+
+    # Kernel sizes must be odd
+    ksize_v_sharp = int(round(sigma_v_sharp * 3)) | 1
+    ksize_v_soft = int(round(sigma_v_soft * 3)) | 1
+    ksize_h = int(round(sigma_h * 3)) | 1
+
+    W_valley_sharp = cv2.GaussianBlur(W_valley, (ksize_v_sharp, ksize_v_sharp), sigma_v_sharp)
+    W_valley_soft = cv2.GaussianBlur(W_valley, (ksize_v_soft, ksize_v_soft), sigma_v_soft)
+    W_hill_blurred = cv2.GaussianBlur(W_hill, (ksize_h, ksize_h), sigma_h)
+    
+    # Combined depth map W_ss: sharp crease + soft shading depression - wider hill overhang
+    W_ss = 0.65 * W_valley_sharp + 0.35 * W_valley_soft - 0.45 * W_hill_blurred
+    
+    # Downsample the finished depth map back to (h, w) using area-weighted downsampling
+    W = cv2.resize(W_ss, (w, h), interpolation=cv2.INTER_AREA)
+    
+    # Exclude non-face areas (crop strictly to face oval to prevent wrinkles on ears/hair)
+    W *= _build_face_oval_mask(image, landmarks)
+    
+    # ── 5. MESH WARPING (PIXEL CONTRACTION/EXPANSION) ──
+    dx = cv2.filter2D(W, cv2.CV_32F, np.array([[-0.5, 0, 0.5]], dtype=np.float32))
+    dy = cv2.filter2D(W, cv2.CV_32F, np.array([[-0.5], [0], [0.5]], dtype=np.float32))
+
+    # Apply a small Gaussian blur to the gradients to ensure smooth warping mapping
+    dx = cv2.GaussianBlur(dx, (3, 3), 0.5)
+    dy = cv2.GaussianBlur(dy, (3, 3), 0.5)
+
+    # Squeeze the pixels towards the crease line strongly by subtracting the gradient,
+    # and increase the pinch warp scale significantly from 0.055 to 0.18 to make the pinch highly visible.
+    warp_scale = face_sz * 0.18 * intensity
+    map_x = x_grid - dx * warp_scale
+    map_y = y_grid - dy * warp_scale
+
+    warped_img = cv2.remap(image, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+
+    # ── 6. DIRECTIONAL BUMP MAPPING ──
+    # Correct physical lighting dot product: -bump!
+    bump = dx * 0.707 + dy * 0.707
+    
+    # Reduce the shading/shadows of the wrinkles by another 25% to make them softer and perfectly integrated
+    shading = -0.3825 * W - 0.225 * bump
+    shading *= intensity
+
+    # Apply shading to LAB L channel
+    lab = cv2.cvtColor(warped_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lab[:, :, 0] = np.clip(lab[:, :, 0] + lab[:, :, 0] * shading, 0, 255)
+
+    result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+    return result
+
+
+def _apply_color_transfer(image: np.ndarray, mask: np.ndarray, intensity: float, landmarks: np.ndarray = None) -> np.ndarray:
+    if intensity < 0.01 or mask is None:
+        return image
+
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+    L, a, b = cv2.split(lab)
+
+    if landmarks is not None:
+        analysis_mask = _build_pure_skin_mask(image, landmarks)
+    else:
+        analysis_mask = mask
+
+    mask_indices = analysis_mask > 0.1
+    if not np.any(mask_indices):
+        mask_indices = mask > 0.1
+        if not np.any(mask_indices):
+            return image
+
+    mean_L = np.mean(L[mask_indices])
+    std_L = np.std(L[mask_indices])
+    mean_a = np.mean(a[mask_indices])
+    std_a = np.std(a[mask_indices])
+    mean_b = np.mean(b[mask_indices])
+    std_b = np.std(b[mask_indices])
+
+    # Orijinal cilt tonuna göre adaptif yaşlanma parametreleri:
+    # 1. Parlaklık L: Ortalamayı hafifçe düşür (solgun ve beyazımsı durması için çok az karart)
+    target_mean_L = mean_L - 1.0 * intensity
+    target_std_L = std_L * (1.0 - 0.12 * intensity)
+    
+    # 2 & 3. Kırmızılık a ve Sarılık b: Beyaza/solgunluğa kayan ten rengi sapmaları.
+    # Kırmızılık (a) azaltılarak solgunluk artırılır, sarılık (b) ise hafifçe artırılır ama turuncu/koyu olmaması için düşük tutulur.
+    target_mean_a = mean_a - 3.5 * intensity
+    target_mean_b = mean_b + 2.0 * intensity
+
+    scale_L = target_std_L / max(std_L, 1e-5)
+
+    L_new = (L - mean_L) * scale_L + target_mean_L
+    a_new = a + (target_mean_a - mean_a)
+    b_new = b + (target_mean_b - mean_b)
+
+    L_new = np.clip(L_new, 0, 255)
+    a_new = np.clip(a_new, 0, 255)
+    b_new = np.clip(b_new, 0, 255)
+
+    lab_new = cv2.merge([L_new, a_new, b_new]).astype(np.uint8)
+    result = cv2.cvtColor(lab_new, cv2.COLOR_LAB2BGR)
+
+    mask_3 = mask[..., np.newaxis]
+    blended = image.astype(np.float32) * (1.0 - mask_3) + result.astype(np.float32) * mask_3
+    return np.clip(blended, 0, 255).astype(np.uint8)
+
+
+def _apply_aging_lut(image: np.ndarray, mask: np.ndarray, intensity: float) -> np.ndarray:
+    if intensity < 0.01 or mask is None:
+        return image
+
+    lut = np.zeros((1, 256, 3), dtype=np.uint8)
+    for i in range(256):
+        val = i / 255.0
+        # Milder yellowing for a paler, whiter look
+        b_val = val**1.08 - 0.02 * intensity
+        g_val = val**1.02 - 0.005 * intensity
+        r_val = val**0.99
+
+        lut[0, i, 0] = np.clip(b_val * 255.0, 0, 255)
+        lut[0, i, 1] = np.clip(g_val * 255.0, 0, 255)
+        lut[0, i, 2] = np.clip(r_val * 255.0, 0, 255)
+
+    graded = cv2.LUT(image, lut)
+
+    mask_3 = mask[..., np.newaxis]
+    blended = image.astype(np.float32) * (1.0 - mask_3) + graded.astype(np.float32) * mask_3
+    return np.clip(blended, 0, 255).astype(np.uint8)
+
+
+def _generate_solar_spots(image: np.ndarray, landmarks: np.ndarray, intensity: float) -> np.ndarray:
+    if landmarks is None or intensity < 0.05:
+        return image
+
+    h, w = image.shape[:2]
+    face_sz = _face_scale(landmarks)
+
+    # Generate a noise map for irregular spot shapes
+    noise = np.random.normal(0, 1.0, (h // 2, w // 2)).astype(np.float32)
+    noise = cv2.resize(noise, (w, h), interpolation=cv2.INTER_LINEAR)
+    noise = cv2.GaussianBlur(noise, (11, 11), 3)
+
+    spots_config = [
+        # Left cheek spots
+        (117, 0.05, -0.02, 0.022, 0.7),
+        (117, -0.06, 0.08, 0.018, 0.6),
+        (50, 0.02, 0.03, 0.025, 0.55),
+        # Right cheek spots
+        (346, -0.05, -0.03, 0.020, 0.65),
+        (346, 0.06, 0.06, 0.024, 0.7),
+        (280, -0.02, 0.02, 0.016, 0.6),
+        # Forehead spots
+        (109, 0.08, -0.04, 0.028, 0.5),
+        (338, -0.08, -0.05, 0.022, 0.55),
+        (67, 0.02, -0.06, 0.018, 0.45),
+        # Temple / Eye outer spots
+        (139, -0.02, -0.02, 0.020, 0.6),
+        (368, 0.02, -0.02, 0.022, 0.6),
+    ]
+
+    spots_mask = np.zeros((h, w), dtype=np.float32)
+    for idx, dx_r, dy_r, rad_r, opac in spots_config:
+        if idx >= len(landmarks):
+            continue
+        cx, cy = landmarks[idx]
+        x_spot = int(cx + dx_r * face_sz)
+        y_spot = int(cy + dy_r * face_sz)
+        radius = int(rad_r * face_sz)
+
+        if radius < 1:
+            continue
+
+        x0 = max(0, x_spot - radius * 2)
+        y0 = max(0, y_spot - radius * 2)
+        x1 = min(w, x_spot + radius * 2)
+        y1 = min(h, y_spot + radius * 2)
+
+        if x1 <= x0 or y1 <= y0:
+            continue
+
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        
+        # Add noise perturbation to make shapes irregular
+        noise_x = noise[y0:y1, x0:x1] * (radius * 0.32)
+        noise_y = noise[y0:y1, x0:x1] * (radius * 0.32)
+        dist2 = (xx - x_spot + noise_x)**2 + (yy - y_spot + noise_y)**2
+        
+        sigma = radius * 0.55
+        spot_patch = np.exp(-0.5 * dist2 / (sigma**2)) * opac
+
+        spots_mask[y0:y1, x0:x1] = np.maximum(spots_mask[y0:y1, x0:x1], spot_patch)
+
+    spots_mask *= intensity * 0.85
+
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lab[:, :, 0] = np.clip(lab[:, :, 0] - spots_mask * 42.0, 0, 255)
+    lab[:, :, 2] = np.clip(lab[:, :, 2] + spots_mask * 15.0, 0, 255)
+    lab[:, :, 1] = np.clip(lab[:, :, 1] + spots_mask * 5.0, 0, 255)
+
+    result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+    return result
 
 
 def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.ndarray = None) -> np.ndarray:
@@ -199,10 +880,13 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.
     Realistic aging simulation restricted to the **face and hair** only.
     Background and clothing are left untouched.
 
-    Three combined effects:
-      1. Wrinkle / skin-texture enhancement  (frequency + CLAHE)
-      2. Hair whitening / graying            (HSV colour manipulation)
-      3. Subtle aged-skin colour tint        (LAB shift)
+    Combined effects:
+      0. Facial Mesh Warp / Gravitational Sagging (cheeks, jaw, eyelids)
+      1. Micro Wrinkle / skin-texture enhancement (frequency + CLAHE)
+      1b. Structural localized wrinkles (forehead, crow's feet, nasolabial folds)
+      1c. Skin tone aging & LUT & Solar spots
+      2. Hair whitening / graying (HSV colour manipulation)
+      3. Subtle aged-skin colour tint (LAB shift)
 
     A MediaPipe face-mesh mask ensures effects are composited only onto
     the face + hair region.
@@ -213,15 +897,9 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.
     intensity = float(np.clip(intensity, 0.0, 1.0))
     h, w = image.shape[:2]
 
-    # Performance branch: run heavy frequency/texture analysis at low-res.
-    # Blend/composite still returns hi-res output.
+    # Native/full resolution processing to preserve 100% of high-res image quality without blurry upscaling or pixelation.
     ds_factor = 1.0
     lo_image = image
-    if w * h > 640 * 480:
-        ds_factor = min(w / 480.0, h / 360.0)
-        lo_w = max(320, int(round(w / ds_factor)))
-        lo_h = max(240, int(round(h / ds_factor)))
-        lo_image = cv2.resize(image, (lo_w, lo_h), interpolation=cv2.INTER_AREA)
     lh, lw = lo_image.shape[:2]
 
     # ── Build face + hair mask ────────────────────────────────────────
@@ -229,16 +907,33 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.
         lo_landmarks = landmarks / ds_factor
     else:
         lo_landmarks = landmarks
-        
-    face_mask = _build_face_hair_mask(lo_image, landmarks=lo_landmarks)          # float32 [0..1]
-    face_mask_3 = face_mask[..., np.newaxis]           # (H,W,1) for BGR ops
 
-    # ── 1. WRINKLE & TEXTURE ENHANCEMENT ──────────────────────────────
+    if lo_landmarks is None:
+        try:
+            from modules.warping_module import detect_face_landmarks
+        except ModuleNotFoundError:
+            from backend.modules.warping_module import detect_face_landmarks
+        lo_landmarks = detect_face_landmarks(lo_image)
+
+    # ── 0. SAGGING & FACIAL MESH WARP ──────────────────────────────────
+    lo_landmarks_warped = lo_landmarks
+    if lo_landmarks is not None:
+        lo_landmarks_warped = _warp_landmarks_for_sagging(lo_landmarks, lo_image.shape[:2], intensity)
+        lo_image = _apply_sagging_warp(lo_image, lo_landmarks, intensity)
+
+    face_mask = _build_face_hair_mask(lo_image, landmarks=lo_landmarks_warped)          # float32 [0..1]
+    face_mask_3 = face_mask[..., np.newaxis]           # (H,W,1) for BGR ops
+    face_oval_mask = _build_face_oval_mask(lo_image, lo_landmarks_warped)
+    feathered_face_mask = _build_feathered_face_mask(lo_image, lo_landmarks_warped)
+    feathered_face_mask_3 = feathered_face_mask[..., np.newaxis]
+
+    # ── 1. MICRO WRINKLE & TEXTURE ENHANCEMENT ──────────────────────────────
     lab = cv2.cvtColor(lo_image, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
 
-    # High-pass frequency filter → fine skin detail
-    radius = int(14 + intensity * 40)
+    # High-pass frequency filter → fine skin detail (scale radius with image width to keep detail size natural)
+    scale_factor = w / 480.0
+    radius = int((14 + intensity * 40) * scale_factor)
     high_pass = apply_frequency_filter(l_ch, radius=radius, mode="high")
     high_pass = cv2.normalize(high_pass, None, 0, 255, cv2.NORM_MINMAX)
 
@@ -265,17 +960,19 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.
     darkness = 2.0 + 5.0 * intensity
     aged_l = aged_l * contrast - darkness
 
-    # Micro wrinkle noise
+    # Micro wrinkle noise (restricted to crepiness regions)
     noise = np.random.normal(0, 4 * intensity, l_ch.shape).astype(np.float32)
-    aged_l = aged_l + noise
+    crepiness_mask = _build_crepiness_mask(lo_image, lo_landmarks_warped)
+    aged_l = aged_l + noise * crepiness_mask
     aged_l = np.clip(aged_l, 0, 255).astype(np.uint8)
 
     # Merge back with original colour channels
     aged_lab = cv2.merge([aged_l, a_ch, b_ch])
     wrinkled = cv2.cvtColor(aged_lab, cv2.COLOR_LAB2BGR)
 
-    # Subtle sharpening to crisp up fine lines
-    blurred = cv2.GaussianBlur(wrinkled, (0, 0), 1.0)
+    # Subtle sharpening to crisp up fine lines (scale blur sigma with resolution to match sharpness)
+    sigma_sharp = max(1.0, 1.0 * scale_factor)
+    blurred = cv2.GaussianBlur(wrinkled, (0, 0), sigma_sharp)
     sharp_s = 0.16 + 0.20 * intensity
     wrinkled = cv2.addWeighted(wrinkled, 1.0 + sharp_s, blurred, -sharp_s, 0)
 
@@ -290,66 +987,99 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.
     )
     result = np.clip(result, 0, 255).astype(np.uint8)
 
-    # ── 2. HAIR WHITENING / GRAYING ───────────────────────────────────
-    hsv = cv2.cvtColor(lo_image, cv2.COLOR_BGR2HSV)
-    v_ch_hsv = hsv[:, :, 2].astype(np.float32)
-    s_ch_hsv = hsv[:, :, 1].astype(np.float32)
-    h_ch_hsv = hsv[:, :, 0].astype(np.float32)
+    # ── 1b. STRUCTURAL LOCALIZED WRINKLES ─────────────────────────────
+    if lo_landmarks_warped is not None:
+        result = _apply_structural_wrinkles(result, lo_landmarks_warped, face_mask, intensity)
 
-    # Dark-pixel mask (hair is typically dark)
-    dark_thresh = 145 + int(50 * intensity)
-    dark_mask = np.clip((dark_thresh - v_ch_hsv) / max(dark_thresh, 1), 0, 1)
+    # ── 1c. SKIN TONE AGING, LUT & COLOR TRANSFER & SOLAR SPOTS ───────
+    result = _apply_color_transfer(result, feathered_face_mask, intensity, landmarks=lo_landmarks_warped)
+    result = _apply_aging_lut(result, feathered_face_mask, intensity)
+    if lo_landmarks_warped is not None:
+        result = _generate_solar_spots(result, lo_landmarks_warped, intensity)
 
-    # Position weight: upper portion of image is more likely hair
-    y_coords = np.linspace(0.0, 1.0, lh, dtype=np.float32).reshape(-1, 1)
-    pos_weight = np.clip(1.0 - y_coords * 1.1, 0.12, 1.0)
-    pos_weight = np.broadcast_to(pos_weight, (lh, lw)).copy()
+    # ── 2. HAIR WHITENING / GRAYING (using pixel-perfect ML segmenter) ──
+    try:
+        from modules.hair_module import _get_hair_mask
+    except ModuleNotFoundError:
+        from backend.modules.hair_module import _get_hair_mask
 
-    # Exclude skin-coloured pixels (hue ≈ 0-30 in OpenCV 0-180 scale)
-    skin_region = (
-        (h_ch_hsv >= 0) & (h_ch_hsv <= 30)
-        & (s_ch_hsv > 30) & (v_ch_hsv > 70)
+    # Get pixel-perfect hair mask from the deep learning hair segmenter
+    raw_hair_mask = None
+    try:
+        raw_hair_mask = _get_hair_mask(lo_image)
+    except Exception as e:
+        logger.warning("ML hair segmenter failed in aging filter: %s", e)
+
+    # Use the ML hair mask if detected, otherwise fallback to original HSV thresholding mask
+    if raw_hair_mask is not None and cv2.countNonZero(raw_hair_mask) > 0:
+        # Smooth the pixel-perfect mask edges slightly for natural blending
+        hair_mask = cv2.GaussianBlur(raw_hair_mask, (15, 15), 0).astype(np.float32) / 255.0
+    else:
+        # Fallback to robust HSV-based thresholding hair mask
+        hsv = cv2.cvtColor(lo_image, cv2.COLOR_BGR2HSV)
+        v_ch_hsv = hsv[:, :, 2].astype(np.float32)
+        s_ch_hsv = hsv[:, :, 1].astype(np.float32)
+        h_ch_hsv = hsv[:, :, 0].astype(np.float32)
+
+        y_coords = np.linspace(0.0, 1.0, lh, dtype=np.float32).reshape(-1, 1)
+        pos_weight = np.clip(1.0 - y_coords * 1.1, 0.12, 1.0)
+        pos_weight = np.broadcast_to(pos_weight, (lh, lw)).copy()
+
+        skin_region = (
+            (h_ch_hsv >= 0) & (h_ch_hsv <= 30)
+            & (s_ch_hsv > 30) & (v_ch_hsv > 70)
+        )
+        not_skin = 1.0 - skin_region.astype(np.float32)
+
+        dark_thresh = 145 + int(50 * intensity)
+        dark_mask = np.clip((dark_thresh - v_ch_hsv) / max(dark_thresh, 1), 0, 1)
+        fallback_mask = dark_mask * pos_weight * not_skin * face_mask
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        hair_u8 = (np.clip(fallback_mask, 0, 1) * 255).astype(np.uint8)
+        hair_u8 = cv2.morphologyEx(hair_u8, cv2.MORPH_CLOSE, kernel)
+        hair_u8 = cv2.morphologyEx(hair_u8, cv2.MORPH_OPEN, kernel)
+        hair_mask = hair_u8.astype(np.float32) / 255.0
+        hair_mask = cv2.GaussianBlur(hair_mask, (25, 25), 10)
+
+    # Apply extremely natural hair whitening / graying by copying the exact Overlay blend mode system
+    # from the working hair color module (apply_hair_color) to preserve all hair strands and shading texture.
+    # We use exactly the user-requested target color RGB (196, 196, 196), which translates to BGR: (196.0, 196.0, 196.0).
+    b_val, g_val, r_val = 196.0, 196.0, 196.0
+    color_layer = np.full_like(result, (b_val, g_val, r_val), dtype=np.float32) / 255.0
+    base = result.astype(np.float32) / 255.0
+
+    overlay = np.where(
+        base < 0.5,
+        2.0 * base * color_layer,
+        1.0 - 2.0 * (1.0 - base) * (1.0 - color_layer)
     )
-    not_skin = 1.0 - skin_region.astype(np.float32)
+    colored_hair = np.clip(overlay * 255.0, 0, 255).astype(np.uint8)
 
-    # Combined hair mask — intersected with face_mask to avoid clothing
-    hair_mask = dark_mask * pos_weight * not_skin * face_mask
+    # Blend with a soft mask using the aging intensity
+    soft_hair_mask = cv2.GaussianBlur(hair_mask, (31, 31), 0).astype(np.float32)
+    soft_hair_mask_3ch = np.stack([soft_hair_mask] * 3, axis=-1)
 
-    # Morphological cleanup for a coherent region
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    hair_u8 = (np.clip(hair_mask, 0, 1) * 255).astype(np.uint8)
-    hair_u8 = cv2.morphologyEx(hair_u8, cv2.MORPH_CLOSE, kernel)
-    hair_u8 = cv2.morphologyEx(hair_u8, cv2.MORPH_OPEN, kernel)
-    hair_mask = hair_u8.astype(np.float32) / 255.0
-
-    # Smooth edges for natural blending
-    hair_mask = cv2.GaussianBlur(hair_mask, (25, 25), 10)
-
-    # Apply desaturation + brightness boost in detected hair region
-    white_str = 0.48 + 0.22 * intensity
-    hsv_result = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float64)
-
-    # Desaturate → gray / white
-    hsv_result[:, :, 1] *= (1.0 - hair_mask * white_str)
-
-    # Lighten hair toward silver-white
-    bright_add = (32 + 62 * intensity) * hair_mask
-    hsv_result[:, :, 2] = np.clip(hsv_result[:, :, 2] + bright_add, 0, 255)
-
-    hsv_result = np.clip(hsv_result, 0, 255).astype(np.uint8)
-    result = cv2.cvtColor(hsv_result, cv2.COLOR_HSV2BGR)
+    # Whitening blend strength scaled with aging intensity (reaches full 100% mask blend at max intensity)
+    blend_strength = (0.20 + 0.80 * intensity) * soft_hair_mask_3ch
+    blend_strength = np.clip(blend_strength, 0.0, 1.0)
+    result = (
+        colored_hair.astype(np.float32) * blend_strength
+        + result.astype(np.float32) * (1.0 - blend_strength)
+    ).astype(np.uint8)
 
     # ── 3. SUBTLE AGED-SKIN COLOUR TINT (face only) ──────────────────
     # Build the tinted version
     lab_out = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float64)
-    lab_out[:, :, 2] = np.clip(lab_out[:, :, 2] + 1.0 + 1.8 * intensity, 0, 255)
-    lab_out[:, :, 0] = np.clip(lab_out[:, :, 0] - 0.8 * intensity, 0, 255)
+    # Milder final tint to keep it pale and bright
+    lab_out[:, :, 2] = np.clip(lab_out[:, :, 2] + 0.5 + 0.8 * intensity, 0, 255)
+    lab_out[:, :, 0] = np.clip(lab_out[:, :, 0] - 0.2 * intensity, 0, 255)
     tinted = cv2.cvtColor(lab_out.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
-    # ★ Composite tint onto result using face mask (no tint on clothes)
+    # ★ Composite tint onto result using feathered face mask (no tint on hair/clothes)
     result = (
-        result.astype(np.float32) * (1.0 - face_mask_3)
-        + tinted.astype(np.float32) * face_mask_3
+        result.astype(np.float32) * (1.0 - feathered_face_mask_3)
+        + tinted.astype(np.float32) * feathered_face_mask_3
     )
     result = np.clip(result, 0, 255).astype(np.uint8)
 
