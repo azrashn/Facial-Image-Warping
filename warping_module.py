@@ -8,15 +8,12 @@ from __future__ import annotations
 import os
 import tempfile
 import urllib.request
-import logging
 from typing import Optional
 
 import cv2
 import mediapipe as mp
 import numpy as np
 from scipy.spatial import Delaunay
-
-logger = logging.getLogger(__name__)
 
 
 def _clamp_intensity(intensity: int) -> float:
@@ -96,24 +93,6 @@ def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
     return _landmarks_via_tasks(image_bgr, h, w)
 
 
-def _gaussian_falloff(lm: np.ndarray, anchor_idx: int, sigma: float) -> np.ndarray:
-    """
-    Compute a (N,) weight array where each landmark's weight is
-    exp(-dist² / 2σ²) relative to the anchor landmark.
-    σ is expressed in pixels.
-    """
-    anchor = lm[anchor_idx]
-    dists = np.linalg.norm(lm - anchor, axis=1)
-    return np.exp(-0.5 * (dists / max(sigma, 1e-6)) ** 2)
-
-
-def _face_scale(lm: np.ndarray) -> float:
-    """Estimate face size (inter-eye distance) for resolution-independent σ."""
-    left_eye = lm[133]
-    right_eye = lm[362]
-    return float(np.linalg.norm(left_eye - right_eye))
-
-
 def _corners(width: int, height: int) -> np.ndarray:
     return np.array(
         [[0.0, 0.0], [width - 1.0, 0.0], [0.0, height - 1.0], [width - 1.0, height - 1.0]],
@@ -165,7 +144,6 @@ def _prepare_warp(
     image_bgr: np.ndarray, src_lm: np.ndarray, deltas: np.ndarray
 ) -> np.ndarray:
     """deltas: Nx2, sadece ilgili indeksler dolu; diğerleri 0."""
-    h, w = image_bgr.shape[:2]
     dst = src_lm + deltas
     corners = _corners(w, h)
     src_all = np.vstack([src_lm, corners])

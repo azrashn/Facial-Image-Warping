@@ -79,7 +79,6 @@ try:
     )
     from modules.input_module import get_landmarks, preprocess_image
     from modules.face_swap_module import face_swap_engine, FaceSwapError
-    from modules.clothing_module import process_clothing_frame
 except ModuleNotFoundError:
     from backend.modules.warping_module import (
         PersistentFaceMesh,
@@ -101,7 +100,6 @@ except ModuleNotFoundError:
     )
     from backend.modules.input_module import get_landmarks, preprocess_image
     from backend.modules.face_swap_module import face_swap_engine, FaceSwapError
-    from backend.modules.clothing_module import process_clothing_frame
 
 # Emoji presets from process.py (lazy import to avoid circular)
 def _get_emoji_presets_map():
@@ -330,16 +328,6 @@ def _apply_filter(
             else:
                 logger.debug("Face swap: face_swap_engine not loaded")
 
-        # ── Clothing Try-On (Rol 2) ──
-        elif filter_name == "clothing":
-            clothing_type = config.get("clothing_type", "tshirt")
-            return process_clothing_frame(
-                frame,
-                clothing_type=clothing_type,
-                show_skeleton=False,
-                async_mode=True
-            )
-
         else:
             logger.debug("Unknown live filter: %s", filter_name)
 
@@ -403,51 +391,46 @@ async def live_websocket(ws: WebSocket):
     async def _worker_loop():
         nonlocal frame_count, fps, last_fps_time, fps_frame_count
         nonlocal dropped_frames
-        try:
-            while not stop_event.is_set():
-                queued = await frame_buffer.get()
-                if queued is None:
-                    break
-                frame = _decode_frame(queued.data_url)
-                if frame is None:
-                    continue
-                async with state_lock:
-                    active_states_snapshot = dict(active_states)
-                loop = asyncio.get_event_loop()
-                result, face_detected, proc_ms, degraded = await loop.run_in_executor(
-                    None,
-                    _process_frame_sync,
-                    frame,
-                    mesh,
-                    smoother,
-                    active_states_snapshot,
-                    LIVE_FRAME_BUDGET_MS,
-                )
-                frame_count += 1
-                fps_frame_count += 1
-                now = time.perf_counter()
-                elapsed = now - last_fps_time
-                if elapsed >= 1.0:
-                    fps = fps_frame_count / elapsed
-                    fps_frame_count = 0
-                    last_fps_time = now
+        while not stop_event.is_set():
+            queued = await frame_buffer.get()
+            if queued is None:
+                break
+            frame = _decode_frame(queued.data_url)
+            if frame is None:
+                continue
+            async with state_lock:
+                active_states_snapshot = dict(active_states)
+            loop = asyncio.get_event_loop()
+            result, face_detected, proc_ms, degraded = await loop.run_in_executor(
+                None,
+                _process_frame_sync,
+                frame,
+                mesh,
+                smoother,
+                active_states_snapshot,
+                LIVE_FRAME_BUDGET_MS,
+            )
+            frame_count += 1
+            fps_frame_count += 1
+            now = time.perf_counter()
+            elapsed = now - last_fps_time
+            if elapsed >= 1.0:
+                fps = fps_frame_count / elapsed
+                fps_frame_count = 0
+                last_fps_time = now
 
-                queue_latency_ms = max(0.0, (now - queued.queued_at) * 1000.0)
-                total_latency_ms = queue_latency_ms + proc_ms
-                encoded = _encode_frame(result, quality=92 if degraded else 94)
-                await ws.send_json({
-                    "type": "frame",
-                    "data": encoded,
-                    "fps": round(fps, 1),
-                    "face_detected": face_detected,
-                    "latency_ms": round(total_latency_ms, 1),
-                    "dropped_frames": dropped_frames,
-                    "degraded": degraded,
-                })
-        except (asyncio.CancelledError, WebSocketDisconnect):
-            logger.info("Canlı yayın görevi kullanıcı ayrıldığı için başarıyla sonlandırıldı.")
-        except Exception as exc:
-            logger.error("Live worker loop error: %s", exc)
+            queue_latency_ms = max(0.0, (now - queued.queued_at) * 1000.0)
+            total_latency_ms = queue_latency_ms + proc_ms
+            encoded = _encode_frame(result, quality=92 if degraded else 94)
+            await ws.send_json({
+                "type": "frame",
+                "data": encoded,
+                "fps": round(fps, 1),
+                "face_detected": face_detected,
+                "latency_ms": round(total_latency_ms, 1),
+                "dropped_frames": dropped_frames,
+                "degraded": degraded,
+            })
 
     worker_task = asyncio.create_task(_worker_loop())
 
@@ -466,33 +449,19 @@ async def live_websocket(ws: WebSocket):
             # ── NEW: Stacked state update ──
             if msg_action == "update_live_state":
                 incoming = msg.get("active_states", {})
-                if isinstance(incoming, dict):
-                    # Merge: null/None values → remove, otherwise upsert
-                    async with state_lock:
-                        for feature, params in incoming.items():
-                            if not feature or feature == "undefined":
-                                continue
-                            if params is None or params == "undefined":
-                                active_states.pop(feature, None)
-                            else:
-                                if isinstance(params, dict):
-                                    cleaned_params = {}
-                                    for k, v in params.items():
-                                        if k == "undefined" or v == "undefined" or v is None:
-                                            continue
-                                        cleaned_params[k] = v
-                                    if cleaned_params:
-                                        active_states[feature] = cleaned_params
-                                else:
-                                    if isinstance(params, str) and (params == "undefined" or not params.strip()):
-                                        continue
-                                    active_states[feature] = {"value": params}
-                    logger.info("Live active_states updated: %s", list(active_states.keys()))
-                    await ws.send_json({
-                        "type": "state_ack",
-                        "active_states": list(active_states.keys()),
-                        "source_face_loaded": face_swap_engine.is_loaded,
-                    })
+                # Merge: null/None values → remove, otherwise upsert
+                async with state_lock:
+                    for feature, params in incoming.items():
+                        if params is None:
+                            active_states.pop(feature, None)
+                        else:
+                            active_states[feature] = params if isinstance(params, dict) else {"value": params}
+                logger.info("Live active_states updated: %s", list(active_states.keys()))
+                await ws.send_json({
+                    "type": "state_ack",
+                    "active_states": list(active_states.keys()),
+                    "source_face_loaded": face_swap_engine.is_loaded,
+                })
                 continue
 
             # ── Face swap source upload ──
@@ -537,20 +506,16 @@ async def live_websocket(ws: WebSocket):
                 recv_seq += 1
                 dropped_frames += frame_buffer.put(_QueuedFrame(data_url=frame_data, queued_at=time.perf_counter(), seq=recv_seq))
 
-    except (WebSocketDisconnect, asyncio.CancelledError):
-        logger.info("Canlı yayın görevi kullanıcı ayrıldığı için başarıyla sonlandırıldı.")
+    except WebSocketDisconnect:
+        logger.info("Live WebSocket disconnected")
     except Exception as exc:
         logger.error("Live WebSocket error: %s", exc)
     finally:
         stop_event.set()
         frame_buffer.close()
         worker_task.cancel()
-        try:
+        with contextlib.suppress(Exception):
             await worker_task
-        except (asyncio.CancelledError, WebSocketDisconnect):
-            logger.info("Canlı yayın görevi kullanıcı ayrıldığı için başarıyla sonlandırıldı.")
-        except Exception:
-            pass
         logger.info("Live WebSocket session ended (frames: %d)", frame_count)
 
 
@@ -570,7 +535,6 @@ def _feature_to_config(feature: str, params: dict) -> dict:
         "glasses": "glasses", "hair_color": "hair_color",
         "aging": "aging", "deaging": "deaging", "cartoon": "cartoon",
         "face_swap": "face_swap",
-        "clothing": "clothing",
     }
     config["filter"] = _FEATURE_TO_FILTER.get(feature, feature)
     config.setdefault("intensity", 50)
@@ -616,7 +580,6 @@ def _process_frame_sync(
     # 3. Apply all stacked filters sequentially. Makeup has an approximate
     # fallback, so it should not flash off during brief landmark misses.
     has_makeup = any(str(feature).startswith("makeup_") for feature in filter_states)
-    has_clothing = "clothing" in filter_states
     if not filter_states and not show_landmarks:
         if not face_detected:
             return frame, face_detected, (time.perf_counter() - started) * 1000.0, degraded
@@ -625,7 +588,7 @@ def _process_frame_sync(
             return _draw_landmarks_overlay(frame, smoothed), face_detected, (time.perf_counter() - started) * 1000.0, degraded
         return frame, face_detected, (time.perf_counter() - started) * 1000.0, degraded
 
-    if not face_detected and not has_makeup and not has_clothing and not show_landmarks:
+    if not face_detected and not has_makeup and not show_landmarks:
         return frame, face_detected, (time.perf_counter() - started) * 1000.0, degraded
 
     result = frame

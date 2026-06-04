@@ -1010,68 +1010,6 @@ async def process_glasses(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.post("/process/clothing")
-async def process_clothing(
-    image: UploadFile = File(...),
-    clothing_type: str = Form("tshirt"),
-):
-    """
-    Overlay try-on clothing on the user's upper body.
-
-    Parameters
-    ----------
-    clothing_type : str
-        Model ID: ``"tshirt"``, ``"shirt"``
-    """
-    try:
-        contents = await image.read()
-        original = _decode_upload(contents)
-
-        try:
-            from modules.clothing_module import process_clothing_frame
-        except ModuleNotFoundError:
-            from backend.modules.clothing_module import process_clothing_frame
-
-        # Run process_clothing_frame in synchronous mode (async_mode=False) for static file processing
-        processed = process_clothing_frame(
-            original,
-            clothing_type=clothing_type,
-            show_skeleton=False,
-            async_mode=False
-        )
-
-        metrics = _metrics_dict(original, processed)
-
-        orig_fft_shifted = compute_fft(original)[2]
-        proc_fft_shifted = compute_fft(processed)[2]
-
-        orig_spectrum = compute_magnitude_spectrum(orig_fft_shifted)
-        proc_spectrum = compute_magnitude_spectrum(proc_fft_shifted)
-
-        orig_spectrum_b64 = _data_url_from_image(cv2.cvtColor(orig_spectrum, cv2.COLOR_GRAY2BGR))
-        proc_spectrum_b64 = _data_url_from_image(cv2.cvtColor(proc_spectrum, cv2.COLOR_GRAY2BGR))
-
-        orig_phase_b64 = _compute_phase_b64(orig_fft_shifted)
-        proc_phase_b64 = _compute_phase_b64(proc_fft_shifted)
-
-        energy = compute_energy_analysis(processed, radius=30)
-
-        return _response_payload(
-            image_b64=_data_url_from_image(processed),
-            metrics=metrics,
-            orig_spectrum_b64=orig_spectrum_b64,
-            proc_spectrum_b64=proc_spectrum_b64,
-            orig_phase_b64=orig_phase_b64,
-            proc_phase_b64=proc_phase_b64,
-            energy=energy,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # EMOJI PRESET ENDPOINT – 6 modular preset functions
 # ──────────────────────────────────────────────────────────────────────────────
