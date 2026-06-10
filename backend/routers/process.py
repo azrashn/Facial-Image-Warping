@@ -2603,7 +2603,7 @@ async def process_fft(
         contents = await image.read()
         original = _decode_upload(contents)
 
-        fft_result = apply_fft_center_corner_inverse(original)
+        fft_result = apply_fft_center_corner_inverse(original, intensity=intensity)
         processed = fft_result["processed"]
 
         metrics = _metrics_dict(original, processed)
@@ -2628,6 +2628,7 @@ async def process_fft(
         )
         response.update({
             "inverse_image_b64": _data_url_from_image(processed),
+            "corner_image_b64": _data_url_from_image(fft_result["corner_processed"]),
             "fft_band": fft_result["band"],
             "selection_mode": "center_corners",
         })

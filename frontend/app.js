@@ -384,6 +384,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const fftPhaseOutputImg = document.getElementById('fftPhaseOutputImg');
     const fftPhaseOutputPlaceholder = document.getElementById('fftPhaseOutputPlaceholder');
     const fftInverseImg = document.getElementById('fftInverseImg');
+    const fftCornerImg = document.getElementById('fftCornerImg');
+    const fftCornerPlaceholder = document.getElementById('fftCornerPlaceholder');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -1996,6 +1998,11 @@ document.addEventListener('DOMContentLoaded', () => {
             fftOutputPlaceholder.textContent = 'Processing...';
         }
         if (fftInverseImg) fftInverseImg.style.display = 'none';
+        if (fftCornerPlaceholder) {
+            fftCornerPlaceholder.style.display = 'block';
+            fftCornerPlaceholder.textContent = 'Processing...';
+        }
+        if (fftCornerImg) fftCornerImg.style.display = 'none';
         loadingOverlay.style.display = 'flex';
 
         try {
@@ -2016,6 +2023,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 fftInverseImg.style.display = 'block';
             }
             if (fftOutputPlaceholder) fftOutputPlaceholder.style.display = 'none';
+            if (fftCornerImg) {
+                fftCornerImg.src = payload.corner_image_b64 || '';
+                fftCornerImg.style.display = payload.corner_image_b64 ? 'block' : 'none';
+            }
+            if (fftCornerPlaceholder) {
+                fftCornerPlaceholder.style.display = payload.corner_image_b64 ? 'none' : 'block';
+                fftCornerPlaceholder.textContent = payload.corner_image_b64 ? '' : idleText;
+            }
 
             updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
             setSpectrumImages(
@@ -2026,7 +2041,7 @@ document.addEventListener('DOMContentLoaded', () => {
             );
             drawAllFftCenterCornerOverlays();
 
-            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>FFT center and corner frequency regions reconstructed with inverse FFT.`;
+            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>4 corners show FFT edge/detail output; center circle shows IFFT blur output.`;
             addHistory('FFT Center + Corners');
             if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
         } catch (err) {
@@ -2034,6 +2049,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (fftOutputPlaceholder) {
                 fftOutputPlaceholder.style.display = 'block';
                 fftOutputPlaceholder.textContent = err.message || idleText;
+            }
+            if (fftCornerPlaceholder) {
+                fftCornerPlaceholder.style.display = 'block';
+                fftCornerPlaceholder.textContent = err.message || idleText;
             }
             analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message || 'FFT Lab processing failed.'}`;
         } finally {
@@ -2092,7 +2111,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function drawAllFftCenterCornerOverlays() {
-        ['fftSelectionCanvas', 'fftProcSelectionCanvas', 'fftInverseSelectionCanvas']
+        ['fftSelectionCanvas', 'fftProcSelectionCanvas']
             .forEach(id => drawCenterCornerOverlay(document.getElementById(id)));
     }
 

@@ -575,7 +575,7 @@
                         <div id="fft-mag-view" class="fft-sub-view active-sub-view"
                             style="width: 100%; height: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column;">
                             <div
-                                style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; width: 100%; flex: 1; min-height: 0;">
+                                style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; width: 100%; flex: 1; min-height: 0;">
                                 <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
                                     <h4 style="color: var(--text-color); margin-bottom: 10px;" data-i18n="origFFT">
                                         Original FFT</h4>
@@ -605,15 +605,23 @@
                                     </div>
                                 </div>
                                 <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
-                                    <h4 style="color: var(--text-color); margin-bottom: 10px;">Inverse FFT Result</h4>
+                                    <h4 style="color: var(--text-color); margin-bottom: 10px;">4 Corner FFT Result</h4>
+                                    <div
+                                        style="width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative;">
+                                        <img id="fftCornerImg" src="" alt="4 Corner FFT Result"
+                                            style="width: 100%; height: 100%; object-fit: contain; display: none;">
+                                        <p id="fftCornerPlaceholder" data-i18n="selectRegionOutput"
+                                            style="color: var(--text-muted); user-select: none;">Run FFT Lab</p>
+                                    </div>
+                                </div>
+                                <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
+                                    <h4 style="color: var(--text-color); margin-bottom: 10px;">Center IFFT Blur</h4>
                                     <div
                                         style="width: 100%; flex: 1; min-height: 0; background: #1a1a1a; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative;">
                                         <img id="fftInverseImg" src="" alt="Inverse FFT Result"
                                             style="width: 100%; height: 100%; object-fit: contain; display: none;">
                                         <p id="fftOutputPlaceholder" data-i18n="selectRegionOutput"
                                             style="color: var(--text-muted); user-select: none;">Run FFT Lab</p>
-                                        <canvas id="fftInverseSelectionCanvas"
-                                            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2;"></canvas>
                                     </div>
                                 </div>
                             </div>
