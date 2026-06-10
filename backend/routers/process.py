@@ -14,6 +14,7 @@ try:
         apply_deaging,
         apply_fft_filter,
         apply_fft_annular_filter,
+        apply_fft_center_corner_inverse,
         apply_fft_selected_region_inverse,
         apply_fft_partial_region_artifact,
         apply_cartoon_filter,
@@ -47,6 +48,7 @@ except ModuleNotFoundError:
         apply_deaging,
         apply_fft_filter,
         apply_fft_annular_filter,
+        apply_fft_center_corner_inverse,
         apply_fft_selected_region_inverse,
         apply_fft_partial_region_artifact,
         apply_cartoon_filter,
@@ -2591,40 +2593,17 @@ async def process_fft(
     fft_band: str = Form("mid"),
 ):
     """
-    Apply FFT-based frequency-band manipulation to the uploaded image.
+    FFT Laboratory endpoint.
 
-    Parameters
-    ----------
-    intensity : float
-        Filter strength (0-100).
-    mask_coords : str | None
-        Optional JSON string with normalized spectrum coordinates. The
-        selection is converted to radial distance from the shifted FFT center.
-    fft_band : str
-        "low", "mid", or "high" annular band when mask_coords is not provided.
+    The lab keeps a fixed center + four-corner mask in shifted FFT space and
+    reconstructs one image with inverse FFT. The optional legacy form fields are
+    accepted for compatibility but ignored by the new laboratory flow.
     """
-    import json as _json
-
     try:
         contents = await image.read()
         original = _decode_upload(contents)
 
-        # Parse optional mask coordinates
-        parsed_mask = None
-        if mask_coords:
-            try:
-                parsed_mask = _json.loads(mask_coords)
-                logger.info("[FFT] mask_coords received: %s", parsed_mask)
-            except (_json.JSONDecodeError, ValueError) as exc:
-                logger.warning("[FFT] Could not parse mask_coords: %s", exc)
-
-        filter_intensity = float(intensity)
-        fft_result = apply_fft_annular_filter(
-            original,
-            intensity=filter_intensity,
-            band=fft_band,
-            mask_coords=parsed_mask,
-        )
+        fft_result = apply_fft_center_corner_inverse(original)
         processed = fft_result["processed"]
 
         metrics = _metrics_dict(original, processed)
@@ -2649,13 +2628,8 @@ async def process_fft(
         )
         response.update({
             "inverse_image_b64": _data_url_from_image(processed),
-            "difference_b64": _data_url_from_image(fft_result["difference"]),
-            "fft_band": "selection" if parsed_mask else fft_result["band"],
-            "annulus_bounds": {
-                "inner_radius": round(float(fft_result.get("bounds", (0, 0))[0]), 2),
-                "outer_radius": round(float(fft_result.get("bounds", (0, 0))[1]), 2),
-            },
-            "selection_coords": parsed_mask,
+            "fft_band": fft_result["band"],
+            "selection_mode": "center_corners",
         })
         return response
 

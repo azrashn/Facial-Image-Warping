@@ -1284,6 +1284,90 @@ def overlay_fft_mask(spectrum: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return np.clip(overlay, 0, 255).astype(np.uint8)
 
 
+def build_center_corner_fft_mask(
+    shape: tuple[int, int],
+    center_ratio: float = 0.13,
+    corner_ratio: float = 0.16,
+    feather: float = 2.0,
+) -> np.ndarray:
+    """
+    Build a fixed shifted-FFT laboratory mask.
+
+    The shifted FFT places low frequencies in the center. The four corners
+    represent high-frequency regions, which correspond to sharp spatial changes.
+    This mask intentionally avoids arbitrary magnitude picking: it keeps only
+    the center region and all four corner regions.
+    """
+    rows, cols = shape
+    yy, xx = np.ogrid[:rows, :cols]
+    base = float(min(rows, cols))
+    center_radius = max(3.0, base * center_ratio)
+    corner_radius = max(3.0, base * corner_ratio)
+
+    mask = np.zeros((rows, cols), dtype=np.float32)
+    centers = [
+        (cols / 2.0, rows / 2.0),
+        (0.0, 0.0),
+        (cols - 1.0, 0.0),
+        (0.0, rows - 1.0),
+        (cols - 1.0, rows - 1.0),
+    ]
+
+    for idx, (cx, cy) in enumerate(centers):
+        radius = center_radius if idx == 0 else corner_radius
+        region = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+        mask[region] = 1.0
+
+    if feather > 0:
+        mask = cv2.GaussianBlur(mask, (0, 0), feather)
+        max_value = float(mask.max())
+        if max_value > 0:
+            mask /= max_value
+
+    return np.clip(mask, 0.0, 1.0)
+
+
+def apply_fft_center_corner_inverse(image: np.ndarray) -> dict:
+    """
+    Keep the center and four FFT corners, then reconstruct one image with IFFT.
+
+    Returns the original FFT magnitude with the fixed mask overlay, the masked
+    FFT magnitude, and the inverse FFT visualization.
+    """
+    if image is None:
+        raise ValueError("Input image is None.")
+
+    rows, cols = image.shape[:2]
+    mask = build_center_corner_fft_mask((rows, cols))
+    working = image.astype(np.float32)
+    reconstructed = np.zeros_like(working, dtype=np.float32)
+
+    selected_power = np.zeros((rows, cols), dtype=np.float32)
+    for ch in range(3):
+        fft_shifted = np.fft.fftshift(np.fft.fft2(working[:, :, ch]))
+        selected_fft = fft_shifted * mask
+        selected_power += np.log1p(np.abs(selected_fft)).astype(np.float32)
+        restored = np.real(np.fft.ifft2(np.fft.ifftshift(selected_fft))).astype(np.float32)
+        reconstructed[:, :, ch] = restored
+
+    # IFFT components can be signed; normalize per channel for a clear visual.
+    result = reconstructed - reconstructed.min(axis=(0, 1), keepdims=True)
+    denom = np.maximum(result.max(axis=(0, 1), keepdims=True), 1e-6)
+    result = np.clip((result / denom) * 255.0, 0, 255).astype(np.uint8)
+
+    orig_spectrum = compute_magnitude_spectrum(compute_fft(image)[2])
+    selected_spectrum = cv2.normalize(selected_power, None, 0, 255, cv2.NORM_MINMAX)
+    selected_spectrum = np.clip(selected_spectrum, 0, 255).astype(np.uint8)
+
+    return {
+        "processed": result,
+        "orig_spectrum": overlay_fft_mask(orig_spectrum, mask),
+        "proc_spectrum": overlay_fft_mask(selected_spectrum, mask),
+        "mask": mask,
+        "band": "center_corners",
+    }
+
+
 def apply_fft_annular_filter(
     image: np.ndarray,
     intensity: float = 50,

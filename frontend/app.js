@@ -384,8 +384,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const fftPhaseOutputImg = document.getElementById('fftPhaseOutputImg');
     const fftPhaseOutputPlaceholder = document.getElementById('fftPhaseOutputPlaceholder');
     const fftInverseImg = document.getElementById('fftInverseImg');
-    const fftDifferenceImg = document.getElementById('fftDifferenceImg');
-    const fftDifferencePlaceholder = document.getElementById('fftDifferencePlaceholder');
     const API_BASE = 'http://127.0.0.1:8000';
 
     // Landmarks View (isolated)
@@ -1975,44 +1973,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- FFT LAB ANNULAR FREQUENCY SELECTION ---
-    const fftBandBtns = document.querySelectorAll('.fft-band-btn');
-    let currentFftBand = 'low';
+    // --- FFT LAB CENTER + CORNER FREQUENCY SELECTION ---
+    const fftCenterCornerBtn = document.getElementById('fftCenterCornerBtn');
 
-    fftBandBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            fftBandBtns.forEach(b => {
-                b.classList.remove('active');
-                b.style.background = 'transparent';
-            });
-            btn.classList.add('active');
-            btn.style.background = 'var(--surface-color)';
-            currentFftBand = btn.dataset.band || 'mid';
-            currentFftSelection = null;
-            drawAllFftBandOverlays(currentFftBand);
-            applyFftRegionArtifact(null, currentFftBand);
-        });
-    });
+    if (fftCenterCornerBtn) {
+        fftCenterCornerBtn.addEventListener('click', () => applyFftCenterCornerLab());
+    }
 
-    async function applyFftRegionArtifact(coords = null, band = currentFftBand) {
+    async function applyFftCenterCornerLab() {
         if (!uploadedFile || !currentOriginalImage) {
-            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Upload an image first, then choose an FFT frequency band.`;
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Upload an image first, then run FFT Lab.`;
             return;
         }
 
-        const idleText = i18n[currentLang]?.selectRegionOutput || 'Select a region to generate output';
+        const idleText = i18n[currentLang]?.selectRegionOutput || 'Run FFT Lab';
         const formData = new FormData();
         formData.append('image', uploadedFile);
         formData.append('intensity', intensitySlider.value);
-        formData.append('fft_band', band || 'mid');
-        if (coords) formData.append('mask_coords', JSON.stringify(coords));
 
         if (fftOutputPlaceholder) {
             fftOutputPlaceholder.style.display = 'block';
             fftOutputPlaceholder.textContent = 'Processing...';
         }
         if (fftInverseImg) fftInverseImg.style.display = 'none';
-        if (fftDifferenceImg) fftDifferenceImg.style.display = 'none';
         loadingOverlay.style.display = 'flex';
 
         try {
@@ -2033,11 +2016,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 fftInverseImg.style.display = 'block';
             }
             if (fftOutputPlaceholder) fftOutputPlaceholder.style.display = 'none';
-            if (fftDifferenceImg && payload.difference_b64) {
-                fftDifferenceImg.src = payload.difference_b64;
-                fftDifferenceImg.style.display = 'block';
-            }
-            if (fftDifferencePlaceholder) fftDifferencePlaceholder.style.display = 'none';
 
             updateMetricsFromApi(payload.metrics || { mse: 0, psnr: 0, ssim: 0 });
             setSpectrumImages(
@@ -2046,48 +2024,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 payload.orig_phase_b64 || null,
                 payload.proc_phase_b64 || null
             );
-            const resultBand = payload.fft_band || band || 'mid';
-            if (payload.selection_coords) {
-                currentFftSelection = payload.selection_coords;
-                drawAllFftBandOverlays(resultBand);
-            } else {
-                currentFftSelection = null;
-                drawAllFftBandOverlays(resultBand);
-            }
+            drawAllFftCenterCornerOverlays();
 
-            const bandLabel = resultBand.toUpperCase();
-            const summaryText = resultBand === 'selection'
-                ? 'FFT custom radial frequency band manipulated.'
-                : `FFT ${bandLabel} annular frequency band manipulated.`;
-            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>${summaryText}`;
-            addHistory(resultBand === 'selection' ? 'FFT Custom Radial Band' : `FFT ${bandLabel} Band`);
+            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>FFT center and corner frequency regions reconstructed with inverse FFT.`;
+            addHistory('FFT Center + Corners');
             if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
         } catch (err) {
-            console.error('[FFT Region] Error:', err);
+            console.error('[FFT Lab] Error:', err);
             if (fftOutputPlaceholder) {
                 fftOutputPlaceholder.style.display = 'block';
                 fftOutputPlaceholder.textContent = err.message || idleText;
             }
-            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message || 'FFT region processing failed.'}`;
+            analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>${err.message || 'FFT Lab processing failed.'}`;
         } finally {
             loadingOverlay.style.display = 'none';
         }
-    }
-
-    const fftBandRanges = {
-        low: [0.00, 0.18],
-        mid: [0.18, 0.42],
-        high: [0.42, 0.98],
-    };
-    let currentFftSelection = null;
-
-    function syncFftBandButtons(band) {
-        currentFftBand = band || 'mid';
-        fftBandBtns.forEach(btn => {
-            const active = btn.dataset.band === currentFftBand;
-            btn.classList.toggle('active', active);
-            btn.style.background = active ? 'var(--surface-color)' : 'transparent';
-        });
     }
 
     function resizeOverlayCanvas(canvas) {
@@ -2104,16 +2055,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return true;
     }
 
-    function drawBandOnCanvas(canvas, band) {
+    function drawCenterCornerOverlay(canvas) {
         if (!canvas) return;
         if (!resizeOverlayCanvas(canvas)) return;
         const ctx = canvas.getContext('2d');
-        const [innerRatio, outerRatio] = fftBandRanges[band] || fftBandRanges.mid;
-        const cx = canvas.width / 2;
-        const cy = canvas.height / 2;
-        const maxR = Math.min(canvas.width, canvas.height) * 0.47;
-        const inner = innerRatio * maxR;
-        const outer = outerRatio * maxR;
+        const base = Math.min(canvas.width, canvas.height);
+        const centerRadius = Math.max(10, base * 0.13);
+        const cornerRadius = Math.max(12, base * 0.16);
+        const points = [
+            [canvas.width / 2, canvas.height / 2, centerRadius],
+            [0, 0, cornerRadius],
+            [canvas.width, 0, cornerRadius],
+            [0, canvas.height, cornerRadius],
+            [canvas.width, canvas.height, cornerRadius],
+        ];
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.setLineDash([6, 5]);
@@ -2121,169 +2076,28 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.lineWidth = 2.5;
         ctx.shadowColor = 'rgba(0, 255, 204, 0.45)';
         ctx.shadowBlur = 6;
-        ctx.beginPath();
-        ctx.arc(cx, cy, outer, 0, Math.PI * 2);
-        ctx.stroke();
-        if (inner > 1) {
+        points.forEach(([x, y, radius]) => {
             ctx.beginPath();
-            ctx.arc(cx, cy, inner, 0, Math.PI * 2);
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
             ctx.stroke();
-        }
+        });
         ctx.setLineDash([]);
         ctx.shadowBlur = 0;
         ctx.fillStyle = '#00ffcc';
-        ctx.beginPath();
-        ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    function drawAnnularSelectionOnCanvas(canvas, selection) {
-        if (!canvas || !selection) return;
-        if (!resizeOverlayCanvas(canvas)) return;
-        const ctx = canvas.getContext('2d');
-        const cx = canvas.width / 2;
-        const cy = canvas.height / 2;
-        const maxR = Math.min(canvas.width, canvas.height) * 0.47;
-        const selCx = (selection.x + selection.w / 2) * canvas.width;
-        const selCy = (selection.y + selection.h / 2) * canvas.height;
-        const selectedRadius = Math.hypot(selCx - cx, selCy - cy);
-        const thickness = Math.max(
-            Math.max(canvas.width, canvas.height) * Math.max(selection.w, selection.h) * 0.45,
-            maxR * 0.045
-        );
-        const inner = Math.max(0, selectedRadius - thickness);
-        const outer = Math.min(maxR * 0.98, selectedRadius + thickness);
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.setLineDash([6, 5]);
-        ctx.strokeStyle = '#00ffcc';
-        ctx.lineWidth = 2.5;
-        ctx.shadowColor = 'rgba(0, 255, 204, 0.45)';
-        ctx.shadowBlur = 6;
-        ctx.beginPath();
-        ctx.arc(cx, cy, outer, 0, Math.PI * 2);
-        ctx.stroke();
-        if (inner > 1) {
+        points.forEach(([x, y]) => {
             ctx.beginPath();
-            ctx.arc(cx, cy, inner, 0, Math.PI * 2);
-            ctx.stroke();
-        }
-        ctx.setLineDash([]);
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = '#00ffcc';
-        ctx.beginPath();
-        ctx.arc(selCx, selCy, 3, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    function drawAllFftBandOverlays(band = currentFftBand) {
-        if (currentFftSelection) {
-            drawAllFftAnnularSelections(currentFftSelection);
-            return;
-        }
-        ['fftSelectionCanvas', 'fftProcSelectionCanvas', 'fftInverseSelectionCanvas', 'fftDifferenceSelectionCanvas']
-            .forEach(id => drawBandOnCanvas(document.getElementById(id), band));
-    }
-
-    function bandFromCanvasClick(canvas, event) {
-        if (!resizeOverlayCanvas(canvas)) return currentFftBand;
-        const rect = canvas.getBoundingClientRect();
-        const x = event.clientX - rect.left;
-        const y = event.clientY - rect.top;
-        const cx = canvas.width / 2;
-        const cy = canvas.height / 2;
-        const maxR = Math.min(canvas.width, canvas.height) * 0.47;
-        const radiusRatio = Math.hypot(x - cx, y - cy) / Math.max(maxR, 1);
-        if (radiusRatio <= fftBandRanges.low[1]) return 'low';
-        if (radiusRatio <= fftBandRanges.mid[1]) return 'mid';
-        return 'high';
-    }
-
-    function setupFftBandCanvas(canvasId) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
-        if (canvasId !== 'fftSelectionCanvas') {
-            canvas.addEventListener('click', (event) => {
-                currentFftSelection = null;
-                const band = bandFromCanvasClick(canvas, event);
-                syncFftBandButtons(band);
-                drawAllFftBandOverlays(band);
-                applyFftRegionArtifact(null, band);
-            });
-        }
-        window.addEventListener('resize', () => drawBandOnCanvas(canvas, currentFftBand));
-        drawBandOnCanvas(canvas, currentFftBand);
-    }
-
-    ['fftSelectionCanvas', 'fftProcSelectionCanvas', 'fftInverseSelectionCanvas', 'fftDifferenceSelectionCanvas']
-        .forEach(setupFftBandCanvas);
-
-    function drawAllFftAnnularSelections(selection) {
-        ['fftSelectionCanvas', 'fftProcSelectionCanvas', 'fftInverseSelectionCanvas', 'fftDifferenceSelectionCanvas']
-            .forEach(id => drawAnnularSelectionOnCanvas(document.getElementById(id), selection));
-    }
-
-    function setupFftRegionDrag() {
-        const canvas = document.getElementById('fftSelectionCanvas');
-        if (!canvas) return;
-        let dragging = false;
-        let start = null;
-
-        canvas.addEventListener('mousedown', (event) => {
-            if (!resizeOverlayCanvas(canvas)) return;
-            const rect = canvas.getBoundingClientRect();
-            start = {
-                x: event.clientX - rect.left,
-                y: event.clientY - rect.top,
-            };
-            dragging = true;
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fill();
         });
-
-        canvas.addEventListener('mousemove', (event) => {
-            if (!dragging || !start) return;
-            const rect = canvas.getBoundingClientRect();
-            const endX = event.clientX - rect.left;
-            const endY = event.clientY - rect.top;
-            const x = Math.min(start.x, endX);
-            const y = Math.min(start.y, endY);
-            const w = Math.abs(endX - start.x);
-            const h = Math.abs(endY - start.y);
-            drawAnnularSelectionOnCanvas(canvas, {
-                x: x / Math.max(canvas.width, 1),
-                y: y / Math.max(canvas.height, 1),
-                w: w / Math.max(canvas.width, 1),
-                h: h / Math.max(canvas.height, 1),
-            });
-        });
-
-        function finishDrag(event) {
-            if (!dragging || !start) return;
-            dragging = false;
-            const rect = canvas.getBoundingClientRect();
-            const endX = event.clientX - rect.left;
-            const endY = event.clientY - rect.top;
-            const x = Math.min(start.x, endX);
-            const y = Math.min(start.y, endY);
-            const w = Math.abs(endX - start.x);
-            const h = Math.abs(endY - start.y);
-            start = null;
-
-            if (w < 8 || h < 8) return;
-            currentFftSelection = {
-                x: x / Math.max(canvas.width, 1),
-                y: y / Math.max(canvas.height, 1),
-                w: w / Math.max(canvas.width, 1),
-                h: h / Math.max(canvas.height, 1),
-            };
-            drawAllFftAnnularSelections(currentFftSelection);
-            applyFftRegionArtifact(currentFftSelection, 'selection');
-        }
-
-        canvas.addEventListener('mouseup', finishDrag);
-        canvas.addEventListener('mouseleave', finishDrag);
     }
 
-    setupFftRegionDrag();
+    function drawAllFftCenterCornerOverlays() {
+        ['fftSelectionCanvas', 'fftProcSelectionCanvas', 'fftInverseSelectionCanvas']
+            .forEach(id => drawCenterCornerOverlay(document.getElementById(id)));
+    }
+
+    window.addEventListener('resize', drawAllFftCenterCornerOverlays);
+    drawAllFftCenterCornerOverlays();
 
     // =========================================================================
     // CAMERA MODULE — Browser-side webcam + Live processing via REST API
