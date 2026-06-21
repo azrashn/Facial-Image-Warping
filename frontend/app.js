@@ -170,6 +170,8 @@ document.addEventListener('DOMContentLoaded', () => {
             kalpliStyle: "Kalpli Gözlük",
             thuglifeStyle: "8-Bit (Thug Life)",
             yuvarlakStyle: "Klasik Yuvarlak",
+            cateye2dStyle: "Kedi Gözü (2D)",
+            wayfarer2dStyle: "Wayfarer (2D)",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -292,6 +294,8 @@ document.addEventListener('DOMContentLoaded', () => {
             kalpliStyle: "Heart Glasses",
             thuglifeStyle: "8-Bit (Thug Life)",
             yuvarlakStyle: "Classic Round",
+            cateye2dStyle: "Cat Eye (2D)",
+            wayfarer2dStyle: "Wayfarer (2D)",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -1684,6 +1688,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     kalpli: i18n[currentLang]?.kalpliStyle || 'Heart Glasses',
                     thuglife: i18n[currentLang]?.thuglifeStyle || '8-Bit (Thug Life)',
                     yuvarlak: i18n[currentLang]?.yuvarlakStyle || 'Classic Round',
+                    cateye2d: i18n[currentLang]?.cateye2dStyle || 'Cat Eye (2D)',
+                    wayfarer2d: i18n[currentLang]?.wayfarer2dStyle || 'Wayfarer (2D)',
                 };
                 const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);

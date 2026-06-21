@@ -18,7 +18,7 @@ import numpy as np
 
 # --- EMA Stabilization for Live Stream ---
 class GlassesEMATracker:
-    def __init__(self, alpha=0.5):
+    def __init__(self, alpha=0.85):
         self.alpha = alpha
         self.state = None
         self.last_model = None
@@ -47,7 +47,28 @@ class GlassesEMATracker:
         self.state = (smooth_cx, smooth_cy, smooth_angle, smooth_tw)
         return self.state
 
-_ema_tracker = GlassesEMATracker(alpha=0.5)
+_ema_tracker = GlassesEMATracker(alpha=0.85)
+
+class GlassesPointsEMATracker:
+    def __init__(self, alpha=0.85):
+        self.alpha = alpha
+        self.state = None
+        self.last_model = None
+        
+    def update(self, model_id, pts, is_live):
+        if not is_live:
+            self.state = None
+            self.last_model = None
+            return pts
+        if self.state is None or self.last_model != model_id:
+            self.state = pts
+            self.last_model = model_id
+            return self.state
+        
+        self.state = self.alpha * pts + (1.0 - self.alpha) * self.state
+        return self.state
+
+_pts_ema_tracker = GlassesPointsEMATracker(alpha=0.85)
 
 _GLASSES_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "assets", "glasses")
@@ -75,6 +96,16 @@ _YUVARLAK_ASSET_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "assets", "yuvarlakpng.png")
 )
 _YUVARLAK_CACHE: np.ndarray | None = None
+
+_CATEYE2D_ASSET_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "assets", "cateye.png")
+)
+_CATEYE2D_CACHE: np.ndarray | None = None
+
+_WAYFARER2D_ASSET_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "assets", "wayfarer.png")
+)
+_WAYFARER2D_CACHE: np.ndarray | None = None
 
 
 def _lm_px(landmarks, idx: int, w: int, h: int):
@@ -739,94 +770,65 @@ def _draw_round(image, landmarks, w, h, is_live=False):
     return image, overlay, mask
 
 
-# ===================================================================
-# MODEL: Sapsiz (Armless / Morpheus)
-# ===================================================================
-SAPSIZ_SCALE_FACTOR = 1.5
-SAPSIZ_Y_OFFSET = -0.1 # positive = downward (fraction of inter-eye distance)
+def _render_2d_asset_rigid(image, sprite, landmarks, w, h, model_id, scale_factor, y_offset, is_live):
+    left_eye_outer = _lm_px(landmarks, 33, w, h)
+    right_eye_outer = _lm_px(landmarks, 263, w, h)
+    nose_bridge = _lm_px(landmarks, 168, w, h)
 
-
-def _sprite_sapsiz_ar(image, landmarks, w, h, is_live=False):
-    """
-    Overlay the armless (sapsiz / Morpheus) glasses sprite.
-
-    Uses the same high-quality MediaPipe math as the cat-eye sprite pipeline:
-      * Centre / anchor: landmark 168 (nose bridge)
-      * Width & angle  : Euclidean distance + atan2 between landmark 33
-                         (left outer eye) and landmark 263 (right outer eye)
-    """
-    global _SAPSIZ_CACHE  # noqa: PLW0603
-
-    # --- load & cache the BGRA sprite once ---
-    if _SAPSIZ_CACHE is None:
-        print(f"DEBUG: Attempting to load sapsiz asset from -> {_SAPSIZ_ASSET_PATH}")
-        loaded = _load_rgba_png(_SAPSIZ_ASSET_PATH)
-        if loaded is None:
-            # graceful fallback: render the procedural round model
-            return _draw_round(image, landmarks, w, h, is_live=is_live)
-        _SAPSIZ_CACHE = loaded
-    sprite = _SAPSIZ_CACHE
-
-    # --- landmark extraction ---
-    left_eye_outer = _lm_px(landmarks, 33, w, h)     # left outer eye corner
-    right_eye_outer = _lm_px(landmarks, 263, w, h)   # right outer eye corner
-    nose_bridge = _lm_px(landmarks, 168, w, h)        # nose bridge anchor
-
-    # --- geometry: width, angle, centre ---
     dx = right_eye_outer[0] - left_eye_outer[0]
     dy = right_eye_outer[1] - left_eye_outer[1]
     eye_dist = math.sqrt(dx * dx + dy * dy)
     angle = math.atan2(dy, dx)
 
-    target_width_raw = eye_dist * SAPSIZ_SCALE_FACTOR
+    target_width_raw = eye_dist * scale_factor
     
-    y_off = eye_dist * SAPSIZ_Y_OFFSET
+    y_off = eye_dist * y_offset
     cx_raw = nose_bridge[0] + math.sin(angle) * y_off
     cy_raw = nose_bridge[1] - math.cos(angle) * y_off
 
-    cx, cy, angle, target_width_raw = _ema_tracker.update("sapsiz", cx_raw, cy_raw, angle, target_width_raw, is_live)
+    cx, cy, angle, target_width_raw = _ema_tracker.update(model_id, cx_raw, cy_raw, angle, target_width_raw, is_live)
     target_width = int(target_width_raw)
 
     if target_width < 4:
         return image.copy(), np.zeros_like(image), np.zeros((h, w), dtype=np.uint8)
 
-    # --- scale sprite to target width (preserve aspect ratio) ---
     sh, sw = sprite.shape[:2]
     scale = target_width / sw
     new_w = target_width
     new_h = max(1, int(sh * scale))
     resized = cv2.resize(sprite, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-    # --- build rotation matrix around the sprite centre ---
     angle_deg = math.degrees(angle)
     rot_mat = cv2.getRotationMatrix2D((new_w / 2.0, new_h / 2.0), -angle_deg, 1.0)
 
-    # shift rotation centre to the face-space placement point
     rot_mat[0, 2] += cx - new_w / 2.0
     rot_mat[1, 2] += cy - new_h / 2.0
 
-    # --- warp BGR + alpha separately ---
     bgr_src = resized[:, :, :3]
     alpha_src = resized[:, :, 3] if resized.shape[2] == 4 else np.full((new_h, new_w), 255, dtype=np.uint8)
 
-    warped_bgr = cv2.warpAffine(
-        bgr_src, rot_mat, (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0),
-    )
-    warped_alpha = cv2.warpAffine(
-        alpha_src, rot_mat, (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
-    )
+    warped_bgr = cv2.warpAffine(bgr_src, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+    warped_alpha = cv2.warpAffine(alpha_src, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
     overlay = np.zeros_like(image)
     mask = np.zeros((h, w), dtype=np.uint8)
     overlay[:] = warped_bgr
     mask[:] = warped_alpha
     return image, overlay, mask
+
+
+# ===================================================================
+# MODEL: Sapsiz (Armless / Morpheus)
+# ===================================================================
+SAPSIZ_SCALE_FACTOR = 1.5
+SAPSIZ_Y_OFFSET = -0.1
+
+def _sprite_sapsiz_ar(image, landmarks, w, h, is_live=False):
+    global _SAPSIZ_CACHE
+    if _SAPSIZ_CACHE is None:
+        _SAPSIZ_CACHE = _load_rgba_png(_SAPSIZ_ASSET_PATH)
+        if _SAPSIZ_CACHE is None: return _draw_round(image, landmarks, w, h, is_live=is_live)
+    return _render_2d_asset_rigid(image, _SAPSIZ_CACHE, landmarks, w, h, "sapsiz", SAPSIZ_SCALE_FACTOR, SAPSIZ_Y_OFFSET, is_live)
 
 
 # ===================================================================
@@ -836,59 +838,11 @@ KALPLI_SCALE_FACTOR = 1.8
 KALPLI_Y_OFFSET = -0.1
 
 def _sprite_kalpli_ar(image, landmarks, w, h, is_live=False):
-    global _KALPLI_CACHE  # noqa: PLW0603
-
+    global _KALPLI_CACHE
     if _KALPLI_CACHE is None:
-        loaded = _load_rgba_png(_KALPLI_ASSET_PATH)
-        if loaded is None:
-            return _draw_round(image, landmarks, w, h, is_live=is_live)
-        _KALPLI_CACHE = loaded
-    sprite = _KALPLI_CACHE
-
-    left_eye_outer = _lm_px(landmarks, 33, w, h)
-    right_eye_outer = _lm_px(landmarks, 263, w, h)
-    nose_bridge = _lm_px(landmarks, 168, w, h)
-
-    dx = right_eye_outer[0] - left_eye_outer[0]
-    dy = right_eye_outer[1] - left_eye_outer[1]
-    eye_dist = math.sqrt(dx * dx + dy * dy)
-    angle = math.atan2(dy, dx)
-
-    target_width_raw = eye_dist * KALPLI_SCALE_FACTOR
-    
-    y_off = eye_dist * KALPLI_Y_OFFSET
-    cx_raw = nose_bridge[0] + math.sin(angle) * y_off
-    cy_raw = nose_bridge[1] - math.cos(angle) * y_off
-
-    cx, cy, angle, target_width_raw = _ema_tracker.update("kalpli", cx_raw, cy_raw, angle, target_width_raw, is_live)
-    target_width = int(target_width_raw)
-
-    if target_width < 4:
-        return image.copy(), np.zeros_like(image), np.zeros((h, w), dtype=np.uint8)
-
-    sh, sw = sprite.shape[:2]
-    scale = target_width / sw
-    new_w = target_width
-    new_h = max(1, int(sh * scale))
-    resized = cv2.resize(sprite, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    angle_deg = math.degrees(angle)
-    rot_mat = cv2.getRotationMatrix2D((new_w / 2.0, new_h / 2.0), -angle_deg, 1.0)
-
-    rot_mat[0, 2] += cx - new_w / 2.0
-    rot_mat[1, 2] += cy - new_h / 2.0
-
-    bgr_src = resized[:, :, :3]
-    alpha_src = resized[:, :, 3] if resized.shape[2] == 4 else np.full((new_h, new_w), 255, dtype=np.uint8)
-
-    warped_bgr = cv2.warpAffine(bgr_src, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-    warped_alpha = cv2.warpAffine(alpha_src, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-    overlay = np.zeros_like(image)
-    mask = np.zeros((h, w), dtype=np.uint8)
-    overlay[:] = warped_bgr
-    mask[:] = warped_alpha
-    return image, overlay, mask
+        _KALPLI_CACHE = _load_rgba_png(_KALPLI_ASSET_PATH)
+        if _KALPLI_CACHE is None: return _draw_round(image, landmarks, w, h, is_live=is_live)
+    return _render_2d_asset_rigid(image, _KALPLI_CACHE, landmarks, w, h, "kalpli", KALPLI_SCALE_FACTOR, KALPLI_Y_OFFSET, is_live)
 
 
 # ===================================================================
@@ -898,59 +852,11 @@ THUGLIFE_SCALE_FACTOR = 1.8
 THUGLIFE_Y_OFFSET = -0.1
 
 def _sprite_thuglife_ar(image, landmarks, w, h, is_live=False):
-    global _THUGLIFE_CACHE  # noqa: PLW0603
-
+    global _THUGLIFE_CACHE
     if _THUGLIFE_CACHE is None:
-        loaded = _load_rgba_png(_THUGLIFE_ASSET_PATH)
-        if loaded is None:
-            return _draw_round(image, landmarks, w, h, is_live=is_live)
-        _THUGLIFE_CACHE = loaded
-    sprite = _THUGLIFE_CACHE
-
-    left_eye_outer = _lm_px(landmarks, 33, w, h)
-    right_eye_outer = _lm_px(landmarks, 263, w, h)
-    nose_bridge = _lm_px(landmarks, 168, w, h)
-
-    dx = right_eye_outer[0] - left_eye_outer[0]
-    dy = right_eye_outer[1] - left_eye_outer[1]
-    eye_dist = math.sqrt(dx * dx + dy * dy)
-    angle = math.atan2(dy, dx)
-
-    target_width_raw = eye_dist * THUGLIFE_SCALE_FACTOR
-
-    y_off = eye_dist * THUGLIFE_Y_OFFSET
-    cx_raw = nose_bridge[0] + math.sin(angle) * y_off
-    cy_raw = nose_bridge[1] - math.cos(angle) * y_off
-
-    cx, cy, angle, target_width_raw = _ema_tracker.update("thuglife", cx_raw, cy_raw, angle, target_width_raw, is_live)
-    target_width = int(target_width_raw)
-    
-    if target_width < 4:
-        return image.copy(), np.zeros_like(image), np.zeros((h, w), dtype=np.uint8)
-
-    sh, sw = sprite.shape[:2]
-    scale = target_width / sw
-    new_w = target_width
-    new_h = max(1, int(sh * scale))
-    resized = cv2.resize(sprite, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    angle_deg = math.degrees(angle)
-    rot_mat = cv2.getRotationMatrix2D((new_w / 2.0, new_h / 2.0), -angle_deg, 1.0)
-
-    rot_mat[0, 2] += cx - new_w / 2.0
-    rot_mat[1, 2] += cy - new_h / 2.0
-
-    bgr_src = resized[:, :, :3]
-    alpha_src = resized[:, :, 3] if resized.shape[2] == 4 else np.full((new_h, new_w), 255, dtype=np.uint8)
-
-    warped_bgr = cv2.warpAffine(bgr_src, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-    warped_alpha = cv2.warpAffine(alpha_src, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-    overlay = np.zeros_like(image)
-    mask = np.zeros((h, w), dtype=np.uint8)
-    overlay[:] = warped_bgr
-    mask[:] = warped_alpha
-    return image, overlay, mask
+        _THUGLIFE_CACHE = _load_rgba_png(_THUGLIFE_ASSET_PATH)
+        if _THUGLIFE_CACHE is None: return _draw_round(image, landmarks, w, h, is_live=is_live)
+    return _render_2d_asset_rigid(image, _THUGLIFE_CACHE, landmarks, w, h, "thuglife", THUGLIFE_SCALE_FACTOR, THUGLIFE_Y_OFFSET, is_live)
 
 
 # ===================================================================
@@ -960,59 +866,39 @@ YUVARLAK_SCALE_FACTOR = 1.5
 YUVARLAK_Y_OFFSET = -0.1
 
 def _sprite_yuvarlak_ar(image, landmarks, w, h, is_live=False):
-    global _YUVARLAK_CACHE  # noqa: PLW0603
-
+    global _YUVARLAK_CACHE
     if _YUVARLAK_CACHE is None:
-        loaded = _load_rgba_png(_YUVARLAK_ASSET_PATH)
-        if loaded is None:
-            return _draw_round(image, landmarks, w, h, is_live=is_live)
-        _YUVARLAK_CACHE = loaded
-    sprite = _YUVARLAK_CACHE
+        _YUVARLAK_CACHE = _load_rgba_png(_YUVARLAK_ASSET_PATH)
+        if _YUVARLAK_CACHE is None: return _draw_round(image, landmarks, w, h, is_live=is_live)
+    return _render_2d_asset_rigid(image, _YUVARLAK_CACHE, landmarks, w, h, "yuvarlak", YUVARLAK_SCALE_FACTOR, YUVARLAK_Y_OFFSET, is_live)
 
-    left_eye_outer = _lm_px(landmarks, 33, w, h)
-    right_eye_outer = _lm_px(landmarks, 263, w, h)
-    nose_bridge = _lm_px(landmarks, 168, w, h)
 
-    dx = right_eye_outer[0] - left_eye_outer[0]
-    dy = right_eye_outer[1] - left_eye_outer[1]
-    eye_dist = math.sqrt(dx * dx + dy * dy)
-    angle = math.atan2(dy, dx)
+# ===================================================================
+# MODEL: Cat Eye 2D
+# ===================================================================
+CATEYE2D_SCALE_FACTOR = 1.6
+CATEYE2D_Y_OFFSET = -0.1
 
-    target_width_raw = eye_dist * YUVARLAK_SCALE_FACTOR
-    
-    y_off = eye_dist * YUVARLAK_Y_OFFSET
-    cx_raw = nose_bridge[0] + math.sin(angle) * y_off
-    cy_raw = nose_bridge[1] - math.cos(angle) * y_off
+def _sprite_cateye2d_ar(image, landmarks, w, h, is_live=False):
+    global _CATEYE2D_CACHE
+    if _CATEYE2D_CACHE is None:
+        _CATEYE2D_CACHE = _load_rgba_png(_CATEYE2D_ASSET_PATH)
+        if _CATEYE2D_CACHE is None: return _draw_round(image, landmarks, w, h, is_live=is_live)
+    return _render_2d_asset_rigid(image, _CATEYE2D_CACHE, landmarks, w, h, "cateye2d", CATEYE2D_SCALE_FACTOR, CATEYE2D_Y_OFFSET, is_live)
 
-    cx, cy, angle, target_width_raw = _ema_tracker.update("yuvarlak", cx_raw, cy_raw, angle, target_width_raw, is_live)
-    target_width = int(target_width_raw)
 
-    if target_width < 4:
-        return image.copy(), np.zeros_like(image), np.zeros((h, w), dtype=np.uint8)
+# ===================================================================
+# MODEL: Wayfarer 2D
+# ===================================================================
+WAYFARER2D_SCALE_FACTOR = 2.4
+WAYFARER2D_Y_OFFSET = -0.1
 
-    sh, sw = sprite.shape[:2]
-    scale = target_width / sw
-    new_w = target_width
-    new_h = max(1, int(sh * scale))
-    resized = cv2.resize(sprite, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    angle_deg = math.degrees(angle)
-    rot_mat = cv2.getRotationMatrix2D((new_w / 2.0, new_h / 2.0), -angle_deg, 1.0)
-
-    rot_mat[0, 2] += cx - new_w / 2.0
-    rot_mat[1, 2] += cy - new_h / 2.0
-
-    bgr_src = resized[:, :, :3]
-    alpha_src = resized[:, :, 3] if resized.shape[2] == 4 else np.full((new_h, new_w), 255, dtype=np.uint8)
-
-    warped_bgr = cv2.warpAffine(bgr_src, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-    warped_alpha = cv2.warpAffine(alpha_src, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-    overlay = np.zeros_like(image)
-    mask = np.zeros((h, w), dtype=np.uint8)
-    overlay[:] = warped_bgr
-    mask[:] = warped_alpha
-    return image, overlay, mask
+def _sprite_wayfarer2d_ar(image, landmarks, w, h, is_live=False):
+    global _WAYFARER2D_CACHE
+    if _WAYFARER2D_CACHE is None:
+        _WAYFARER2D_CACHE = _load_rgba_png(_WAYFARER2D_ASSET_PATH)
+        if _WAYFARER2D_CACHE is None: return _draw_round(image, landmarks, w, h, is_live=is_live)
+    return _render_2d_asset_rigid(image, _WAYFARER2D_CACHE, landmarks, w, h, "wayfarer2d", WAYFARER2D_SCALE_FACTOR, WAYFARER2D_Y_OFFSET, is_live)
 
 
 MODEL_ALIASES = {
@@ -1026,6 +912,9 @@ MODEL_ALIASES = {
     "kalpli": "kalpli",
     "thuglife": "thuglife",
     "yuvarlak": "yuvarlak",
+    "cateye": "cateye2d",
+    "cateye2d": "cateye2d",
+    "wayfarer2d": "wayfarer2d",
 }
 
 
@@ -1041,6 +930,8 @@ MODEL_DISPATCH = {
     "kalpli": _sprite_kalpli_ar,
     "thuglife": _sprite_thuglife_ar,
     "yuvarlak": _sprite_yuvarlak_ar,
+    "cateye2d": _sprite_cateye2d_ar,
+    "wayfarer2d": _sprite_wayfarer2d_ar,
 }
 
 
