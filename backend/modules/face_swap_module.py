@@ -120,11 +120,11 @@ class FaceSwapEngine:
         )
         src_pts = self.source_landmarks[self.used_indices].astype(np.float32)
         try:
-            tri = Delaunay(src_pts)
+            tri = Delaunay(src_pts[:, :2])
             self.source_triangles = tri.simplices
             self.source_triangle_meta = []
             for ia, ib, ic in self.source_triangles:
-                src_tri = np.array([src_pts[ia], src_pts[ib], src_pts[ic]], dtype=np.float32).reshape(3, 2)
+                src_tri = np.array([src_pts[ia][:2], src_pts[ib][:2], src_pts[ic][:2]], dtype=np.float32).reshape(3, 2)
                 self.source_triangle_meta.append(TriangleSourceMeta(src_tri=src_tri))
         except Exception as exc:
             raise FaceSwapError(f"Delaunay triangulation failed on source face: {exc}")
@@ -183,11 +183,11 @@ class FaceSwapEngine:
         session.prev_landmarks = target_landmarks.copy()
 
         try:
-            src_pts = self.source_landmarks[self.used_indices].astype(np.float32)
-            dst_pts = target_landmarks[self.used_indices].astype(np.float32)
+            src_pts = self.source_landmarks[self.used_indices][:, :2].astype(np.float32)
+            dst_pts = target_landmarks[self.used_indices][:, :2].astype(np.float32)
         except IndexError:
             return target_frame
-        dst_oval_pts = np.array([target_landmarks[i] for i in FACE_OVAL_INDICES if i < len(target_landmarks)], dtype=np.int32)
+        dst_oval_pts = np.array([target_landmarks[i][:2] for i in FACE_OVAL_INDICES if i < len(target_landmarks)], dtype=np.int32)
         if len(dst_oval_pts) < 3:
             return target_frame
 
@@ -276,7 +276,7 @@ class FaceSwapEngine:
 
         try:
             n_lm = len(target_landmarks)
-            inner_lip_pts = np.array([target_landmarks[i] for i in INNER_LIP_INDICES if i < n_lm], dtype=np.int32)
+            inner_lip_pts = np.array([target_landmarks[i][:2] for i in INNER_LIP_INDICES if i < n_lm], dtype=np.int32)
             if len(inner_lip_pts) >= 10:
                 inner_lip_roi = inner_lip_pts - np.array([x_min, y_min], dtype=np.int32)
                 mouth_mask = np.zeros((h_roi, w_roi), dtype=np.uint8)

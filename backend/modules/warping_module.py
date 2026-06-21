@@ -77,7 +77,7 @@ def _estimate_head_pose(lm: np.ndarray, w: int, h: int) -> tuple[float, float, f
         dtype=np.float32,
     )
     image_points = np.array(
-        [lm[1], lm[152], lm[33], lm[263], lm[61], lm[291]], dtype=np.float32
+        [lm[1][:2], lm[152][:2], lm[33][:2], lm[263][:2], lm[61][:2], lm[291][:2]], dtype=np.float32
     )
     focal = float(max(w, h))
     cam = np.array([[focal, 0, w / 2.0], [0, focal, h / 2.0], [0, 0, 1]], dtype=np.float32)
@@ -456,7 +456,7 @@ def _prepare_warp(
     try:
         dst = src_lm + deltas
         height, width = image_bgr.shape[:2]
-        corners = _corners(width, height)
+        corners = _corners(width, height)[:, :2]
         src_all = np.vstack([src_lm, corners])
         dst_all = np.vstack([dst, corners])
         return geometric_warp(image_bgr, src_all, dst_all)
@@ -497,6 +497,8 @@ def apply_smile(
     """
     try:
         lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
+        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+            lm = lm[:, :2]
         if lm is None:
             return image_bgr
             
@@ -575,6 +577,8 @@ def apply_eyebrow_raise(
     """
     try:
         lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
+        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+            lm = lm[:, :2]
         if lm is None:
             return image_bgr
         strength = _clamp_intensity(intensity)
@@ -634,6 +638,8 @@ def apply_lip_widen(
     """
     try:
         lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
+        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+            lm = lm[:, :2]
         if lm is None:
             return image_bgr
             
@@ -674,6 +680,8 @@ def apply_face_slim(
     """
     try:
         lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
+        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+            lm = lm[:, :2]
         if lm is None:
             return image_bgr
         strength = _clamp_intensity(intensity)
@@ -765,6 +773,8 @@ def apply_eye_scaling(
     """
     try:
         lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
+        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+            lm = lm[:, :2]
         if lm is None:
             return image_bgr
 
@@ -892,6 +902,8 @@ def apply_beard(
     """
     try:
         lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
+        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+            lm = lm[:, :2]
         if lm is None:
             return image_bgr
 

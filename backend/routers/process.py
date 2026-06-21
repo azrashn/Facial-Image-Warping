@@ -1187,10 +1187,15 @@ def _generate_warp_anchors(
     # ── 4. Remove anchors too close to any face landmark ──
     if len(anchors) > 0 and len(face_lm) > 0:
         from scipy.spatial import cKDTree
-        tree = cKDTree(face_lm)
+        tree = cKDTree(face_lm[:, :2])  # Match 2D anchors
         dists, _ = tree.query(anchors)
         keep = dists > 8.0          # keep only anchors > 8 px from any lm
         anchors = anchors[keep]
+
+    # ── 5. Ensure matching dimensions with face_lm ──
+    if len(anchors) > 0 and face_lm.shape[1] >= 3:
+        z_col = np.zeros((len(anchors), 1), dtype=np.float32)
+        anchors = np.hstack([anchors, z_col])
 
     return anchors
 
@@ -1463,11 +1468,16 @@ def _face_pose_axes(lm: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray,
     x_axis = right_eye - left_eye
     x_norm = float(np.linalg.norm(x_axis))
     if x_norm < 1.0:
-        x_axis = np.array([1.0, 0.0], dtype=np.float32)
+        x_axis = np.zeros_like(left_eye, dtype=np.float32)
+        if len(x_axis) > 0: x_axis[0] = 1.0
     else:
         x_axis = x_axis / x_norm
 
-    y_axis = np.array([-x_axis[1], x_axis[0]], dtype=np.float32)
+    y_axis = np.zeros_like(x_axis, dtype=np.float32)
+    if len(y_axis) > 1:
+        y_axis[0] = -x_axis[1]
+        y_axis[1] = x_axis[0]
+    
     if float(np.dot(y_axis, chin - ((left_eye + right_eye) * 0.5))) < 0:
         y_axis = -y_axis
 
@@ -1657,7 +1667,7 @@ def _apply_robot(image: np.ndarray, landmarks: np.ndarray | None = None) -> np.n
 
     for ear_idx, tilt in antenna_specs:
         if ear_idx < len(dst):
-            ex, ey = dst[ear_idx].astype(int)
+            ex, ey = dst[ear_idx][:2].astype(int)
             antenna_len = int(face_sz * 0.42)
             tip = dst[ear_idx] - y_axis * antenna_len + x_axis * (tilt * face_sz)
             tip_x = int(np.clip(tip[0], 0, w - 1))

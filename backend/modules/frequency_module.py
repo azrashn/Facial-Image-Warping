@@ -1396,6 +1396,9 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.
             from backend.modules.warping_module import detect_face_landmarks
         lo_landmarks = detect_face_landmarks(lo_image)
 
+    if getattr(lo_landmarks, "ndim", 0) == 2 and lo_landmarks.shape[1] >= 3:
+        lo_landmarks = lo_landmarks[:, :2]
+
     # ── 0. SAGGING & FACIAL MESH WARP ──────────────────────────────────
     lo_landmarks_warped = lo_landmarks
     if lo_landmarks is not None:
