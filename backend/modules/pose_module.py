@@ -32,7 +32,7 @@ def estimate_head_pose(landmarks: np.ndarray, width: int, height: int) -> PoseEs
         dtype=np.float32,
     )
     image_points = np.array(
-        [landmarks[1], landmarks[152], landmarks[33], landmarks[263], landmarks[61], landmarks[291]],
+        [landmarks[1][:2], landmarks[152][:2], landmarks[33][:2], landmarks[263][:2], landmarks[61][:2], landmarks[291][:2]],
         dtype=np.float32,
     )
 
