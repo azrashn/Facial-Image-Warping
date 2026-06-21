@@ -166,6 +166,10 @@ document.addEventListener('DOMContentLoaded', () => {
             squareStyle: "Kare Çerçeve",
             retroStyle: "Retro Browline",
             sportStyle: "Spor (Sarmal)",
+            sapsizStyle: "Sapsız (Morpheus)",
+            kalpliStyle: "Kalpli Gözlük",
+            thuglifeStyle: "8-Bit (Thug Life)",
+            yuvarlakStyle: "Klasik Yuvarlak",
             applyGlasses: "Gözlük Uygula",
             // Emoji Presets
             presetAlien: "Uzaylı",
@@ -284,6 +288,10 @@ document.addEventListener('DOMContentLoaded', () => {
             squareStyle: "Square Frame",
             retroStyle: "Retro Browline",
             sportStyle: "Sport Wraparound",
+            sapsizStyle: "Armless (Morpheus)",
+            kalpliStyle: "Heart Glasses",
+            thuglifeStyle: "8-Bit (Thug Life)",
+            yuvarlakStyle: "Classic Round",
             applyGlasses: "Apply Glasses",
             // Emoji Presets
             presetAlien: "Alien",
@@ -1672,6 +1680,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     square: i18n[currentLang]?.squareStyle || 'Square Frame',
                     retro: i18n[currentLang]?.retroStyle || 'Retro Browline',
                     sport: i18n[currentLang]?.sportStyle || 'Sport Wraparound',
+                    sapsiz: i18n[currentLang]?.sapsizStyle || 'Armless (Morpheus)',
+                    kalpli: i18n[currentLang]?.kalpliStyle || 'Heart Glasses',
+                    thuglife: i18n[currentLang]?.thuglifeStyle || '8-Bit (Thug Life)',
+                    yuvarlak: i18n[currentLang]?.yuvarlakStyle || 'Classic Round',
                 };
                 const glassesLabel = glassesLabelMap[glassesSelect.value] || glassesSelect.value;
                 addHistory(`Glasses: ${glassesLabel}`);
