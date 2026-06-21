@@ -332,7 +332,7 @@ def get_landmarks(image: np.ndarray) -> list[dict[str, float]]:
         if results and results.multi_face_landmarks:
             face = results.multi_face_landmarks[0]
             landmarks = [
-                {"x": round(float(lm.x), 6), "y": round(float(lm.y), 6)}
+                {"x": round(float(lm.x), 6), "y": round(float(lm.y), 6), "z": round(float(lm.z), 6)}
                 for lm in face.landmark[:FACEMESH_NUM_LANDMARKS]
             ]
 
@@ -352,7 +352,7 @@ def get_landmarks(image: np.ndarray) -> list[dict[str, float]]:
             if result.face_landmarks:
                 lm_list = result.face_landmarks[0]
                 landmarks = [
-                    {"x": round(float(p.x), 6), "y": round(float(p.y), 6)}
+                    {"x": round(float(p.x), 6), "y": round(float(p.y), 6), "z": round(float(p.z), 6)}
                     for p in lm_list[:FACEMESH_NUM_LANDMARKS]
                 ]
         except Exception as exc:

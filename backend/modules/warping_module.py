@@ -222,7 +222,7 @@ class PersistentFaceMesh:
         if not result.face_landmarks:
             return None
         lm_list = result.face_landmarks[0]
-        pts = np.array([[p.x * w, p.y * h] for p in lm_list], dtype=np.float32)
+        pts = np.array([[p.x * w, p.y * h, p.z * w] for p in lm_list], dtype=np.float32)
         if pts.shape[0] > 468:
             pts = pts[:468].copy()
         return pts
@@ -234,7 +234,7 @@ class PersistentFaceMesh:
         if not res.multi_face_landmarks:
             return None
         lm = res.multi_face_landmarks[0].landmark
-        return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+        return np.array([[p.x * w, p.y * h, p.z * w] for p in lm], dtype=np.float32)
 
     def close(self) -> None:
         """Release underlying detector resources."""
@@ -259,7 +259,7 @@ def _landmarks_via_tasks(image_bgr: np.ndarray, h: int, w: int) -> Optional[np.n
     if not result.face_landmarks:
         return None
     lm_list = result.face_landmarks[0]
-    pts = np.array([[p.x * w, p.y * h] for p in lm_list], dtype=np.float32)
+    pts = np.array([[p.x * w, p.y * h, p.z * w] for p in lm_list], dtype=np.float32)
     if pts.shape[0] > 468:
         pts = pts[:468].copy()
     return pts
@@ -275,7 +275,7 @@ def _stable_ema_landmarks(raw_pts: Optional[np.ndarray], h: int, w: int) -> Opti
         return None
 
     now = time.perf_counter()
-    face_scale = float(np.linalg.norm(raw_pts[133] - raw_pts[362])) if raw_pts.shape[0] > 362 else 0.0
+    face_scale = float(np.linalg.norm(raw_pts[133][:2] - raw_pts[362][:2])) if raw_pts.shape[0] > 362 else 0.0
     min_face_scale = max(min(h, w) * 0.06, 12.0)
     if face_scale < min_face_scale:
         # Confidence gating: likely unstable / no true face lock.
@@ -298,7 +298,7 @@ def _stable_ema_landmarks(raw_pts: Optional[np.ndarray], h: int, w: int) -> Opti
             return _LM_PREV_POINTS.copy()
 
         prev = _LM_PREV_POINTS
-        mean_motion = float(np.mean(np.linalg.norm(raw_pts - prev, axis=1)))
+        mean_motion = float(np.mean(np.linalg.norm(raw_pts[:, :2] - prev[:, :2], axis=1)))
         max_allowed_jump = max(face_scale * 0.35, 8.0)
         if mean_motion > max_allowed_jump:
             # Reject unstable frame and keep previous stable landmarks.
@@ -330,7 +330,7 @@ def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
         if not res.multi_face_landmarks:
             return None
         lm = res.multi_face_landmarks[0].landmark
-        raw_pts = np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+        raw_pts = np.array([[p.x * w, p.y * h, p.z * w] for p in lm], dtype=np.float32)
         return _stable_ema_landmarks(raw_pts, h, w)
 
     return _stable_ema_landmarks(_landmarks_via_tasks(image_bgr, h, w), h, w)
@@ -339,10 +339,10 @@ def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
 def _corners(width: int, height: int) -> np.ndarray:
     return np.array(
         [
-            [0.0, 0.0],
-            [width - 1.0, 0.0],
-            [0.0, height - 1.0],
-            [width - 1.0, height - 1.0],
+            [0.0, 0.0, 0.0],
+            [width - 1.0, 0.0, 0.0],
+            [0.0, height - 1.0, 0.0],
+            [width - 1.0, height - 1.0, 0.0],
         ],
         dtype=np.float32,
     )
@@ -359,7 +359,7 @@ def geometric_warp(
 
     # --- Failsafe: wrap everything so the endpoint never crashes ---
     try:
-        tri = Delaunay(dst_pts)
+        tri = Delaunay(dst_pts[:, :2])
     except Exception as exc:
         logger.error("Delaunay triangulation failed: %s – returning original image", exc)
         return image_bgr.copy()
@@ -373,10 +373,10 @@ def geometric_warp(
     for ia, ib, ic in tri.simplices:
         # ------ Req 1: force exact (3,2) float32 shape ------
         src_tri = np.asarray(
-            [src_pts[ia], src_pts[ib], src_pts[ic]], dtype=np.float32
+            [src_pts[ia][:2], src_pts[ib][:2], src_pts[ic][:2]], dtype=np.float32
         ).reshape(3, 2)
         dst_tri = np.asarray(
-            [dst_pts[ia], dst_pts[ib], dst_pts[ic]], dtype=np.float32
+            [dst_pts[ia][:2], dst_pts[ib][:2], dst_pts[ic][:2]], dtype=np.float32
         ).reshape(3, 2)
 
         # ------ Req 3: skip triangles with duplicate vertices ------
@@ -472,7 +472,7 @@ def _gaussian_falloff(lm: np.ndarray, anchor_idx: int, sigma: float) -> np.ndarr
     σ is expressed in pixels.
     """
     anchor = lm[anchor_idx]
-    dists = np.linalg.norm(lm - anchor, axis=1)
+    dists = np.linalg.norm(lm[:, :2] - anchor[:2], axis=1)
     return np.exp(-0.5 * (dists / max(sigma, 1e-6)) ** 2)
 
 
@@ -481,7 +481,7 @@ def _face_scale(lm: np.ndarray) -> float:
     # Landmarks 33 = nose tip, 133 = left eye outer, 362 = right eye outer
     left_eye = lm[133]
     right_eye = lm[362]
-    return float(np.linalg.norm(left_eye - right_eye))
+    return float(np.linalg.norm(left_eye[:2] - right_eye[:2]))
 
 
 def apply_smile(

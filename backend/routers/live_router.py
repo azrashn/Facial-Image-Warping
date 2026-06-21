@@ -300,10 +300,31 @@ def _apply_filter(
             glasses_type = config.get("glasses_type", "aviator")
             if landmarks is not None:
                 h_f, w_f = frame.shape[:2]
-                lm_list = [{"x": float(pt[0]) / w_f, "y": float(pt[1]) / h_f} for pt in landmarks]
+                
+                class MockLandmark:
+                    def __init__(self, x, y, z=0.0):
+                        self.x = x
+                        self.y = y
+                        self.z = z
+                    def __getitem__(self, key):
+                        return getattr(self, key)
+
+                lm_list = [MockLandmark(float(pt[0]) / w_f, float(pt[1]) / h_f, float(pt[2]) / w_f if len(pt) > 2 else 0.0) for pt in landmarks]
             else:
                 rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 lm_list = get_landmarks(preprocess_image(rgb_img))
+                # convert dicts to MockLandmarks to match pipeline exactly
+                
+                class MockLandmark:
+                    def __init__(self, x, y, z=0.0):
+                        self.x = x
+                        self.y = y
+                        self.z = z
+                    def __getitem__(self, key):
+                        return getattr(self, key)
+                        
+                lm_list = [MockLandmark(lm.get("x", 0.0), lm.get("y", 0.0), lm.get("z", 0.0)) for lm in lm_list]
+
             apply_glasses = _get_apply_glasses()
             return apply_glasses(frame, lm_list, glasses_type, is_live=True)
 
@@ -361,7 +382,7 @@ async def live_websocket(ws: WebSocket):
     logger.info("Live WebSocket connected")
 
     mesh = await _get_face_mesh()
-    smoother = _BrowserSmoother(alpha=0.5)
+    smoother = _BrowserSmoother(alpha=0.7)
 
     # ── Stacked active_states dictionary ──
     # Keys are feature names (e.g. "glasses", "smile", "makeup_lips")

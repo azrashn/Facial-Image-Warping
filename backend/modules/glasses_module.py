@@ -133,7 +133,14 @@ def _face_geometry(landmarks, w, h):
     rt = _lm_px(landmarks, 454, w, h)
     face_w = np.linalg.norm(rt - lt)
     angle = math.atan2(rc[1] - lc[1], rc[0] - lc[0])
-    eye_dist = np.linalg.norm(rc - lc)
+    
+    lm33 = landmarks[33]
+    lm263 = landmarks[263]
+    z33 = lm33["z"] if (isinstance(lm33, dict) and "z" in lm33) else (lm33.z if hasattr(lm33, "z") else 0.0)
+    z263 = lm263["z"] if (isinstance(lm263, dict) and "z" in lm263) else (lm263.z if hasattr(lm263, "z") else 0.0)
+    dz = (z263 - z33) * w
+    eye_dist = math.sqrt((ro[0] - lo[0])**2 + (ro[1] - lo[1])**2 + dz**2)
+    
     bridge_w = np.linalg.norm(ri - li)
     l_eye_w = np.linalg.norm(li - lo)
     r_eye_w = np.linalg.norm(ro - ri)
@@ -775,9 +782,15 @@ def _render_2d_asset_rigid(image, sprite, landmarks, w, h, model_id, scale_facto
     right_eye_outer = _lm_px(landmarks, 263, w, h)
     nose_bridge = _lm_px(landmarks, 168, w, h)
 
+    lm33 = landmarks[33]
+    lm263 = landmarks[263]
+    z33 = lm33["z"] if (isinstance(lm33, dict) and "z" in lm33) else (lm33.z if hasattr(lm33, "z") else 0.0)
+    z263 = lm263["z"] if (isinstance(lm263, dict) and "z" in lm263) else (lm263.z if hasattr(lm263, "z") else 0.0)
+
     dx = right_eye_outer[0] - left_eye_outer[0]
     dy = right_eye_outer[1] - left_eye_outer[1]
-    eye_dist = math.sqrt(dx * dx + dy * dy)
+    dz = (z263 - z33) * w
+    eye_dist = math.sqrt(dx * dx + dy * dy + dz * dz)
     angle = math.atan2(dy, dx)
 
     target_width_raw = eye_dist * scale_factor
@@ -890,7 +903,7 @@ def _sprite_cateye2d_ar(image, landmarks, w, h, is_live=False):
 # ===================================================================
 # MODEL: Wayfarer 2D
 # ===================================================================
-WAYFARER2D_SCALE_FACTOR = 2.4
+WAYFARER2D_SCALE_FACTOR = 2.2
 WAYFARER2D_Y_OFFSET = -0.1
 
 def _sprite_wayfarer2d_ar(image, landmarks, w, h, is_live=False):
