@@ -413,6 +413,8 @@ def _build_makeup_fn(region: str, hue: int, opacity: float):
 def _get_stable_landmarks(tag: str, image: np.ndarray) -> np.ndarray | None:
     """Landmark fetch with fallback to previous stable mesh."""
     lm = detect_face_landmarks(image)
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
     with _LIVE_STABLE_LOCK:
         if lm is not None:
             _LIVE_STABLE_LANDMARKS[tag] = lm.copy()
@@ -1309,6 +1311,8 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
         # Live path:   use pre-smoothed landmarks from the router (zero cost)
         # Static path: fall back to local MediaPipe detection (POST endpoint)
         lm = landmarks.astype(np.float32).copy() if _is_live else detect_face_landmarks(image_bgr)
+        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+            lm = lm[:, :2]
         if lm is None:
             return image_bgr.copy()
 
@@ -1382,6 +1386,8 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
             lm2 = dst
         else:
             lm2 = detect_face_landmarks(base)
+            if getattr(lm2, 'ndim', 0) == 2 and lm2.shape[1] >= 3:
+                lm2 = lm2[:, :2]
             if lm2 is None:
                 lm2 = dst
 
@@ -1417,6 +1423,8 @@ def apply_alien_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
             lm3 = lm2
         else:
             lm3 = detect_face_landmarks(result)
+            if getattr(lm3, 'ndim', 0) == 2 and lm3.shape[1] >= 3:
+                lm3 = lm3[:, :2]
             if lm3 is None:
                 lm3 = lm2
 
@@ -1514,6 +1522,10 @@ def _apply_robot(image: np.ndarray, landmarks: np.ndarray | None = None) -> np.n
     out = image.copy()
     h, w = out.shape[:2]
     lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(out)
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
     if lm is None:
         cx, cy = w // 2, h // 2
         face_w = int(w * 0.42)
@@ -1794,6 +1806,8 @@ def apply_clown_emoji(image_bgr: np.ndarray, intensity: int = 100, landmarks: np
         # Use pre-calculated landmarks from the live router if provided;
         # otherwise fall back to local detection (static image path).
         lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(image_bgr)
+        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+            lm = lm[:, :2]
         if lm is None:
             return image_bgr.copy()
 
@@ -1940,6 +1954,10 @@ def _apply_star_eyes(image: np.ndarray, landmarks: np.ndarray | None = None) -> 
     # Use pre-calculated landmarks from the live router if provided;
     # otherwise fall back to local detection (static image path).
     lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(out)
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
     if lm is None:
         return out
     face_sz = _face_scale(lm)
@@ -2143,6 +2161,10 @@ def _apply_heart_eyes(image: np.ndarray, landmarks: np.ndarray | None = None) ->
     # Use pre-calculated landmarks from the live router if provided;
     # otherwise fall back to local detection (static image path).
     lm = landmarks.astype(np.float32).copy() if landmarks is not None else detect_face_landmarks(out)
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
     if lm is None:
         return out
     face_sz = _face_scale(lm)
@@ -2467,6 +2489,8 @@ def _apply_crying(image: np.ndarray, landmarks: np.ndarray | None = None) -> np.
     # Use pre-calculated landmarks from the live router if provided;
     # otherwise fall back to the stable-landmarks caching path.
     lm = landmarks.astype(np.float32).copy() if landmarks is not None else _get_stable_landmarks("crying", out)
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
     if lm is None:
         return out
     face_sz = _face_scale(lm)
@@ -2673,6 +2697,8 @@ def apply_clown_transformation(image: np.ndarray) -> np.ndarray:
 
     # ── Stage 0: detect landmarks ──
     lm = detect_face_landmarks(result_img)
+    if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
+        lm = lm[:, :2]
     if lm is None:
         logger.warning("apply_clown_transformation: no face detected")
         return result_img
@@ -2730,6 +2756,8 @@ def apply_clown_transformation(image: np.ndarray) -> np.ndarray:
 
     # ── Stage 2: Greasepaint-white face paint ──
     lm2 = detect_face_landmarks(warped)
+    if getattr(lm2, 'ndim', 0) == 2 and lm2.shape[1] >= 3:
+        lm2 = lm2[:, :2]
     if lm2 is None:
         return warped
     face_sz2 = _face_scale(lm2)

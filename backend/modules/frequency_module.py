@@ -800,7 +800,7 @@ def _apply_structural_wrinkles(image: np.ndarray, landmarks: np.ndarray, face_ma
             wavy_ue = generate_wavy_curve(shifted_pts, num_points=30, wave_amp=0.001, wave_freq=14.0)
             hill_ue = wavy_ue + np.array([0.0, -face_sz * 0.006], dtype=np.float32)
 
-            line_intensity = 0.60 - line_offset * 0.15
+            line_intensity = 0.30 - line_offset * 0.10
             draw_tapered_and_broken_curve(W_valley, wavy_ue, line_intensity, 1, break_freq=12.0, phase_offset=line_offset * 3.0)
             draw_tapered_and_broken_curve(W_hill, hill_ue, line_intensity, 1, break_freq=12.0, phase_offset=line_offset * 3.0)
 
@@ -1316,10 +1316,10 @@ def _apply_periorbital_darkening(image: np.ndarray, landmarks: np.ndarray, inten
 
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
     # Darken L channel + slight bluish tint (reduce b channel)
-    dark_amount = 12.0 * intensity
+    dark_amount = 5.0 * intensity
     lab[:, :, 0] = np.clip(lab[:, :, 0] - periorbital * dark_amount, 0, 255)
-    lab[:, :, 1] = np.clip(lab[:, :, 1] + periorbital * 2.0 * intensity, 0, 255) # slight red
-    lab[:, :, 2] = np.clip(lab[:, :, 2] - periorbital * 4.0 * intensity, 0, 255) # reduce yellow (more blue)
+    lab[:, :, 1] = np.clip(lab[:, :, 1] + periorbital * 1.0 * intensity, 0, 255) # slight red
+    lab[:, :, 2] = np.clip(lab[:, :, 2] - periorbital * 2.0 * intensity, 0, 255) # reduce yellow (more blue)
 
     result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
     return result
@@ -1602,7 +1602,7 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.
             brow_result = np.clip(brow_blend * 255.0, 0, 255).astype(np.uint8)
 
             brow_mask_3 = np.stack([brow_mask] * 3, axis=-1)
-            brow_strength = 0.80 * intensity * brow_mask_3
+            brow_strength = 0.35 * intensity * brow_mask_3
             result = (
                 brow_result.astype(np.float32) * brow_strength
                 + result.astype(np.float32) * (1.0 - brow_strength)
@@ -1622,10 +1622,11 @@ def apply_aging_filter(image: np.ndarray, intensity: float = 0.5, landmarks: np.
 
             # Salt-and-pepper: random per-pixel decision
             sp_noise = np.random.random((lh, lw)).astype(np.float32)
-            sp_threshold = 0.3 + 0.4 * intensity
+            sp_threshold = 0.15 + 0.20 * intensity
             sp_mask = (sp_noise < sp_threshold).astype(np.float32)
+            sp_mask = cv2.GaussianBlur(sp_mask, (3, 3), 0)
 
-            final_stubble_mask = stubble_mask * sp_mask * intensity * 0.70
+            final_stubble_mask = stubble_mask * sp_mask * intensity * 0.40
             final_stubble_mask_3 = np.stack([final_stubble_mask] * 3, axis=-1)
 
             white_layer = np.full_like(result, 210, dtype=np.float32)

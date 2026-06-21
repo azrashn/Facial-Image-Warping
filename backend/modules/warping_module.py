@@ -502,7 +502,7 @@ def apply_smile(
         if lm is None:
             return image_bgr
             
-        px = float(intensity) * 0.5
+        px = float(intensity) * 0.25
         deltas = np.zeros_like(lm)
         face_sz = _face_scale(lm)
         yaw, _pitch, _roll = _estimate_head_pose(lm, image_bgr.shape[1], image_bgr.shape[0])
@@ -643,7 +643,7 @@ def apply_lip_widen(
         if lm is None:
             return image_bgr
             
-        px = float(intensity) * 0.25
+        px = float(intensity) * 0.125
         deltas = np.zeros_like(lm)
         face_sz = _face_scale(lm)
         
