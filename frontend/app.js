@@ -1977,32 +1977,67 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- FFT LAB CENTER + CORNER FREQUENCY SELECTION ---
     const fftCenterCornerBtn = document.getElementById('fftCenterCornerBtn');
+    const fftCenterDiameterSlider = document.getElementById('fftCenterDiameterSlider');
+    const fftCenterDiameterValue = document.getElementById('fftCenterDiameterValue');
+    let hasRunFftCenterCornerLab = false;
+    let fftLabDebounceTimer = null;
+    let fftCenterRatio = getFftCenterRatio();
 
     if (fftCenterCornerBtn) {
         fftCenterCornerBtn.addEventListener('click', () => applyFftCenterCornerLab());
     }
 
-    async function applyFftCenterCornerLab() {
+    if (fftCenterDiameterSlider) {
+        const handleFftCenterDiameterChange = () => {
+            updateFftCenterCutoffUi();
+            if (!uploadedFile || !currentOriginalImage) return;
+            clearTimeout(fftLabDebounceTimer);
+            fftLabDebounceTimer = setTimeout(() => {
+                applyFftCenterCornerLab({ centerOnly: hasRunFftCenterCornerLab });
+            }, 320);
+        };
+        fftCenterDiameterSlider.addEventListener('input', handleFftCenterDiameterChange);
+        fftCenterDiameterSlider.addEventListener('change', handleFftCenterDiameterChange);
+        updateFftCenterCutoffUi();
+    }
+
+    function getFftCenterRatio() {
+        const diameterPercent = Number(fftCenterDiameterSlider?.value || 26);
+        return Math.min(0.45, Math.max(0.03, diameterPercent / 200));
+    }
+
+    function updateFftCenterCutoffUi() {
+        const diameterPercent = Number(fftCenterDiameterSlider?.value || 26);
+        fftCenterRatio = getFftCenterRatio();
+        if (fftCenterDiameterValue) {
+            fftCenterDiameterValue.textContent = `${diameterPercent}%`;
+        }
+        drawAllFftCenterCornerOverlays();
+    }
+
+    async function applyFftCenterCornerLab(options = {}) {
         if (!uploadedFile || !currentOriginalImage) {
             analysisSummary.innerHTML = `<strong>Status: Failed</strong><br/>Upload an image first, then run FFT Lab.`;
             return;
         }
 
+        const centerOnly = options.centerOnly === true && hasRunFftCenterCornerLab;
         const idleText = i18n[currentLang]?.selectRegionOutput || 'Run FFT Lab';
         const formData = new FormData();
         formData.append('image', uploadedFile);
         formData.append('intensity', intensitySlider.value);
+        formData.append('center_ratio', String(getFftCenterRatio()));
 
         if (fftOutputPlaceholder) {
             fftOutputPlaceholder.style.display = 'block';
             fftOutputPlaceholder.textContent = 'Processing...';
         }
         if (fftInverseImg) fftInverseImg.style.display = 'none';
-        if (fftCornerPlaceholder) {
+        if (!centerOnly && fftCornerPlaceholder) {
             fftCornerPlaceholder.style.display = 'block';
             fftCornerPlaceholder.textContent = 'Processing...';
         }
-        if (fftCornerImg) fftCornerImg.style.display = 'none';
+        if (!centerOnly && fftCornerImg) fftCornerImg.style.display = 'none';
         loadingOverlay.style.display = 'flex';
 
         try {
@@ -2017,17 +2052,20 @@ document.addEventListener('DOMContentLoaded', () => {
             currentProcessedImage = payload.image_b64;
             afterImg.src = currentProcessedImage;
             landmarksOnlyImg.src = currentProcessedImage;
+            if (typeof payload.center_ratio === 'number') {
+                fftCenterRatio = payload.center_ratio;
+            }
 
             if (fftInverseImg) {
                 fftInverseImg.src = payload.inverse_image_b64 || currentProcessedImage;
                 fftInverseImg.style.display = 'block';
             }
             if (fftOutputPlaceholder) fftOutputPlaceholder.style.display = 'none';
-            if (fftCornerImg) {
+            if (!centerOnly && fftCornerImg) {
                 fftCornerImg.src = payload.corner_image_b64 || '';
                 fftCornerImg.style.display = payload.corner_image_b64 ? 'block' : 'none';
             }
-            if (fftCornerPlaceholder) {
+            if (!centerOnly && fftCornerPlaceholder) {
                 fftCornerPlaceholder.style.display = payload.corner_image_b64 ? 'none' : 'block';
                 fftCornerPlaceholder.textContent = payload.corner_image_b64 ? '' : idleText;
             }
@@ -2041,8 +2079,9 @@ document.addEventListener('DOMContentLoaded', () => {
             );
             drawAllFftCenterCornerOverlays();
 
-            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>4 corners show FFT edge/detail output; center circle shows IFFT blur output.`;
-            addHistory('FFT Center + Corners');
+            analysisSummary.innerHTML = `<strong>Status: Success</strong><br/>Center cutoff: ${Math.round(fftCenterRatio * 200)}%. Smaller cutoff keeps fewer low frequencies and increases blur.`;
+            if (!centerOnly) addHistory('FFT Center + Corners');
+            hasRunFftCenterCornerLab = true;
             if (isSplitMode) { sliderPos = 25; updateSplitSlider(); }
         } catch (err) {
             console.error('[FFT Lab] Error:', err);
@@ -2050,7 +2089,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 fftOutputPlaceholder.style.display = 'block';
                 fftOutputPlaceholder.textContent = err.message || idleText;
             }
-            if (fftCornerPlaceholder) {
+            if (!centerOnly && fftCornerPlaceholder) {
                 fftCornerPlaceholder.style.display = 'block';
                 fftCornerPlaceholder.textContent = err.message || idleText;
             }
@@ -2079,7 +2118,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!resizeOverlayCanvas(canvas)) return;
         const ctx = canvas.getContext('2d');
         const base = Math.min(canvas.width, canvas.height);
-        const centerRadius = Math.max(10, base * 0.13);
+        const centerRadius = Math.max(10, base * fftCenterRatio);
         const cornerRadius = Math.max(12, base * 0.16);
         const points = [
             [canvas.width / 2, canvas.height / 2, centerRadius],

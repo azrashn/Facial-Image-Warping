@@ -2589,6 +2589,7 @@ async def process_emoji_preset(body: EmojiPresetRequest):
 async def process_fft(
     image: UploadFile = File(...),
     intensity: float = Form(50),
+    center_ratio: float = Form(0.13),
     mask_coords: str | None = Form(None),
     fft_band: str = Form("mid"),
 ):
@@ -2603,7 +2604,11 @@ async def process_fft(
         contents = await image.read()
         original = _decode_upload(contents)
 
-        fft_result = apply_fft_center_corner_inverse(original, intensity=intensity)
+        fft_result = apply_fft_center_corner_inverse(
+            original,
+            intensity=intensity,
+            center_ratio=center_ratio,
+        )
         processed = fft_result["processed"]
 
         metrics = _metrics_dict(original, processed)
@@ -2631,6 +2636,8 @@ async def process_fft(
             "corner_image_b64": _data_url_from_image(fft_result["corner_processed"]),
             "fft_band": fft_result["band"],
             "selection_mode": "center_corners",
+            "center_ratio": fft_result["center_ratio"],
+            "corner_ratio": fft_result["corner_ratio"],
         })
         return response
 

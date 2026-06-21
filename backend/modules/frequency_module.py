@@ -1373,7 +1373,11 @@ def build_fft_lab_masks(
     return center_mask, corner_mask, combined_mask
 
 
-def apply_fft_center_corner_inverse(image: np.ndarray, intensity: float = 50) -> dict:
+def apply_fft_center_corner_inverse(
+    image: np.ndarray,
+    intensity: float = 50,
+    center_ratio: float = 0.13,
+) -> dict:
     """
     Apply the fixed FFT lab selection in two separate ways.
 
@@ -1385,7 +1389,11 @@ def apply_fft_center_corner_inverse(image: np.ndarray, intensity: float = 50) ->
         raise ValueError("Input image is None.")
 
     rows, cols = image.shape[:2]
-    center_mask, corner_mask, combined_mask = build_fft_lab_masks((rows, cols))
+    center_ratio = float(np.clip(center_ratio, 0.03, 0.45))
+    center_mask, corner_mask, combined_mask = build_fft_lab_masks(
+        (rows, cols),
+        center_ratio=center_ratio,
+    )
     working = image.astype(np.float32)
     center_reconstructed = np.zeros_like(working, dtype=np.float32)
 
@@ -1415,6 +1423,8 @@ def apply_fft_center_corner_inverse(image: np.ndarray, intensity: float = 50) ->
         "corner_mask": corner_mask,
         "mask": combined_mask,
         "band": "center_corners",
+        "center_ratio": center_ratio,
+        "corner_ratio": 0.16,
     }
 
 
