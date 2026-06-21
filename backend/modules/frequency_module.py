@@ -348,6 +348,9 @@ _SAGGING_CONTROL_POINTS = [
     (346,  0.000,  0.160,  0.24),    # Right Cheek (dropping lower cheek fat)
     (50,   0.000,  0.000,  0.20),    # Left zygomatic (ANCHORED to make cheekbone prominent)
     (280,  0.000,  0.000,  0.20),    # Right zygomatic (ANCHORED to make cheekbone prominent)
+    # ── Nasolabial Overhang (Cheek fat pushing into smile lines) ──
+    (205,  0.150,  0.250,  0.22),    # Left upper cheek (massive push in and down over fold)
+    (425, -0.150,  0.250,  0.22),    # Right upper cheek (massive push in and down over fold)
     # ── EXTREME BULLDOG JOWLS (Bulging out and hanging low) ──
     # Left side
     (136, -0.080,  0.220,  0.22),    # Mid-jaw left (pushed out + drop)
@@ -716,7 +719,7 @@ def _apply_structural_wrinkles(image: np.ndarray, landmarks: np.ndarray, face_ma
 
         wavy_nl = generate_wavy_curve(curve_pts, num_points=60, wave_amp=0.002, wave_freq=6.0)
 
-        shift_dist_nl = face_sz * 0.018
+        shift_dist_nl = face_sz * 0.024
         hill_nl = wavy_nl + out_dir * shift_dist_nl
 
         # Secondary shallow fold parallel to main
@@ -724,8 +727,9 @@ def _apply_structural_wrinkles(image: np.ndarray, landmarks: np.ndarray, face_ma
         wavy_nl_sec = wavy_nl + shift_sec
         hill_nl_sec = hill_nl + shift_sec
 
-        draw_tapered_and_broken_curve(W_valley, wavy_nl, 1.15, 2)
-        draw_tapered_and_broken_curve(W_hill, hill_nl, 0.98, 3)
+        # Gülüş çizgilerini (Nasolabial folds) belirginleştir
+        draw_tapered_and_broken_curve(W_valley, wavy_nl, 3.50, 4)
+        draw_tapered_and_broken_curve(W_hill, hill_nl, 2.50, 6)
 
         draw_tapered_and_broken_curve(W_valley, wavy_nl_sec, 0.30, 1)
         draw_tapered_and_broken_curve(W_hill, hill_nl_sec, 0.49, 2)
@@ -768,7 +772,8 @@ def _apply_structural_wrinkles(image: np.ndarray, landmarks: np.ndarray, face_ma
         out_dir_mar /= np.linalg.norm(out_dir_mar)
         hill_mar = wavy_mar + out_dir_mar * (face_sz * 0.014)
 
-        draw_tapered_and_broken_curve(W_valley, wavy_mar, 1.30, 2)
+        # Ağızın devamı gibi duran yapay çizgiyi (Marionette) iyice silikleştir
+        draw_tapered_and_broken_curve(W_valley, wavy_mar, 0.30, 2)
         draw_tapered_and_broken_curve(W_hill, hill_mar, 0.85, 3)
 
     # ══════════════════════════════════════════════════════════════════════
