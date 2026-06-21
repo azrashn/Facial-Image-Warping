@@ -18,7 +18,7 @@ import numpy as np
 
 # --- EMA Stabilization for Live Stream ---
 class GlassesEMATracker:
-    def __init__(self, alpha=0.5):
+    def __init__(self, alpha=0.85):
         self.alpha = alpha
         self.state = None
         self.last_model = None
@@ -47,7 +47,7 @@ class GlassesEMATracker:
         self.state = (smooth_cx, smooth_cy, smooth_angle, smooth_tw)
         return self.state
 
-_ema_tracker = GlassesEMATracker(alpha=0.5)
+_ema_tracker = GlassesEMATracker(alpha=0.85)
 
 _GLASSES_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "assets", "glasses")
@@ -86,6 +86,16 @@ def _eye_center(landmarks, indices, w, h):
     pts = np.array([_lm_px(landmarks, i, w, h) for i in indices])
     return pts.mean(axis=0)
 
+def _z(landmarks, idx, w):
+    lm = landmarks[idx]
+    return (lm.z if hasattr(lm, "z") else lm.get("z", 0.0)) * w
+
+def _eye_dist_3d(landmarks, w, h, idx1=33, idx2=263):
+    p1 = _lm_px(landmarks, idx1, w, h)
+    p2 = _lm_px(landmarks, idx2, w, h)
+    dz = _z(landmarks, idx2, w) - _z(landmarks, idx1, w)
+    return math.sqrt(np.sum((p2 - p1)**2) + dz**2)
+
 
 def _face_geometry(landmarks, w, h):
     L_EYE = [33, 133, 160, 158, 153, 144, 159, 145]
@@ -100,12 +110,15 @@ def _face_geometry(landmarks, w, h):
     nose_tip = _lm_px(landmarks, 4, w, h)
     lt = _lm_px(landmarks, 234, w, h)
     rt = _lm_px(landmarks, 454, w, h)
-    face_w = np.linalg.norm(rt - lt)
+    face_w = math.sqrt(np.sum((rt - lt)**2) + (_z(landmarks, 454, w) - _z(landmarks, 234, w))**2)
     angle = math.atan2(rc[1] - lc[1], rc[0] - lc[0])
-    eye_dist = np.linalg.norm(rc - lc)
-    bridge_w = np.linalg.norm(ri - li)
-    l_eye_w = np.linalg.norm(li - lo)
-    r_eye_w = np.linalg.norm(ro - ri)
+    
+    # Use outer eye corners for Z to ensure stable distance during yaw
+    eye_dist = math.sqrt(np.sum((rc - lc)**2) + (_z(landmarks, 263, w) - _z(landmarks, 33, w))**2)
+    
+    bridge_w = math.sqrt(np.sum((ri - li)**2) + (_z(landmarks, 362, w) - _z(landmarks, 133, w))**2)
+    l_eye_w = math.sqrt(np.sum((li - lo)**2) + (_z(landmarks, 133, w) - _z(landmarks, 33, w))**2)
+    r_eye_w = math.sqrt(np.sum((ro - ri)**2) + (_z(landmarks, 263, w) - _z(landmarks, 362, w))**2)
     l_temple = _lm_px(landmarks, 162, w, h)
     r_temple = _lm_px(landmarks, 389, w, h)
     l_nose = _lm_px(landmarks, 198, w, h)
@@ -775,7 +788,7 @@ def _sprite_sapsiz_ar(image, landmarks, w, h, is_live=False):
     # --- geometry: width, angle, centre ---
     dx = right_eye_outer[0] - left_eye_outer[0]
     dy = right_eye_outer[1] - left_eye_outer[1]
-    eye_dist = math.sqrt(dx * dx + dy * dy)
+    eye_dist = _eye_dist_3d(landmarks, w, h, 33, 263)
     angle = math.atan2(dy, dx)
 
     target_width_raw = eye_dist * SAPSIZ_SCALE_FACTOR
@@ -851,7 +864,7 @@ def _sprite_kalpli_ar(image, landmarks, w, h, is_live=False):
 
     dx = right_eye_outer[0] - left_eye_outer[0]
     dy = right_eye_outer[1] - left_eye_outer[1]
-    eye_dist = math.sqrt(dx * dx + dy * dy)
+    eye_dist = _eye_dist_3d(landmarks, w, h, 33, 263)
     angle = math.atan2(dy, dx)
 
     target_width_raw = eye_dist * KALPLI_SCALE_FACTOR
@@ -913,7 +926,7 @@ def _sprite_thuglife_ar(image, landmarks, w, h, is_live=False):
 
     dx = right_eye_outer[0] - left_eye_outer[0]
     dy = right_eye_outer[1] - left_eye_outer[1]
-    eye_dist = math.sqrt(dx * dx + dy * dy)
+    eye_dist = _eye_dist_3d(landmarks, w, h, 33, 263)
     angle = math.atan2(dy, dx)
 
     target_width_raw = eye_dist * THUGLIFE_SCALE_FACTOR
@@ -975,7 +988,7 @@ def _sprite_yuvarlak_ar(image, landmarks, w, h, is_live=False):
 
     dx = right_eye_outer[0] - left_eye_outer[0]
     dy = right_eye_outer[1] - left_eye_outer[1]
-    eye_dist = math.sqrt(dx * dx + dy * dy)
+    eye_dist = _eye_dist_3d(landmarks, w, h, 33, 263)
     angle = math.atan2(dy, dx)
 
     target_width_raw = eye_dist * YUVARLAK_SCALE_FACTOR

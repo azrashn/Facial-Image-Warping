@@ -222,7 +222,7 @@ class PersistentFaceMesh:
         if not result.face_landmarks:
             return None
         lm_list = result.face_landmarks[0]
-        pts = np.array([[p.x * w, p.y * h] for p in lm_list], dtype=np.float32)
+        pts = np.array([[p.x * w, p.y * h, p.z * w] for p in lm_list], dtype=np.float32)
         if pts.shape[0] > 468:
             pts = pts[:468].copy()
         return pts
@@ -234,7 +234,7 @@ class PersistentFaceMesh:
         if not res.multi_face_landmarks:
             return None
         lm = res.multi_face_landmarks[0].landmark
-        return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+        return np.array([[p.x * w, p.y * h, p.z * w] for p in lm], dtype=np.float32)
 
     def close(self) -> None:
         """Release underlying detector resources."""
@@ -259,7 +259,7 @@ def _landmarks_via_tasks(image_bgr: np.ndarray, h: int, w: int) -> Optional[np.n
     if not result.face_landmarks:
         return None
     lm_list = result.face_landmarks[0]
-    pts = np.array([[p.x * w, p.y * h] for p in lm_list], dtype=np.float32)
+    pts = np.array([[p.x * w, p.y * h, p.z * w] for p in lm_list], dtype=np.float32)
     if pts.shape[0] > 468:
         pts = pts[:468].copy()
     return pts
@@ -284,7 +284,7 @@ def _stable_ema_landmarks(raw_pts: Optional[np.ndarray], h: int, w: int) -> Opti
                 return _LM_PREV_POINTS.copy()
         return None
 
-    alpha = float(np.clip(float(os.environ.get("LIVE_LANDMARK_EMA_ALPHA", 0.72)), 0.65, 0.80))
+    alpha = float(np.clip(float(os.environ.get("LIVE_LANDMARK_EMA_ALPHA", 0.85)), 0.65, 0.95))
     with _LM_STATE_LOCK:
         stale_state = (
             _LM_PREV_POINTS is None
@@ -330,7 +330,7 @@ def detect_face_landmarks(image_bgr: np.ndarray) -> Optional[np.ndarray]:
         if not res.multi_face_landmarks:
             return None
         lm = res.multi_face_landmarks[0].landmark
-        raw_pts = np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+        raw_pts = np.array([[p.x * w, p.y * h, p.z * w] for p in lm], dtype=np.float32)
         return _stable_ema_landmarks(raw_pts, h, w)
 
     return _stable_ema_landmarks(_landmarks_via_tasks(image_bgr, h, w), h, w)
@@ -457,8 +457,8 @@ def _prepare_warp(
         dst = src_lm + deltas
         height, width = image_bgr.shape[:2]
         corners = _corners(width, height)
-        src_all = np.vstack([src_lm, corners])
-        dst_all = np.vstack([dst, corners])
+        src_all = np.vstack([src_lm[:, :2], corners])
+        dst_all = np.vstack([dst[:, :2], corners])
         return geometric_warp(image_bgr, src_all, dst_all)
     except Exception as exc:
         logger.error("_prepare_warp failed: %s – returning original image", exc)

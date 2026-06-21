@@ -145,7 +145,7 @@ async def _get_face_mesh() -> PersistentFaceMesh:
 class _BrowserSmoother:
     """Simple per-connection EMA landmark smoother."""
 
-    def __init__(self, alpha: float = 0.7):
+    def __init__(self, alpha: float = 0.85):
         self.alpha = alpha
         self.prev: Optional[np.ndarray] = None
         self.last_raw: Optional[np.ndarray] = None
@@ -298,12 +298,21 @@ def _apply_filter(
         # ── Glasses ──
         elif filter_name == "glasses":
             glasses_type = config.get("glasses_type", "aviator")
+            class MPPoint:
+                def __init__(self, x, y, z=0.0):
+                    self.x = x; self.y = y; self.z = z
+                def __getitem__(self, k): return getattr(self, k)
+                def get(self, k, d=None): return getattr(self, k, d)
             if landmarks is not None:
                 h_f, w_f = frame.shape[:2]
-                lm_list = [{"x": float(pt[0]) / w_f, "y": float(pt[1]) / h_f} for pt in landmarks]
+                if landmarks.shape[1] >= 3:
+                    lm_list = [MPPoint(float(pt[0]) / w_f, float(pt[1]) / h_f, float(pt[2]) / w_f) for pt in landmarks]
+                else:
+                    lm_list = [MPPoint(float(pt[0]) / w_f, float(pt[1]) / h_f) for pt in landmarks]
             else:
                 rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                lm_list = get_landmarks(preprocess_image(rgb_img))
+                raw_lms = get_landmarks(preprocess_image(rgb_img))
+                lm_list = [MPPoint(lm.get("x", 0.0), lm.get("y", 0.0), lm.get("z", 0.0)) for lm in raw_lms]
             apply_glasses = _get_apply_glasses()
             return apply_glasses(frame, lm_list, glasses_type, is_live=True)
 
@@ -361,7 +370,7 @@ async def live_websocket(ws: WebSocket):
     logger.info("Live WebSocket connected")
 
     mesh = await _get_face_mesh()
-    smoother = _BrowserSmoother(alpha=0.5)
+    smoother = _BrowserSmoother(alpha=0.85)
 
     # ── Stacked active_states dictionary ──
     # Keys are feature names (e.g. "glasses", "smile", "makeup_lips")
