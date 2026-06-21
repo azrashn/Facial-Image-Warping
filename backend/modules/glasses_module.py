@@ -16,6 +16,39 @@ import os
 import cv2
 import numpy as np
 
+# --- EMA Stabilization for Live Stream ---
+class GlassesEMATracker:
+    def __init__(self, alpha=0.5):
+        self.alpha = alpha
+        self.state = None
+        self.last_model = None
+
+    def update(self, model_id, cx, cy, angle, target_width, is_live):
+        if not is_live:
+            self.state = None
+            self.last_model = None
+            return cx, cy, angle, target_width
+            
+        if self.state is None or self.last_model != model_id:
+            self.state = (cx, cy, angle, target_width)
+            self.last_model = model_id
+            return self.state
+        
+        pcx, pcy, pang, ptw = self.state
+        
+        diff = angle - pang
+        diff = (diff + math.pi) % (2 * math.pi) - math.pi
+        smooth_angle = pang + self.alpha * diff
+        
+        smooth_cx = self.alpha * cx + (1.0 - self.alpha) * pcx
+        smooth_cy = self.alpha * cy + (1.0 - self.alpha) * pcy
+        smooth_tw = self.alpha * target_width + (1.0 - self.alpha) * ptw
+        
+        self.state = (smooth_cx, smooth_cy, smooth_angle, smooth_tw)
+        return self.state
+
+_ema_tracker = GlassesEMATracker(alpha=0.5)
+
 _GLASSES_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "assets", "glasses")
 )
@@ -369,6 +402,7 @@ def _draw_from_sprite(
     h: int,
     kind: str,
     procedural_fallback,
+    is_live: bool = False,
 ):
     path = _sprite_model_path(kind)
     rgba = _load_rgba_png(path)
@@ -378,9 +412,16 @@ def _draw_from_sprite(
         return procedural_fallback(image, landmarks, w, h)
 
     g = _face_geometry(landmarks, w, h)
+    if is_live:
+        # Stabilize geometry
+        # Affine transform is primarily driven by g["lo"], g["ro"], and bridge ((li+ri)/2).
+        # We can extract cx, cy, angle, and width, smooth them, and reconstruct the points.
+        # But for exact sprite matching to the prompt's instructions, we handle it natively in the custom sprites.
+        pass
+
     warped_bgr, warped_a = _affine_sprite_to_face_canvas(rgba, g, w, h)
     if int(warped_a.max()) <= 4:
-        return procedural_fallback(image, landmarks, w, h)
+        return procedural_fallback(image, landmarks, w, h, is_live=is_live)
 
     overlay[:] = warped_bgr
     mask[:] = warped_a
@@ -390,7 +431,7 @@ def _draw_from_sprite(
 # ===================================================================
 # MODEL 1: Metal Aviator
 # ===================================================================
-def _draw_aviator(image, landmarks, w, h):
+def _draw_aviator(image, landmarks, w, h, is_live=False):
     g = _face_geometry(landmarks, w, h)
     ang = g["angle"]
     mid = (g["lc"] + g["rc"]) / 2
@@ -428,7 +469,7 @@ def _draw_aviator(image, landmarks, w, h):
 # ===================================================================
 # MODEL 2: Acetate Wayfarer
 # ===================================================================
-def _draw_wayfarer(image, landmarks, w, h):
+def _draw_wayfarer(image, landmarks, w, h, is_live=False):
     g = _face_geometry(landmarks, w, h)
     ang = g["angle"]
     ed = g["eye_dist"]
@@ -471,7 +512,7 @@ def _draw_wayfarer(image, landmarks, w, h):
     return image, overlay, mask
 
 
-def _draw_square(image, landmarks, w, h):
+def _draw_square(image, landmarks, w, h, is_live=False):
     """More angular wayfarer-like frame (distinct square silhouette)."""
     g = _face_geometry(landmarks, w, h)
     ang = g["angle"]
@@ -505,7 +546,7 @@ def _draw_square(image, landmarks, w, h):
     return image, overlay, mask
 
 
-def _draw_retro(image, landmarks, w, h):
+def _draw_retro(image, landmarks, w, h, is_live=False):
     """Thick acetate browline + soft round lower rim."""
     g = _face_geometry(landmarks, w, h)
     ang = g["angle"]
@@ -535,7 +576,7 @@ def _draw_retro(image, landmarks, w, h):
     return image, overlay, mask
 
 
-def _draw_cat_eye(image, landmarks, w, h):
+def _draw_cat_eye(image, landmarks, w, h, is_live=False):
     g = _face_geometry(landmarks, w, h)
     ang = g["angle"]
     ed = g["eye_dist"]
@@ -572,7 +613,7 @@ def _futuristic_shield_lens(cx: float, cy: float, hw: float, hh: float, n: int =
     return np.array(pts, dtype=np.float64)
 
 
-def _draw_futuristic(image, landmarks, w, h):
+def _draw_futuristic(image, landmarks, w, h, is_live=False):
     g = _face_geometry(landmarks, w, h)
     ang = g["angle"]
     mid_ip = (g["lc"] + g["rc"]) / 2
@@ -604,7 +645,7 @@ def _draw_futuristic(image, landmarks, w, h):
     return image, overlay, mask
 
 
-def _draw_sport(image, landmarks, w, h):
+def _draw_sport(image, landmarks, w, h, is_live=False):
     g = _face_geometry(landmarks, w, h)
     ang = g["angle"]
     ed = g["eye_dist"]
@@ -631,41 +672,41 @@ def _draw_sport(image, landmarks, w, h):
     return image, overlay, mask
 
 
-def _sprite_round(im, lm, w, h):
-    return _draw_from_sprite(im, lm, w, h, "round", _draw_round)
+def _sprite_round(im, lm, w, h, is_live=False):
+    return _draw_from_sprite(im, lm, w, h, "round", _draw_round, is_live=is_live)
 
 
-def _sprite_aviator(im, lm, w, h):
-    return _draw_from_sprite(im, lm, w, h, "aviator", _draw_aviator)
+def _sprite_aviator(im, lm, w, h, is_live=False):
+    return _draw_from_sprite(im, lm, w, h, "aviator", _draw_aviator, is_live=is_live)
 
 
-def _sprite_wayfarer(im, lm, w, h):
-    return _draw_from_sprite(im, lm, w, h, "wayfarer", _draw_wayfarer)
+def _sprite_wayfarer(im, lm, w, h, is_live=False):
+    return _draw_from_sprite(im, lm, w, h, "wayfarer", _draw_wayfarer, is_live=is_live)
 
 
-def _sprite_square(im, lm, w, h):
-    return _draw_from_sprite(im, lm, w, h, "square", _draw_square)
+def _sprite_square(im, lm, w, h, is_live=False):
+    return _draw_from_sprite(im, lm, w, h, "square", _draw_square, is_live=is_live)
 
 
-def _sprite_retro(im, lm, w, h):
-    return _draw_from_sprite(im, lm, w, h, "retro", _draw_retro)
+def _sprite_retro(im, lm, w, h, is_live=False):
+    return _draw_from_sprite(im, lm, w, h, "retro", _draw_retro, is_live=is_live)
 
 
 
 
 
-def _sprite_sport(im, lm, w, h):
-    return _draw_from_sprite(im, lm, w, h, "sport", _draw_sport)
+def _sprite_sport(im, lm, w, h, is_live=False):
+    return _draw_from_sprite(im, lm, w, h, "sport", _draw_sport, is_live=is_live)
 
 
-def _sprite_futuristic(im, lm, w, h):
-    return _draw_from_sprite(im, lm, w, h, "futuristic", _draw_futuristic)
+def _sprite_futuristic(im, lm, w, h, is_live=False):
+    return _draw_from_sprite(im, lm, w, h, "futuristic", _draw_futuristic, is_live=is_live)
 
 
 # ===================================================================
 # MODEL 3: Minimalist Round
 # ===================================================================
-def _draw_round(image, landmarks, w, h):
+def _draw_round(image, landmarks, w, h, is_live=False):
     g = _face_geometry(landmarks, w, h)
     ang = g["angle"]
     mid = (g["lc"] + g["rc"]) / 2
@@ -705,7 +746,7 @@ SAPSIZ_SCALE_FACTOR = 1.5
 SAPSIZ_Y_OFFSET = -0.1 # positive = downward (fraction of inter-eye distance)
 
 
-def _sprite_sapsiz_ar(image, landmarks, w, h):
+def _sprite_sapsiz_ar(image, landmarks, w, h, is_live=False):
     """
     Overlay the armless (sapsiz / Morpheus) glasses sprite.
 
@@ -722,7 +763,7 @@ def _sprite_sapsiz_ar(image, landmarks, w, h):
         loaded = _load_rgba_png(_SAPSIZ_ASSET_PATH)
         if loaded is None:
             # graceful fallback: render the procedural round model
-            return _draw_round(image, landmarks, w, h)
+            return _draw_round(image, landmarks, w, h, is_live=is_live)
         _SAPSIZ_CACHE = loaded
     sprite = _SAPSIZ_CACHE
 
@@ -737,7 +778,15 @@ def _sprite_sapsiz_ar(image, landmarks, w, h):
     eye_dist = math.sqrt(dx * dx + dy * dy)
     angle = math.atan2(dy, dx)
 
-    target_width = int(eye_dist * SAPSIZ_SCALE_FACTOR)
+    target_width_raw = eye_dist * SAPSIZ_SCALE_FACTOR
+    
+    y_off = eye_dist * SAPSIZ_Y_OFFSET
+    cx_raw = nose_bridge[0] + math.sin(angle) * y_off
+    cy_raw = nose_bridge[1] - math.cos(angle) * y_off
+
+    cx, cy, angle, target_width_raw = _ema_tracker.update("sapsiz", cx_raw, cy_raw, angle, target_width_raw, is_live)
+    target_width = int(target_width_raw)
+
     if target_width < 4:
         return image.copy(), np.zeros_like(image), np.zeros((h, w), dtype=np.uint8)
 
@@ -747,11 +796,6 @@ def _sprite_sapsiz_ar(image, landmarks, w, h):
     new_w = target_width
     new_h = max(1, int(sh * scale))
     resized = cv2.resize(sprite, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    # --- compute placement centre (nose-bridge + Y offset) ---
-    y_off = eye_dist * SAPSIZ_Y_OFFSET
-    cx = nose_bridge[0] + math.sin(angle) * y_off
-    cy = nose_bridge[1] - math.cos(angle) * y_off  # note: -cos because y-axis points down
 
     # --- build rotation matrix around the sprite centre ---
     angle_deg = math.degrees(angle)
@@ -791,13 +835,13 @@ def _sprite_sapsiz_ar(image, landmarks, w, h):
 KALPLI_SCALE_FACTOR = 1.8
 KALPLI_Y_OFFSET = -0.1
 
-def _sprite_kalpli_ar(image, landmarks, w, h):
+def _sprite_kalpli_ar(image, landmarks, w, h, is_live=False):
     global _KALPLI_CACHE  # noqa: PLW0603
 
     if _KALPLI_CACHE is None:
         loaded = _load_rgba_png(_KALPLI_ASSET_PATH)
         if loaded is None:
-            return _draw_round(image, landmarks, w, h)
+            return _draw_round(image, landmarks, w, h, is_live=is_live)
         _KALPLI_CACHE = loaded
     sprite = _KALPLI_CACHE
 
@@ -810,7 +854,15 @@ def _sprite_kalpli_ar(image, landmarks, w, h):
     eye_dist = math.sqrt(dx * dx + dy * dy)
     angle = math.atan2(dy, dx)
 
-    target_width = int(eye_dist * KALPLI_SCALE_FACTOR)
+    target_width_raw = eye_dist * KALPLI_SCALE_FACTOR
+    
+    y_off = eye_dist * KALPLI_Y_OFFSET
+    cx_raw = nose_bridge[0] + math.sin(angle) * y_off
+    cy_raw = nose_bridge[1] - math.cos(angle) * y_off
+
+    cx, cy, angle, target_width_raw = _ema_tracker.update("kalpli", cx_raw, cy_raw, angle, target_width_raw, is_live)
+    target_width = int(target_width_raw)
+
     if target_width < 4:
         return image.copy(), np.zeros_like(image), np.zeros((h, w), dtype=np.uint8)
 
@@ -819,10 +871,6 @@ def _sprite_kalpli_ar(image, landmarks, w, h):
     new_w = target_width
     new_h = max(1, int(sh * scale))
     resized = cv2.resize(sprite, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    y_off = eye_dist * KALPLI_Y_OFFSET
-    cx = nose_bridge[0] + math.sin(angle) * y_off
-    cy = nose_bridge[1] - math.cos(angle) * y_off
 
     angle_deg = math.degrees(angle)
     rot_mat = cv2.getRotationMatrix2D((new_w / 2.0, new_h / 2.0), -angle_deg, 1.0)
@@ -846,16 +894,16 @@ def _sprite_kalpli_ar(image, landmarks, w, h):
 # ===================================================================
 # MODEL: Thug Life
 # ===================================================================
-THUGLIFE_SCALE_FACTOR = 1.5
+THUGLIFE_SCALE_FACTOR = 1.8
 THUGLIFE_Y_OFFSET = -0.1
 
-def _sprite_thuglife_ar(image, landmarks, w, h):
+def _sprite_thuglife_ar(image, landmarks, w, h, is_live=False):
     global _THUGLIFE_CACHE  # noqa: PLW0603
 
     if _THUGLIFE_CACHE is None:
         loaded = _load_rgba_png(_THUGLIFE_ASSET_PATH)
         if loaded is None:
-            return _draw_round(image, landmarks, w, h)
+            return _draw_round(image, landmarks, w, h, is_live=is_live)
         _THUGLIFE_CACHE = loaded
     sprite = _THUGLIFE_CACHE
 
@@ -868,7 +916,15 @@ def _sprite_thuglife_ar(image, landmarks, w, h):
     eye_dist = math.sqrt(dx * dx + dy * dy)
     angle = math.atan2(dy, dx)
 
-    target_width = int(eye_dist * THUGLIFE_SCALE_FACTOR)
+    target_width_raw = eye_dist * THUGLIFE_SCALE_FACTOR
+
+    y_off = eye_dist * THUGLIFE_Y_OFFSET
+    cx_raw = nose_bridge[0] + math.sin(angle) * y_off
+    cy_raw = nose_bridge[1] - math.cos(angle) * y_off
+
+    cx, cy, angle, target_width_raw = _ema_tracker.update("thuglife", cx_raw, cy_raw, angle, target_width_raw, is_live)
+    target_width = int(target_width_raw)
+    
     if target_width < 4:
         return image.copy(), np.zeros_like(image), np.zeros((h, w), dtype=np.uint8)
 
@@ -877,10 +933,6 @@ def _sprite_thuglife_ar(image, landmarks, w, h):
     new_w = target_width
     new_h = max(1, int(sh * scale))
     resized = cv2.resize(sprite, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    y_off = eye_dist * THUGLIFE_Y_OFFSET
-    cx = nose_bridge[0] + math.sin(angle) * y_off
-    cy = nose_bridge[1] - math.cos(angle) * y_off
 
     angle_deg = math.degrees(angle)
     rot_mat = cv2.getRotationMatrix2D((new_w / 2.0, new_h / 2.0), -angle_deg, 1.0)
@@ -907,13 +959,13 @@ def _sprite_thuglife_ar(image, landmarks, w, h):
 YUVARLAK_SCALE_FACTOR = 1.5
 YUVARLAK_Y_OFFSET = -0.1
 
-def _sprite_yuvarlak_ar(image, landmarks, w, h):
+def _sprite_yuvarlak_ar(image, landmarks, w, h, is_live=False):
     global _YUVARLAK_CACHE  # noqa: PLW0603
 
     if _YUVARLAK_CACHE is None:
         loaded = _load_rgba_png(_YUVARLAK_ASSET_PATH)
         if loaded is None:
-            return _draw_round(image, landmarks, w, h)
+            return _draw_round(image, landmarks, w, h, is_live=is_live)
         _YUVARLAK_CACHE = loaded
     sprite = _YUVARLAK_CACHE
 
@@ -926,7 +978,15 @@ def _sprite_yuvarlak_ar(image, landmarks, w, h):
     eye_dist = math.sqrt(dx * dx + dy * dy)
     angle = math.atan2(dy, dx)
 
-    target_width = int(eye_dist * YUVARLAK_SCALE_FACTOR)
+    target_width_raw = eye_dist * YUVARLAK_SCALE_FACTOR
+    
+    y_off = eye_dist * YUVARLAK_Y_OFFSET
+    cx_raw = nose_bridge[0] + math.sin(angle) * y_off
+    cy_raw = nose_bridge[1] - math.cos(angle) * y_off
+
+    cx, cy, angle, target_width_raw = _ema_tracker.update("yuvarlak", cx_raw, cy_raw, angle, target_width_raw, is_live)
+    target_width = int(target_width_raw)
+
     if target_width < 4:
         return image.copy(), np.zeros_like(image), np.zeros((h, w), dtype=np.uint8)
 
@@ -935,10 +995,6 @@ def _sprite_yuvarlak_ar(image, landmarks, w, h):
     new_w = target_width
     new_h = max(1, int(sh * scale))
     resized = cv2.resize(sprite, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    y_off = eye_dist * YUVARLAK_Y_OFFSET
-    cx = nose_bridge[0] + math.sin(angle) * y_off
-    cy = nose_bridge[1] - math.cos(angle) * y_off
 
     angle_deg = math.degrees(angle)
     rot_mat = cv2.getRotationMatrix2D((new_w / 2.0, new_h / 2.0), -angle_deg, 1.0)
@@ -994,7 +1050,7 @@ def _normalize_model_id(model_id: str) -> str:
     return MODEL_ALIASES.get(key, key)
 
 
-def apply_glasses(image, landmarks, model_id="aviator"):
+def apply_glasses(image, landmarks, model_id="aviator", is_live=False):
     """
     Rasterize procedural or sprite-backed glasses overlay with correct alpha.
 
@@ -1007,9 +1063,13 @@ def apply_glasses(image, landmarks, model_id="aviator"):
         return image.copy()
 
     key = _normalize_model_id(model_id)
+    if not is_live:
+        _ema_tracker.state = None
+        _ema_tracker.last_model = None
+
     draw_fn = MODEL_DISPATCH.get(key, _sprite_aviator)
     frame = image.copy()
-    _, overlay, mask = draw_fn(frame, landmarks, w, h)
+    _, overlay, mask = draw_fn(frame, landmarks, w, h, is_live=is_live)
 
     # Build alpha channel:
     #   - Frame pixels (mask >= 250) → alpha = 1.0 (fully opaque, no face bleed)

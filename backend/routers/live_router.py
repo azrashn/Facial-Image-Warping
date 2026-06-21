@@ -298,10 +298,14 @@ def _apply_filter(
         # ── Glasses ──
         elif filter_name == "glasses":
             glasses_type = config.get("glasses_type", "aviator")
-            rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            lm_list = get_landmarks(preprocess_image(rgb_img))
+            if landmarks is not None:
+                h_f, w_f = frame.shape[:2]
+                lm_list = [{"x": float(pt[0]) / w_f, "y": float(pt[1]) / h_f} for pt in landmarks]
+            else:
+                rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                lm_list = get_landmarks(preprocess_image(rgb_img))
             apply_glasses = _get_apply_glasses()
-            return apply_glasses(frame, lm_list, glasses_type)
+            return apply_glasses(frame, lm_list, glasses_type, is_live=True)
 
         # ── Hair Color ──
         elif filter_name == "hair_color":
@@ -357,7 +361,7 @@ async def live_websocket(ws: WebSocket):
     logger.info("Live WebSocket connected")
 
     mesh = await _get_face_mesh()
-    smoother = _BrowserSmoother(alpha=0.7)
+    smoother = _BrowserSmoother(alpha=0.5)
 
     # ── Stacked active_states dictionary ──
     # Keys are feature names (e.g. "glasses", "smile", "makeup_lips")
