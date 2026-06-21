@@ -894,74 +894,19 @@ def apply_beard(
     intensity: int,
     landmarks: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """
-    Görev 5 Düzeltmesi: Ultimate Facial Hair (Multiply Blend & Normalized Mask).
-    Sakal/Bıyık dokusunu fiziksel olarak koyulaştırmak için Multiply Blend kullanır.
-    Maskeyi cv2.normalize ile [0,1] aralığına tam yayarak şeffaflığı tamamen ortadan kaldırır.
-    Alttaki deri rengini "yutmak" yerine direkt olarak cilt piksellerini karartır.
+    """Photorealistic beard — delegates to the new beard_module pipeline.
+
+    This thin wrapper preserves the import path used by live_router and
+    process.py while forwarding to the full procedural strand-field
+    implementation in ``beard_module.py``.
     """
     try:
-        lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
-        if getattr(lm, 'ndim', 0) == 2 and lm.shape[1] >= 3:
-            lm = lm[:, :2]
-        if lm is None:
-            return image_bgr
+        from modules.beard_module import apply_beard as _beard_impl
+    except ModuleNotFoundError:
+        from backend.modules.beard_module import apply_beard as _beard_impl
 
-        alpha = _clamp_intensity(intensity)
-        if alpha <= 0:
-            return image_bgr.copy()
-
-        h, w = image_bgr.shape[:2]
-        beard_poly_idx = [17, 18, 200, 199, 175, 15, 12, 0]
-        beard_poly = np.array([lm[i] for i in beard_poly_idx], dtype=np.int32).reshape((-1, 1, 2))
-
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillPoly(mask, [beard_poly], 255)
-
-        # Gürültü matrisi (Noise pattern) oluştur
-        noise = np.zeros((h, w), dtype=np.uint8)
-        cv2.randu(noise, 0, 255)
-        
-        # Daha gür ve kalın kıl kökleri için noise'u hafif büyütüp tekrar orijinal boyuta al
-        noise_small = cv2.resize(noise, (w // 2, h // 2))
-        noise = cv2.resize(noise_small, (w, h), interpolation=cv2.INTER_LINEAR)
-        
-        # 1. Maskeyi Keskinleştir (Thresholding & Normalization)
-        # Sıkı bir threshold ile kıl köklerini seç
-        _, hair = cv2.threshold(noise, 170, 255, cv2.THRESH_BINARY)
-        hair = cv2.bitwise_and(hair, mask)
-        
-        # Kıl sınırlarını hafif yumuşat (aliasing olmasın diye)
-        hair = cv2.GaussianBlur(hair, (0, 0), 0.8)
-        
-        # Maskeyi [0, 1] aralığına tam olarak yay (cv2.normalize)
-        hair_float = np.zeros((h, w), dtype=np.float32)
-        cv2.normalize(hair.astype(np.float32), hair_float, 0.0, 1.0, cv2.NORM_MINMAX)
-        
-        # Alpha (Intensity) değerini direkt olarak harmanlama gücü olarak kullan
-        # %100 seçildiğinde maske içindeki pikseli maksimum oranda etkileyecek
-        blend_power = np.clip(alpha * 1.5, 0.0, 1.0)
-        
-        # Etkili Maske (Effective Mask)
-        effective_mask = hair_float * blend_power
-        effective_mask = effective_mask[..., None] # 3 kanala uygulamak için genişlet
-        
-        image_float = image_bgr.astype(np.float32)
-        
-        # 1 & 2. Çok Koyu Sabit Renk ve Gerçek Multiply Blend Modu
-        # Sakal eklenecek bölgeyi gri bir sis yapmak yerine, maskenin gücüne göre
-        # cildi RGB(20, 20, 20) rengi ile matematiksel olarak çarpıyoruz.
-        beard_color = np.array([20.0, 20.0, 20.0], dtype=np.float32)
-        
-        # Multiply mantığı: (Cilt * Sakal Rengi) / 255. 
-        # Sakal rengi çok düşük olduğu için cilt pikselleri kapkara ama dokulu kalır.
-        multiply_blend = image_float * (beard_color / 255.0)
-        
-        # Maskenin olduğu (kıl kökleri) yerde karanlık multiply_blend, olmadığı yerde orijinal cilt
-        blended = image_float * (1.0 - effective_mask) + multiply_blend * effective_mask
-        
-        return np.clip(blended, 0, 255).astype(np.uint8)
-    except Exception as exc:
-        logger.error("apply_beard failed: %s – returning original image", exc)
+    lm = landmarks if landmarks is not None else detect_face_landmarks(image_bgr)
+    if lm is None:
         return image_bgr.copy()
+    return _beard_impl(image_bgr, intensity, landmarks=lm)
 

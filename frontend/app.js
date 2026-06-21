@@ -1476,8 +1476,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const eyeSizeBtn = document.getElementById('eyeSizeBtn');
 
     const beardSelect = document.getElementById('beardSelect');
-    const beardDarknessSlider = document.getElementById('beardDarknessSlider');
-    const beardDarknessVal = document.getElementById('beardDarknessVal');
     const beardBtn = document.getElementById('beardBtn');
 
     const ageCompareBtn = document.getElementById('ageCompareBtn');
@@ -1486,12 +1484,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (eyeSizeSlider) {
         eyeSizeSlider.addEventListener('input', (e) => {
             eyeSizeVal.textContent = e.target.value + '%';
-        });
-    }
-
-    if (beardDarknessSlider) {
-        beardDarknessSlider.addEventListener('input', (e) => {
-            beardDarknessVal.textContent = e.target.value + '%';
         });
     }
 
@@ -1546,8 +1538,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isLiveMode) {
                 sendLiveStateUpdate('beard', {
                     beard_type: beardSelect.value,
-                    beard_darkness: Number(beardDarknessSlider.value),
-                    intensity: Number(beardDarknessSlider.value),
+                    intensity: Number(intensitySlider?.value || 50),
                 });
                 return;
             }
@@ -1557,7 +1548,7 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('image', uploadedFile);
             formData.append('style', beardSelect.value);
             formData.append('intensity', intensitySlider.value); // Use global intensity
-            formData.append('darkness', beardDarknessSlider.value / 100.0);
+            // darkness removed
 
             loadingOverlay.style.display = 'flex';
             try {
@@ -2494,11 +2485,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 config.hair_intensity = Number(hairOpacity?.value || 60) / 100.0;
             }
 
-            // Beard type & darkness
             if (filterName === 'beard') {
                 config.beard_type = document.getElementById('beardSelect')?.value || 'beard';
-                config.beard_darkness = Number(document.getElementById('beardDarknessSlider')?.value || 60);
-                config.intensity = config.beard_darkness;
+                config.intensity = Number(intensitySlider?.value || 50);
             }
 
             // Eye scale uses raw slider value (-100 to 100)
