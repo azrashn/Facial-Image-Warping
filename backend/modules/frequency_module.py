@@ -1895,44 +1895,104 @@ def build_center_corner_fft_mask(
     return np.clip(mask, 0.0, 1.0)
 
 
-def apply_fft_center_corner_inverse(image: np.ndarray) -> dict:
+def build_fft_lab_masks(
+    shape: tuple[int, int],
+    center_ratio: float = 0.13,
+    corner_ratio: float = 0.16,
+    feather: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Keep the center and four FFT corners, then reconstruct one image with IFFT.
+    Return the FFT lab masks as separate semantic selections.
 
-    Returns the original FFT magnitude with the fixed mask overlay, the masked
-    FFT magnitude, and the inverse FFT visualization.
+    Center frequencies are reconstructed with IFFT for the blur-like output.
+    Four corner frequencies are kept as the high-frequency/change-only view.
+    """
+    rows, cols = shape
+    yy, xx = np.ogrid[:rows, :cols]
+    base = float(min(rows, cols))
+    center_radius = max(3.0, base * center_ratio)
+    corner_radius = max(3.0, base * corner_ratio)
+
+    center_mask = np.zeros((rows, cols), dtype=np.float32)
+    corner_mask = np.zeros((rows, cols), dtype=np.float32)
+
+    center_region = (xx - cols / 2.0) ** 2 + (yy - rows / 2.0) ** 2 <= center_radius ** 2
+    center_mask[center_region] = 1.0
+
+    for cx, cy in (
+        (0.0, 0.0),
+        (cols - 1.0, 0.0),
+        (0.0, rows - 1.0),
+        (cols - 1.0, rows - 1.0),
+    ):
+        corner_region = (xx - cx) ** 2 + (yy - cy) ** 2 <= corner_radius ** 2
+        corner_mask[corner_region] = 1.0
+
+    if feather > 0:
+        for mask in (center_mask, corner_mask):
+            mask[:] = cv2.GaussianBlur(mask, (0, 0), feather)
+            max_value = float(mask.max())
+            if max_value > 0:
+                mask[:] = mask / max_value
+
+    center_mask = np.clip(center_mask, 0.0, 1.0)
+    corner_mask = np.clip(corner_mask, 0.0, 1.0)
+    combined_mask = np.clip(np.maximum(center_mask, corner_mask), 0.0, 1.0)
+    return center_mask, corner_mask, combined_mask
+
+
+def apply_fft_center_corner_inverse(
+    image: np.ndarray,
+    intensity: float = 50,
+    center_ratio: float = 0.13,
+) -> dict:
+    """
+    Apply the fixed FFT lab selection in two separate ways.
+
+    Four corners are treated as the high-frequency FFT selection, so only sharp
+    color/detail changes remain in that view. The center circle is reconstructed
+    with IFFT, producing the expected low-frequency, blur-like image.
     """
     if image is None:
         raise ValueError("Input image is None.")
 
     rows, cols = image.shape[:2]
-    mask = build_center_corner_fft_mask((rows, cols))
+    center_ratio = float(np.clip(center_ratio, 0.03, 0.45))
+    center_mask, corner_mask, combined_mask = build_fft_lab_masks(
+        (rows, cols),
+        center_ratio=center_ratio,
+    )
     working = image.astype(np.float32)
-    reconstructed = np.zeros_like(working, dtype=np.float32)
+    center_reconstructed = np.zeros_like(working, dtype=np.float32)
 
     selected_power = np.zeros((rows, cols), dtype=np.float32)
     for ch in range(3):
         fft_shifted = np.fft.fftshift(np.fft.fft2(working[:, :, ch]))
-        selected_fft = fft_shifted * mask
-        selected_power += np.log1p(np.abs(selected_fft)).astype(np.float32)
-        restored = np.real(np.fft.ifft2(np.fft.ifftshift(selected_fft))).astype(np.float32)
-        reconstructed[:, :, ch] = restored
+        center_fft = fft_shifted * center_mask
+        corner_fft = fft_shifted * corner_mask
 
-    # IFFT components can be signed; normalize per channel for a clear visual.
-    result = reconstructed - reconstructed.min(axis=(0, 1), keepdims=True)
-    denom = np.maximum(result.max(axis=(0, 1), keepdims=True), 1e-6)
-    result = np.clip((result / denom) * 255.0, 0, 255).astype(np.uint8)
+        selected_power += np.log1p(np.abs(center_fft) + np.abs(corner_fft)).astype(np.float32)
+        center_reconstructed[:, :, ch] = np.real(np.fft.ifft2(np.fft.ifftshift(center_fft))).astype(np.float32)
+
+    center_result = np.clip(center_reconstructed, 0, 255).astype(np.uint8)
+    corner_result, _ = apply_fft_filter(image, intensity)
 
     orig_spectrum = compute_magnitude_spectrum(compute_fft(image)[2])
     selected_spectrum = cv2.normalize(selected_power, None, 0, 255, cv2.NORM_MINMAX)
     selected_spectrum = np.clip(selected_spectrum, 0, 255).astype(np.uint8)
 
     return {
-        "processed": result,
-        "orig_spectrum": overlay_fft_mask(orig_spectrum, mask),
-        "proc_spectrum": overlay_fft_mask(selected_spectrum, mask),
-        "mask": mask,
+        "processed": center_result,
+        "inverse": center_result,
+        "corner_processed": corner_result,
+        "orig_spectrum": overlay_fft_mask(orig_spectrum, combined_mask),
+        "proc_spectrum": overlay_fft_mask(selected_spectrum, combined_mask),
+        "center_mask": center_mask,
+        "corner_mask": corner_mask,
+        "mask": combined_mask,
         "band": "center_corners",
+        "center_ratio": center_ratio,
+        "corner_ratio": 0.16,
     }
 
 
