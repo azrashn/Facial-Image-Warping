@@ -862,7 +862,7 @@ def _sprite_kalpli_ar(image, landmarks, w, h, is_live=False):
 # MODEL: Thug Life
 # ===================================================================
 THUGLIFE_SCALE_FACTOR = 1.8
-THUGLIFE_Y_OFFSET = -0.1
+THUGLIFE_Y_OFFSET = -0.3
 
 def _sprite_thuglife_ar(image, landmarks, w, h, is_live=False):
     global _THUGLIFE_CACHE
