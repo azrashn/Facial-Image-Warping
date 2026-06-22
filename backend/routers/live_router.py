@@ -250,7 +250,15 @@ def _apply_filter(
         elif filter_name == "eye_scaling":
             return apply_eye_scaling(frame, intensity, landmarks=landmarks)
         elif filter_name == "beard":
-            return apply_beard(frame, intensity, landmarks=landmarks)
+            beard_type = config.get("beard_type", "beard")
+            if beard_type == "mustache":
+                try:
+                    from modules.beard_module import apply_mustache
+                except ModuleNotFoundError:
+                    from backend.modules.beard_module import apply_mustache
+                return apply_mustache(frame, landmarks=landmarks)
+            else:
+                return apply_beard(frame, intensity, landmarks=landmarks)
         elif filter_name.startswith("emoji_"):
             emoji_name = filter_name.split("_", 1)[1]
             return apply_emoji_preset(frame, emoji_name, landmarks=landmarks)
